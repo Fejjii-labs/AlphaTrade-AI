@@ -45,5 +45,5 @@ export async function installSharedE2ESession(
 export function paperModeActive(page: Page) {
   return page
     .getByRole("status", { name: "Execution status" })
-    .getByText("PAPER", { exact: true });
+    .getByText("Demo", { exact: true });
 }

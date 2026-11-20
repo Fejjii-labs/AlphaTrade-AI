@@ -10,7 +10,8 @@ import {
   useState,
 } from "react";
 
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
+import { friendlyError } from "@/lib/api/client";
 import type {
   HealthResponse,
   KillSwitchStatus,
@@ -80,9 +81,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // verified — never keep presenting the old health snapshot as current
         // (FP2-101 class). Consumers render explicit "unverified" for null.
         setHealth(null);
-        setError(
-          err instanceof Error ? err.message : "Failed to load backend status",
-        );
+        setError(friendlyError(err));
       } finally {
         if (generation === healthGenerationRef.current) {
           healthInFlightRef.current = false;
@@ -134,9 +133,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (generation !== killSwitchGenerationRef.current) return;
         // Read failures must not invent an inactive local state: keep the last
         // authoritative kill-switch state and surface an explicit error.
-        setKillSwitchError(
-          err instanceof Error ? err.message : "Failed to load kill switch",
-        );
+        setKillSwitchError(friendlyError(err));
       } finally {
         if (generation === killSwitchGenerationRef.current) {
           killSwitchInFlightRef.current = false;
@@ -239,13 +236,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         await runHealthRefresh({ background: false });
         window.dispatchEvent(new Event("alphatrade:status-changed"));
       } catch (err) {
-        const message =
-          err instanceof ApiError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : "Kill switch update failed";
-        setKillSwitchError(message);
+        setKillSwitchError(friendlyError(err, "Couldn't update. Try again."));
         throw err;
       } finally {
         setKillSwitchBusy(false);

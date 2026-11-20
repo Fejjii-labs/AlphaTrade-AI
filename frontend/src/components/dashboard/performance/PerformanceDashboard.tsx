@@ -13,7 +13,7 @@ import type {
   JournalPerformanceDashboardResponse,
   JournalTradeSource,
 } from "@/lib/api/types";
-import { humanizeToken } from "@/lib/format";
+import { formatCount } from "@/lib/format";
 import { zonedToday } from "@/lib/timezone";
 
 import { CumulativePnlChart } from "./CumulativePnlChart";
@@ -24,9 +24,8 @@ import {
   DEFAULT_SCOPE,
   EXTRA_SCOPE_OPTIONS,
   RANGE_OPTIONS,
-  SCOPE_LABELS,
   SCOPE_OPTIONS,
-  SOURCE_LABELS,
+  SOURCE_OPTIONS,
   browserTimezone,
   buildSampleDashboard,
   customRangeError,
@@ -73,11 +72,12 @@ function useDashboardRequest(
   return state;
 }
 
+/** Short "N of M verified" for demo headline P&L (verified = reconciled with BloFin). */
 function demoTradeCoverage(data: JournalPerformanceDashboardResponse | null) {
   if (data?.filters.scope !== "demo") return undefined;
   const summary = data.summary;
-  return summary.pnl_trade_coverage ??
-    `${summary.pnl_sample_count} of ${summary.trade_count} trades verified`;
+  const verified = summary.pnl_sample_count - (summary.unverified_pnl_count ?? 0);
+  return `${verified} of ${summary.trade_count} verified`;
 }
 
 export function PerformanceDashboard({
@@ -85,7 +85,6 @@ export function PerformanceDashboard({
   refreshKey = 0,
   scope: controlledScope,
   timezone,
-  timezoneLabel,
 }: {
   /** Injected for deterministic tests; defaults to the current time. */
   now?: Date;
@@ -100,8 +99,6 @@ export function PerformanceDashboard({
    * `null` = still resolving (no request yet); omitted = browser zone.
    */
   timezone?: string | null;
-  /** Where the zone came from, shown next to it ("risk settings", "browser"). */
-  timezoneLabel?: string;
 }) {
   const tz = useMemo(
     () => (timezone === undefined ? browserTimezone() : timezone),
@@ -120,16 +117,13 @@ export function PerformanceDashboard({
   const [sample, setSample] = useState(false);
   // Source narrowing belongs to one scope; a scope change (local or from the
   // page venue control) drops it without an extra request under the old source.
+  // The choices are fixed, so a narrowed response never hides the others.
   const [sourceState, setSourceState] = useState<{
     scope: JournalDashboardScope;
     value: JournalTradeSource | "";
-    options: JournalTradeSource[];
-  }>({ scope, value: "", options: [] });
-  const sameScope = sourceState.scope === scope;
-  const source = sameScope ? sourceState.value : "";
-  const sourceOptions = sameScope ? sourceState.options : [];
-  const setSource = (value: JournalTradeSource | "") =>
-    setSourceState((current) => ({ ...current, scope, value }));
+  }>({ scope, value: "" });
+  const source = sourceState.scope === scope ? sourceState.value : "";
+  const setSource = (value: JournalTradeSource | "") => setSourceState({ scope, value });
   const defaultCustom = useMemo(() => rangeParams("30d", today), [today]);
   const todayIso = defaultCustom.date_to ?? null;
   const [customFrom, setCustomFrom] = useState(defaultCustom.date_from ?? "");
@@ -157,41 +151,17 @@ export function PerformanceDashboard({
   const range = useDashboardRequest(rangeQuery, zoneReady && !sample && !rangeBlocked, reloadKey);
   const calendar = useDashboardRequest(monthQuery, zoneReady && !sample, reloadKey);
 
-  // Remember the scope's sources so the picker survives the next reload.
-  const loadedFilters = range.data?.filters;
-  useEffect(() => {
-    if (loadedFilters && loadedFilters.scope === scope)
-      setSourceState((current) => ({
-        scope,
-        value: current.scope === scope ? current.value : "",
-        options: loadedFilters.included_sources,
-      }));
-  }, [loadedFilters, scope]);
-
   const changeScope = (next: JournalDashboardScope) => {
     setOwnScope(next);
-    setSourceState({ scope: next, value: "", options: [] });
+    setSourceState({ scope: next, value: "" });
   };
-  const filtersChanged =
-    preset !== "90d" || (!controlled && scope !== DEFAULT_SCOPE) || source !== "";
-  const resetFilters = () => {
-    setPreset("90d");
-    if (controlled) setSource("");
-    else changeScope(DEFAULT_SCOPE);
-  };
+  const resetRange = () => setPreset("90d");
 
   const sampleData = useMemo(() => (sample ? buildSampleDashboard(month) : null), [sample, month]);
   const rangeData = sample ? sampleData : rangeBlocked ? null : range.data;
   const rangeLoading = !sample && !rangeBlocked && range.loading;
   const monthData = sample ? sampleData : calendar.data;
   const empty = !sample && !rangeLoading && rangeData?.summary.trade_count === 0;
-  const echoed = rangeData?.filters;
-  const rangeText = echoed
-    ? echoed.date_from || echoed.date_to
-      ? `${echoed.date_from ?? "start"} → ${echoed.date_to ?? "today"}`
-      : "all time"
-    : null;
-  const scopeLabel = range.data?.filters.scope_label ?? SCOPE_LABELS[scope];
   const extraScope = EXTRA_SCOPE_OPTIONS.some((option) => option.value === scope);
 
   return (
@@ -204,8 +174,8 @@ export function PerformanceDashboard({
               Sample data · not your trades
             </Badge>
           ) : rangeData ? (
-            <Badge variant="muted" title="Sample-size confidence">
-              {humanizeToken(rangeData.confidence)} confidence
+            <Badge variant="muted" data-testid="performance-sample-size">
+              Sample: {formatCount(rangeData.summary.trade_count)} trades
             </Badge>
           ) : null}
           {!sample && rangeData?.truncated ? (
@@ -245,6 +215,14 @@ export function PerformanceDashboard({
           </label>
             </>
           )}
+          {scope === "demo" && !sample ? (
+            <SegmentedControl
+              aria-label="Trade source"
+              value={source}
+              onChange={setSource}
+              options={SOURCE_OPTIONS}
+            />
+          ) : null}
           <SegmentedControl
             aria-label="Performance range"
             value={preset}
@@ -263,67 +241,46 @@ export function PerformanceDashboard({
         </div>
       </div>
 
-      {!sample && (preset === "custom" || sourceOptions.length > 1 || filtersChanged) ? (
+      {!sample && preset === "custom" ? (
         <div
           className="flex w-fit max-w-full flex-wrap items-end gap-3 rounded-control border border-border-subtle bg-surface-1 px-3 py-2"
           data-testid="performance-filters"
         >
-          {preset === "custom" ? (
-            <fieldset className="flex flex-wrap items-end gap-2">
-              <legend className="sr-only">Custom date range</legend>
-              <label className="flex flex-col gap-1 text-xs text-text-secondary">
-                From
-                <input
-                  type="date"
-                  value={customFrom}
-                  max={customTo || undefined}
-                  onChange={(event) => setCustomFrom(event.target.value)}
-                  aria-invalid={customError ? true : undefined}
-                  aria-describedby={customError ? "performance-range-error" : undefined}
-                  className={FIELD}
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-xs text-text-secondary">
-                To
-                <input
-                  type="date"
-                  value={customTo}
-                  min={customFrom || undefined}
-                  onChange={(event) => setCustomTo(event.target.value)}
-                  aria-invalid={customError ? true : undefined}
-                  aria-describedby={customError ? "performance-range-error" : undefined}
-                  className={FIELD}
-                />
-              </label>
-            </fieldset>
-          ) : null}
-          {sourceOptions.length > 1 || source ? (
+          <fieldset className="flex flex-wrap items-end gap-2">
+            <legend className="sr-only">Custom date range</legend>
             <label className="flex flex-col gap-1 text-xs text-text-secondary">
-              Source
-              <select
-                value={source}
-                onChange={(event) => setSource(event.target.value as JournalTradeSource | "")}
+              From
+              <input
+                type="date"
+                value={customFrom}
+                max={customTo || undefined}
+                onChange={(event) => setCustomFrom(event.target.value)}
+                aria-invalid={customError ? true : undefined}
+                aria-describedby={customError ? "performance-range-error" : undefined}
                 className={FIELD}
-              >
-                <option value="">All sources in this scope</option>
-                {sourceOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {SOURCE_LABELS[option] ?? humanizeToken(option)}
-                  </option>
-                ))}
-              </select>
+              />
             </label>
-          ) : null}
-          {filtersChanged ? (
-            <button
-              type="button"
-              onClick={resetFilters}
-              className="inline-flex min-h-9 items-center gap-1.5 rounded-control px-2 text-xs text-text-secondary hover:bg-surface-2 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-            >
-              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-              Reset filters
-            </button>
-          ) : null}
+            <label className="flex flex-col gap-1 text-xs text-text-secondary">
+              To
+              <input
+                type="date"
+                value={customTo}
+                min={customFrom || undefined}
+                onChange={(event) => setCustomTo(event.target.value)}
+                aria-invalid={customError ? true : undefined}
+                aria-describedby={customError ? "performance-range-error" : undefined}
+                className={FIELD}
+              />
+            </label>
+          </fieldset>
+          <button
+            type="button"
+            onClick={resetRange}
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-control px-2 text-xs text-text-secondary hover:bg-surface-2 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          >
+            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+            Reset filters
+          </button>
           {customError ? (
             <p id="performance-range-error" role="alert" className="basis-full text-xs text-danger">
               {customError}
@@ -332,43 +289,17 @@ export function PerformanceDashboard({
         </div>
       ) : null}
 
-      {!sample ? (
-        <p className="text-sm font-medium text-text-primary" data-testid="performance-scope">
-          Showing: {scopeLabel}
-          {source ? ` · ${SOURCE_LABELS[source] ?? humanizeToken(source)} only` : ""}
-          {rangeText ? <span className="font-data text-xs font-normal text-text-secondary"> · {rangeText}</span> : null}
-          {tz ? (
-            <span className="text-xs font-normal text-text-secondary" data-testid="performance-timezone">
-              {" "}
-              · Days in {tz}
-              {timezoneLabel ? ` (${timezoneLabel})` : ""}
-            </span>
-          ) : null}
-          <span className="ml-2 text-xs font-normal text-text-muted">
-            Closed trades only; scopes are never mixed. Partial exits on open trades count only
-            once the trade closes.
-          </span>
-          {rangeData?.open_trades_excluded ? (
-            <span className="ml-2 text-xs font-normal text-text-muted" data-testid="performance-open-excluded">
-              ({rangeData.open_trades_excluded} open trade{rangeData.open_trades_excluded === 1 ? "" : "s"} not
-              counted)
-            </span>
-          ) : null}
-        </p>
-      ) : null}
-
       {sample ? (
         <p
           role="status"
           className="rounded-control border border-warning-border bg-warning-muted px-3 py-2 text-xs text-badge-warning"
         >
-          Showing illustrative sample data. None of these numbers come from your journal.
-          Turn off “Sample data” to see your closed trades.
+          Sample data. None of these numbers come from your journal.
         </p>
       ) : null}
 
       {!sample && range.error ? (
-        <UnavailableState message="Journal performance unavailable" className="py-4" onRetry={retry} />
+        <UnavailableState message="Couldn't load." className="py-4" onRetry={retry} />
       ) : (
         <>
           {empty ? (
@@ -377,15 +308,8 @@ export function PerformanceDashboard({
               className="rounded-control border border-dashed border-border bg-surface-1 px-3 py-2 text-sm text-text-muted"
               data-testid="performance-empty"
             >
-              No closed journal trades in this range yet. Figures appear once trades close.
+              No closed trades in this range.
             </p>
-          ) : null}
-          {rangeData?.warnings.length && !sample && !empty ? (
-            <ul className="space-y-0.5 text-xs text-text-muted" data-testid="performance-warnings">
-              {rangeData.warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
           ) : null}
           {rangeBlocked ? (
             <p
@@ -393,13 +317,14 @@ export function PerformanceDashboard({
               className="rounded-control border border-dashed border-border bg-surface-1 px-3 py-2 text-sm text-text-muted"
               data-testid="performance-range-pending"
             >
-              Range figures appear once the custom dates are valid. The calendar below is unaffected.
+              Pick valid dates.
             </p>
           ) : (
             <PerformanceKpiCards
               summary={rangeData?.summary ?? null}
               risk={rangeData?.risk ?? null}
               tradeCoverage={sample ? undefined : demoTradeCoverage(rangeData)}
+              unverified={!sample && (rangeData?.summary.unverified_pnl_count ?? 0) > 0}
               loading={rangeLoading}
             />
           )}

@@ -134,14 +134,16 @@ for (const width of [1280, 390]) {
     await page.goto("/");
     await expect(page).toHaveURL(new URL("/", baseURL!).href);
     const card = page.getByTestId("dashboard-demo-account");
-    await expect(card).toContainText("0.1 contracts");
-    await expect(card).toContainText("Unrealized PnL —");
+    const openCount = card.getByTestId("dashboard-open-count");
+    await expect(openCount).toHaveText(/^Open positions1$/);
     expect(authenticated).toBe(true);
     await expect.poll(() => refreshes).toBe(1);
     expect(reads).toBeGreaterThan(0);
     await expect(card).toContainText("1,001.50 USD");
-    await expect(card).toContainText("Equity: 1,002.25 USDT");
-    await expect(card).toContainText("Base quantity: 0.0001 BTC");
+    await expect(card.getByTestId("dashboard-available")).toContainText("USDT");
+    await expect(card.getByTestId("demo-last-synced")).toContainText("Last synced");
+    await expect(card).not.toContainText("Balances by currency");
+    await expect(card).not.toContainText("Native open positions");
     expect(refreshes).toBe(1);
     await page.screenshot({ path: `../docs/screenshots/blofin-repair/fixture-dashboard-${width}.png`, fullPage: true });
     const initialReads = reads;
@@ -162,7 +164,7 @@ for (const width of [1280, 390]) {
     await page.clock.fastForward(DEMO_REFRESH_INTERVAL_MS);
     await expect(card.getByRole("alert")).toContainText("refresh failed");
     await expect(card).toContainText("Stale snapshot");
-    await expect(card).toContainText("0.1 contracts");
+    await expect(openCount).toHaveText(/^Open positions1$/);
     expect(refreshes).toBe(2);
     fixtureNow += DEMO_REFRESH_INTERVAL_MS;
     await page.clock.fastForward(DEMO_REFRESH_INTERVAL_MS);
@@ -170,9 +172,7 @@ for (const width of [1280, 390]) {
     failRefresh = false;
     clearPositions = true;
     await card.getByRole("button", { name: "Refresh demo account" }).click();
-    await expect(card).toContainText(
-      "No native open positions at this snapshot.",
-    );
+    await expect(openCount).toHaveText(/^Open positions0$/);
     expect(refreshes).toBe(3);
     await expect(card).toContainText("Fresh snapshot");
     await expect(card.getByRole("alert")).toHaveCount(0);

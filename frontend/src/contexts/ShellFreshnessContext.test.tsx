@@ -3,7 +3,6 @@ import {
   fireEvent,
   render,
   screen,
-  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
@@ -200,7 +199,7 @@ describe("ShellFreshnessContext", () => {
     expect(screen.queryByText("Live")).not.toBeInTheDocument();
   });
 
-  it("TopBar does not display Live when one relevant page source has unknown freshness", () => {
+  it("TopBar does not display page freshness, even with a live source", () => {
     render(
       <ShellFreshnessProvider>
         <WorkflowFreshnessAdapter
@@ -223,12 +222,9 @@ describe("ShellFreshnessContext", () => {
         <TopBar />
       </ShellFreshnessProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Status" }));
-    const freshnessRegion = screen.getByTestId("topbar-freshness");
-    expect(within(freshnessRegion).queryByText(/^Live/)).not.toBeInTheDocument();
-    expect(
-      within(freshnessRegion).getByText(/Unavailable|Freshness unavailable/i),
-    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    expect(screen.queryByTestId("topbar-freshness")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Live/)).not.toBeInTheDocument();
   });
 
   it("does not re-push context for an equivalently recreated sources array", () => {

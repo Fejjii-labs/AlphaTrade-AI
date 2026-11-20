@@ -39,7 +39,7 @@ _MARKET_ANALYZE_QUOTA = require_quota("market_analyze")
 
 
 @router.get("/ticker", response_model=TickerResponse, summary="Get ticker price")
-async def get_ticker(
+def get_ticker(
     tenant: TenantDep,
     market_data: MarketDataServiceDep,
     symbol: str = Query(default="BTCUSDT", min_length=2, max_length=30),
@@ -50,7 +50,7 @@ async def get_ticker(
 
 
 @router.get("/ohlcv", response_model=OHLCVResponse, summary="Get OHLCV candles")
-async def get_ohlcv(
+def get_ohlcv(
     tenant: TenantDep,
     market_data: MarketDataServiceDep,
     symbol: str = Query(default="BTCUSDT", min_length=2, max_length=30),
@@ -63,7 +63,7 @@ async def get_ohlcv(
 
 
 @router.get("/snapshots", response_model=MarketSnapshotResponse, summary="Market snapshot")
-async def get_snapshot(
+def get_snapshot(
     tenant: TenantDep,
     market_data: MarketDataServiceDep,
     symbol: str = Query(default="BTCUSDT", min_length=2, max_length=30),
@@ -80,7 +80,7 @@ async def get_snapshot(
     summary="Analyze market context",
     dependencies=[_MARKET_ANALYZE_QUOTA],
 )
-async def analyze_market(
+def analyze_market(
     body: MarketAnalyzeRequest,
     tenant: TraderDep,
     market_data: MarketDataServiceDep,
@@ -111,7 +111,7 @@ async def analyze_market(
 
 
 @router.post("/watchlist", response_model=WatchlistItem, summary="Add watchlist item")
-async def create_watchlist_item(
+def create_watchlist_item(
     body: WatchlistItemCreate,
     tenant: TraderDep,
     market_service: MarketServiceDep,
@@ -126,7 +126,7 @@ async def create_watchlist_item(
 
 
 @router.get("/watchlist", response_model=list[WatchlistItem], summary="List watchlist")
-async def list_watchlist(
+def list_watchlist(
     tenant: TenantDep,
     market_service: MarketServiceDep,
     limit: int = Query(default=50, ge=1, le=200),
@@ -146,7 +146,7 @@ async def list_watchlist(
     response_model=WatchlistItem,
     summary="Update watchlist item",
 )
-async def update_watchlist_item(
+def update_watchlist_item(
     watchlist_item_id: uuid.UUID,
     body: WatchlistItemUpdate,
     tenant: TraderDep,
@@ -168,7 +168,7 @@ async def update_watchlist_item(
     status_code=204,
     summary="Delete watchlist item",
 )
-async def delete_watchlist_item(
+def delete_watchlist_item(
     watchlist_item_id: uuid.UUID,
     tenant: TraderDep,
     market_service: MarketServiceDep,
@@ -187,7 +187,7 @@ async def delete_watchlist_item(
     response_model=HistoricalIngestResult,
     summary="Ingest historical OHLCV candles for backtests",
 )
-async def ingest_historical_candles(
+def ingest_historical_candles(
     body: HistoricalIngestRequest,
     tenant: TraderDep,
     service: HistoricalCandleServiceDep,
@@ -204,7 +204,7 @@ async def ingest_historical_candles(
     response_model=HistoricalCandleList,
     summary="List stored historical candles (debug)",
 )
-async def list_historical_candles(
+def list_historical_candles(
     tenant: TenantDep,
     service: HistoricalCandleServiceDep,
     symbol: str = Query(default="BTCUSDT", min_length=2, max_length=30),

@@ -42,7 +42,7 @@ _Limit = Query(default=20, ge=1, le=100)
     summary="Live-computed coaching prompts from validation outcomes",
     dependencies=[_COACHING_READ_LIMIT],
 )
-async def coaching_prompts(
+def coaching_prompts(
     tenant: ReaderDep,
     service: CoachingServiceDep,
     category: CoachingCategory | None = Query(default=None),
@@ -72,7 +72,7 @@ async def coaching_prompts(
     summary="Coaching prompt counts by category and severity",
     dependencies=[_COACHING_READ_LIMIT],
 )
-async def coaching_summary(
+def coaching_summary(
     tenant: ReaderDep,
     service: CoachingServiceDep,
     start_date: date | None = Query(default=None),
@@ -96,7 +96,7 @@ async def coaching_summary(
     summary="Detailed factor breakdown for one coaching pattern",
     dependencies=[_COACHING_READ_LIMIT],
 )
-async def coaching_explain(
+def coaching_explain(
     tenant: ReaderDep,
     service: CoachingServiceDep,
     category: CoachingCategory,
@@ -123,7 +123,7 @@ async def coaching_explain(
     response_model=LessonCandidate,
     summary="Save a coaching prompt into the lesson review queue",
 )
-async def coaching_save_prompt(
+def coaching_save_prompt(
     body: CoachingSaveRequest,
     tenant: TraderDep,
     service: CoachingServiceDep,

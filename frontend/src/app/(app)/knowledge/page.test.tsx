@@ -133,7 +133,7 @@ it("loads an exact saved record, corrects it with a revision check and retains s
   ).toHaveAttribute("href", "/agent?conversation=conversation");
   expect(
     screen.getByRole("link", { name: "Original document" }),
-  ).toHaveAttribute("href", "/knowledge?document_id=document");
+  ).toHaveAttribute("href", "/agent?tab=documents&document_id=document");
   fireEvent.click(screen.getByRole("button", { name: "Correct summary" }));
   fireEvent.change(screen.getByLabelText("Corrected summary"), {
     target: { value: "Wait for confirmation on close." },
@@ -268,81 +268,6 @@ it("shows personal reflections without requiring a trade and excludes simulation
   expect(
     screen.queryByRole("link", { name: "Open exact trade" }),
   ).not.toBeInTheDocument();
-});
-
-it("requires execution lifecycle provenance for default exchange activity", async () => {
-  state.pathname = "/journal";
-  const base = {
-    symbol: "BTCUSDT",
-    exchange: "BLOFIN_DEMO",
-    source: "paper_execution",
-    status: "closed",
-    entry_time: "2026-10-09",
-  };
-  vi.mocked(api.journal.listTrades).mockResolvedValue({
-    items: [
-      { ...base, id: "unsupported-claim" },
-      {
-        ...base,
-        id: "executed",
-        execution_lifecycle_id: "projected-lifecycle",
-      },
-      {
-        ...base,
-        id: "direct-venue",
-        source: "manual",
-        execution_lifecycle_id: "irrelevant",
-      },
-      {
-        ...base,
-        id: "planned",
-        status: "planned",
-        execution_lifecycle_id: "projected-plan",
-      },
-    ] as never,
-    total: 4,
-    limit: 50,
-    offset: 0,
-  });
-  render(<Page />);
-  expect(
-    await screen.findByRole("link", { name: "Open exact trade" }),
-  ).toHaveAttribute("href", "/journal?trade_id=executed");
-  expect(
-    screen.getAllByRole("link", { name: "Open exact trade" }),
-  ).toHaveLength(1);
-});
-
-it("shows recorded trades as a table that remembers the list before opening a trade", async () => {
-  state.pathname = "/journal";
-  vi.mocked(api.journal.listTrades).mockResolvedValue({
-    items: [
-      {
-        id: "probe",
-        symbol: "BTCUSDT",
-        timeframe: "15m",
-        direction: "long",
-        result: "open",
-        exchange: "BLOFIN_DEMO",
-        source: "manual_demo_test",
-        status: "open",
-        entry_time: "2026-10-09",
-        execution_lifecycle_id: "life",
-      },
-    ],
-    total: 1,
-    limit: 50,
-    offset: 0,
-  });
-  render(<Page />);
-  const table = await screen.findByTestId("journal-trades-table");
-  expect(within(table).getByText("Connectivity test")).toBeInTheDocument();
-  const link = within(table).getByRole("link", { name: "Open exact trade" });
-  expect(link).toHaveAttribute("href", "/journal?trade_id=probe");
-  fireEvent.click(link);
-  expect(JSON.parse(sessionStorage.getItem("alphatrade.journal.return:o:u") ?? "null")).toMatchObject({
-    href: "/journal?",
-  });
 });
 
 it("hides pagination for empty or single-page libraries", async () => {

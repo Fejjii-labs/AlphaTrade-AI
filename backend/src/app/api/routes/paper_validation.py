@@ -95,7 +95,7 @@ _PAPER_RUNTIME_WRITE = Depends(
     summary="Paper validation scheduler status",
     dependencies=[_PAPER_SCHEDULER_READ],
 )
-async def get_scheduler_status(
+def get_scheduler_status(
     tenant: TraderDep,
     service: PaperSchedulerServiceDep,
 ) -> PaperSchedulerStatus:
@@ -108,7 +108,7 @@ async def get_scheduler_status(
     summary="Manual paper validation scheduler tick",
     dependencies=[_PAPER_SCHEDULER_WRITE],
 )
-async def scheduler_tick(
+def scheduler_tick(
     tenant: OwnerDep,
     service: PaperSchedulerServiceDep,
     session: SessionDep,
@@ -124,7 +124,7 @@ async def scheduler_tick(
     summary="Update tenant paper scheduler config",
     dependencies=[_PAPER_SCHEDULER_WRITE],
 )
-async def update_scheduler_config(
+def update_scheduler_config(
     payload: PaperSchedulerConfigUpdate,
     tenant: OwnerDep,
     service: PaperSchedulerServiceDep,
@@ -145,7 +145,7 @@ async def update_scheduler_config(
     summary="Scheduler and runtime cycle history",
     dependencies=[_PAPER_SCHEDULER_READ],
 )
-async def list_scheduler_history(
+def list_scheduler_history(
     tenant: TraderDep,
     service: PaperSchedulerServiceDep,
     run_id: uuid.UUID | None = None,
@@ -206,7 +206,7 @@ _PAPER_SESSION_RESULT_WRITE = Depends(
     summary="Paper validation draft summary",
     dependencies=[_PAPER_DRAFT_READ],
 )
-async def paper_validation_draft_summary(
+def paper_validation_draft_summary(
     tenant: ReaderDep,
     service: PaperValidationDraftServiceDep,
 ) -> PaperValidationDraftSummary:
@@ -219,7 +219,7 @@ async def paper_validation_draft_summary(
     summary="List non-executable paper validation drafts",
     dependencies=[_PAPER_DRAFT_READ],
 )
-async def list_paper_validation_drafts(
+def list_paper_validation_drafts(
     tenant: ReaderDep,
     service: PaperValidationDraftServiceDep,
     limit: int = Query(default=50, ge=1, le=200),
@@ -238,7 +238,7 @@ async def list_paper_validation_drafts(
     summary="Get a paper validation draft",
     dependencies=[_PAPER_DRAFT_READ],
 )
-async def get_paper_validation_draft(
+def get_paper_validation_draft(
     draft_id: uuid.UUID,
     tenant: ReaderDep,
     service: PaperValidationDraftServiceDep,
@@ -252,7 +252,7 @@ async def get_paper_validation_draft(
     summary="Update paper validation draft prep context (planning only)",
     dependencies=[_PAPER_DRAFT_PREP_WRITE],
 )
-async def update_paper_validation_draft_prep(
+def update_paper_validation_draft_prep(
     draft_id: uuid.UUID,
     payload: PaperValidationDraftPrepUpdateRequest,
     tenant: TraderDep,
@@ -275,7 +275,7 @@ async def update_paper_validation_draft_prep(
     summary="Queue a ready paper validation draft as a candidate (no run)",
     dependencies=[_PAPER_CANDIDATE_WRITE],
 )
-async def queue_paper_validation_candidate(
+def queue_paper_validation_candidate(
     draft_id: uuid.UUID,
     payload: PaperValidationCandidateQueueRequest,
     tenant: TraderDep,
@@ -298,7 +298,7 @@ async def queue_paper_validation_candidate(
     summary="Paper validation candidate queue summary",
     dependencies=[_PAPER_CANDIDATE_READ],
 )
-async def paper_validation_candidate_summary(
+def paper_validation_candidate_summary(
     tenant: ReaderDep,
     service: PaperValidationCandidateServiceDep,
 ) -> PaperValidationCandidateSummary:
@@ -311,7 +311,7 @@ async def paper_validation_candidate_summary(
     summary="List paper validation candidates",
     dependencies=[_PAPER_CANDIDATE_READ],
 )
-async def list_paper_validation_candidates(
+def list_paper_validation_candidates(
     tenant: ReaderDep,
     service: PaperValidationCandidateServiceDep,
     limit: int = Query(default=50, ge=1, le=200),
@@ -330,7 +330,7 @@ async def list_paper_validation_candidates(
     summary="Get a paper validation candidate",
     dependencies=[_PAPER_CANDIDATE_READ],
 )
-async def get_paper_validation_candidate(
+def get_paper_validation_candidate(
     candidate_id: uuid.UUID,
     tenant: ReaderDep,
     service: PaperValidationCandidateServiceDep,
@@ -344,7 +344,7 @@ async def get_paper_validation_candidate(
     summary="Update paper validation candidate status (no run)",
     dependencies=[_PAPER_CANDIDATE_WRITE],
 )
-async def update_paper_validation_candidate_status(
+def update_paper_validation_candidate_status(
     candidate_id: uuid.UUID,
     payload: PaperValidationCandidateStatusUpdate,
     tenant: TraderDep,
@@ -367,7 +367,7 @@ async def update_paper_validation_candidate_status(
     summary="Create a paper validation run plan from a reviewing candidate (no run)",
     dependencies=[_PAPER_RUN_PLAN_WRITE],
 )
-async def create_paper_validation_run_plan(
+def create_paper_validation_run_plan(
     candidate_id: uuid.UUID,
     payload: PaperValidationRunPlanCreateRequest,
     tenant: TraderDep,
@@ -390,7 +390,7 @@ async def create_paper_validation_run_plan(
     summary="Paper validation run plan summary",
     dependencies=[_PAPER_RUN_PLAN_READ],
 )
-async def paper_validation_run_plan_summary(
+def paper_validation_run_plan_summary(
     tenant: ReaderDep,
     service: PaperValidationRunPlanServiceDep,
 ) -> PaperValidationRunPlanSummary:
@@ -403,7 +403,7 @@ async def paper_validation_run_plan_summary(
     summary="List paper validation run plans",
     dependencies=[_PAPER_RUN_PLAN_READ],
 )
-async def list_paper_validation_run_plans(
+def list_paper_validation_run_plans(
     tenant: ReaderDep,
     service: PaperValidationRunPlanServiceDep,
     limit: int = Query(default=50, ge=1, le=200),
@@ -422,7 +422,7 @@ async def list_paper_validation_run_plans(
     summary="Get a paper validation run plan",
     dependencies=[_PAPER_RUN_PLAN_READ],
 )
-async def get_paper_validation_run_plan(
+def get_paper_validation_run_plan(
     plan_id: uuid.UUID,
     tenant: ReaderDep,
     service: PaperValidationRunPlanServiceDep,
@@ -436,7 +436,7 @@ async def get_paper_validation_run_plan(
     summary="Update paper validation run plan status (no run)",
     dependencies=[_PAPER_RUN_PLAN_WRITE],
 )
-async def update_paper_validation_run_plan_status(
+def update_paper_validation_run_plan_status(
     plan_id: uuid.UUID,
     payload: PaperValidationRunPlanStatusUpdate,
     tenant: TraderDep,
@@ -459,7 +459,7 @@ async def update_paper_validation_run_plan_status(
     summary="Manually start a paper validation run session from a planned run plan (no engine)",
     dependencies=[_PAPER_RUN_SESSION_WRITE],
 )
-async def start_paper_validation_run_session(
+def start_paper_validation_run_session(
     plan_id: uuid.UUID,
     payload: PaperValidationRunSessionStartRequest,
     tenant: OwnerDep,
@@ -482,7 +482,7 @@ async def start_paper_validation_run_session(
     summary="List paper validation run sessions",
     dependencies=[_PAPER_RUN_SESSION_READ],
 )
-async def list_paper_validation_run_sessions(
+def list_paper_validation_run_sessions(
     tenant: ReaderDep,
     service: PaperValidationRunSessionServiceDep,
     limit: int = Query(default=50, ge=1, le=200),
@@ -501,7 +501,7 @@ async def list_paper_validation_run_sessions(
     summary="Get a paper validation run session",
     dependencies=[_PAPER_RUN_SESSION_READ],
 )
-async def get_paper_validation_run_session(
+def get_paper_validation_run_session(
     session_id: uuid.UUID,
     tenant: ReaderDep,
     service: PaperValidationRunSessionServiceDep,
@@ -515,7 +515,7 @@ async def get_paper_validation_run_session(
     summary="Complete or cancel a paper validation run session (no engine)",
     dependencies=[_PAPER_RUN_SESSION_WRITE],
 )
-async def update_paper_validation_run_session_status(
+def update_paper_validation_run_session_status(
     session_id: uuid.UUID,
     payload: PaperValidationRunSessionStatusUpdate,
     tenant: OwnerDep,
@@ -538,7 +538,7 @@ async def update_paper_validation_run_session_status(
     summary="List observations for a paper validation run session",
     dependencies=[_PAPER_RUN_SESSION_READ],
 )
-async def list_paper_validation_session_observations(
+def list_paper_validation_session_observations(
     session_id: uuid.UUID,
     tenant: ReaderDep,
     service: PaperValidationSessionObservationServiceDep,
@@ -559,7 +559,7 @@ async def list_paper_validation_session_observations(
     summary="Record a manual observation for a running session (no engine)",
     dependencies=[_PAPER_SESSION_OBSERVATION_WRITE],
 )
-async def record_paper_validation_session_observation(
+def record_paper_validation_session_observation(
     session_id: uuid.UUID,
     payload: PaperValidationSessionObservationCreateRequest,
     tenant: TraderDep,
@@ -582,7 +582,7 @@ async def record_paper_validation_session_observation(
     summary="Get the outcome result for a paper validation run session",
     dependencies=[_PAPER_RUN_SESSION_READ],
 )
-async def get_paper_validation_session_result(
+def get_paper_validation_session_result(
     session_id: uuid.UUID,
     tenant: ReaderDep,
     service: PaperValidationSessionResultServiceDep,
@@ -596,7 +596,7 @@ async def get_paper_validation_session_result(
     summary="Record the outcome for a running session (no engine)",
     dependencies=[_PAPER_SESSION_RESULT_WRITE],
 )
-async def record_paper_validation_session_result(
+def record_paper_validation_session_result(
     session_id: uuid.UUID,
     payload: PaperValidationSessionResultCreateRequest,
     tenant: OwnerDep,
@@ -619,7 +619,7 @@ async def record_paper_validation_session_result(
     summary="Update the outcome for a running session (no engine)",
     dependencies=[_PAPER_SESSION_RESULT_WRITE],
 )
-async def update_paper_validation_session_result(
+def update_paper_validation_session_result(
     session_id: uuid.UUID,
     payload: PaperValidationSessionResultUpdateRequest,
     tenant: OwnerDep,
@@ -641,7 +641,7 @@ async def update_paper_validation_session_result(
     response_model=PaperValidationRun,
     summary="Get paper validation run",
 )
-async def get_paper_validation_run(
+def get_paper_validation_run(
     run_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperValidationRuntimeServiceDep,
@@ -655,7 +655,7 @@ async def get_paper_validation_run(
     summary="Scan market for paper signals",
     dependencies=[_PAPER_RUNTIME_WRITE],
 )
-async def scan_paper_validation(
+def scan_paper_validation(
     run_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperValidationRuntimeServiceDep,
@@ -676,7 +676,7 @@ async def scan_paper_validation(
     summary="Advance paper trade monitoring (manual tick)",
     dependencies=[_PAPER_RUNTIME_WRITE],
 )
-async def tick_paper_validation(
+def tick_paper_validation(
     run_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperValidationRuntimeServiceDep,
@@ -697,7 +697,7 @@ async def tick_paper_validation(
     summary="Stop paper validation run",
     dependencies=[_PAPER_RUNTIME_WRITE],
 )
-async def stop_paper_validation(
+def stop_paper_validation(
     run_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperValidationRuntimeServiceDep,
@@ -717,7 +717,7 @@ async def stop_paper_validation(
     response_model=PaginatedPaperSignals,
     summary="List paper signals for a run",
 )
-async def list_paper_signals(
+def list_paper_signals(
     run_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperValidationRuntimeServiceDep,
@@ -737,7 +737,7 @@ async def list_paper_signals(
     response_model=PaginatedPaperTrades,
     summary="List paper trades for a run",
 )
-async def list_paper_trades(
+def list_paper_trades(
     run_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperValidationRuntimeServiceDep,
@@ -759,7 +759,7 @@ async def list_paper_trades(
     response_model=PaginatedPaperPositions,
     summary="List open paper positions",
 )
-async def list_paper_positions(
+def list_paper_positions(
     run_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperValidationRuntimeServiceDep,
@@ -773,7 +773,7 @@ async def list_paper_positions(
     response_model=PaperValidationMetrics,
     summary="Paper validation metrics for a run",
 )
-async def get_paper_validation_metrics(
+def get_paper_validation_metrics(
     run_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperValidationRuntimeServiceDep,

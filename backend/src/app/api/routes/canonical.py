@@ -46,7 +46,7 @@ def _reads(session: SessionDep, runtime: CanonicalRuntimeDep) -> CanonicalReadSe
     summary="List canonical Candidates",
     dependencies=[_CANONICAL_READ_LIMIT],
 )
-async def list_canonical_candidates(
+def list_canonical_candidates(
     tenant: ReaderDep,
     session: SessionDep,
     runtime: CanonicalRuntimeDep,
@@ -64,7 +64,7 @@ async def list_canonical_candidates(
     summary="Get one canonical Candidate",
     dependencies=[_CANONICAL_READ_LIMIT],
 )
-async def get_canonical_candidate(
+def get_canonical_candidate(
     candidate_id: UUID,
     tenant: ReaderDep,
     session: SessionDep,
@@ -81,7 +81,7 @@ async def get_canonical_candidate(
     summary="Latest ActionEligibility for a Candidate",
     dependencies=[_CANONICAL_READ_LIMIT],
 )
-async def get_canonical_candidate_eligibility(
+def get_canonical_candidate_eligibility(
     candidate_id: UUID,
     tenant: ReaderDep,
     session: SessionDep,
@@ -98,7 +98,7 @@ async def get_canonical_candidate_eligibility(
     summary="SetupAssessment identity projection",
     dependencies=[_CANONICAL_READ_LIMIT],
 )
-async def get_canonical_setup_assessment(
+def get_canonical_setup_assessment(
     assessment_id: UUID,
     tenant: ReaderDep,
     session: SessionDep,
@@ -115,7 +115,7 @@ async def get_canonical_setup_assessment(
     summary="Canonical paper execution receipt",
     dependencies=[_CANONICAL_READ_LIMIT],
 )
-async def get_canonical_execution_receipt(
+def get_canonical_execution_receipt(
     receipt_id: UUID,
     tenant: ReaderDep,
     session: SessionDep,
@@ -132,7 +132,7 @@ async def get_canonical_execution_receipt(
     summary="Canonical learning attribution for a Candidate",
     dependencies=[_CANONICAL_READ_LIMIT],
 )
-async def get_canonical_learning_record(
+def get_canonical_learning_record(
     candidate_id: UUID,
     tenant: ReaderDep,
     session: SessionDep,
@@ -149,7 +149,7 @@ async def get_canonical_learning_record(
     summary="Canonical strategy and pattern statistics",
     dependencies=[_CANONICAL_READ_LIMIT],
 )
-async def get_canonical_strategy_stats(
+def get_canonical_strategy_stats(
     tenant: ReaderDep,
     session: SessionDep,
     runtime: CanonicalRuntimeDep,
@@ -167,7 +167,7 @@ async def get_canonical_strategy_stats(
     summary="Continuous paper evaluation measurement summary",
     dependencies=[_CANONICAL_READ_LIMIT],
 )
-async def get_canonical_paper_evaluation(
+def get_canonical_paper_evaluation(
     tenant: ReaderDep,
     session: SessionDep,
     runtime: CanonicalRuntimeDep,
@@ -186,7 +186,7 @@ async def get_canonical_paper_evaluation(
     summary="Canonical USD-M evidence and current price",
     dependencies=[_CANONICAL_READ_LIMIT],
 )
-async def get_canonical_evidence(
+def get_canonical_evidence(
     tenant: ReaderDep,
     service: CanonicalEvidenceReaderDep,
     symbol: str = Query(default="BTCUSDT", min_length=3, max_length=16),

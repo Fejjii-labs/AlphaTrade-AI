@@ -88,7 +88,7 @@ describe("Trader dashboard unavailable sources", () => {
     );
     expect(
       screen.getByTestId("dashboard-strategy-performance"),
-    ).toHaveTextContent("Closed paper strategy performance unavailable");
+    ).toHaveTextContent("Unavailable");
     expect(screen.getByTestId("dashboard-watcher-status")).toHaveTextContent(
       "Unavailable",
     );
@@ -99,10 +99,7 @@ describe("Trader dashboard unavailable sources", () => {
       "Alerts unavailable",
     );
     expect(screen.queryByText("No open positions")).not.toBeInTheDocument();
-    expect(screen.getByTestId("daily-review-unavailable")).toBeInTheDocument();
-    expect(
-      screen.queryByTestId("daily-review-content"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dashboard-daily-review")).not.toBeInTheDocument();
   });
 
   it("never substitutes unrelated empty Journal positions for unavailable native account data", () => {

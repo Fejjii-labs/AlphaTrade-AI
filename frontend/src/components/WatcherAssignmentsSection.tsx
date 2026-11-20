@@ -5,10 +5,11 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
-import { ApiError } from "@/lib/api/client";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ApiError, friendlyError } from "@/lib/api/client";
 import { recoverySessionId } from "@/lib/auth/recovery-session";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, formatStrategyLabel } from "@/lib/format";
 import { monitoringAssignments, type AssignmentWrite, type AssignmentsConfiguration, type AssignmentsReplace } from "@/lib/monitoring/assignments-api";
 
 const writeRows = (rows: AssignmentWrite[]) => rows.map(({ id, symbol, strategy_version_id, monitoring_enabled, timeframes, parameters }) => ({ id, symbol, strategy_version_id, monitoring_enabled, timeframes, parameters }));
@@ -24,6 +25,7 @@ export function WatcherAssignmentsSection() {
   const [pending, setPending] = useState<AssignmentsReplace | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [coin, setCoin] = useState("");
   const [versionId, setVersionId] = useState("");
   const [detail, setDetail] = useState<string | null>(null);
@@ -39,12 +41,13 @@ export function WatcherAssignmentsSection() {
     flight.current = controller;
     const request = ++serial.current;
     const generation = sessionGeneration();
+    setLoadFailed(false);
     try {
       const loaded = await monitoringAssignments.read(controller.signal);
       if (controller.signal.aborted || request !== serial.current || generation !== sessionGeneration() || identityRef.current !== identity) return;
       setConfig(loaded); setRows(writeRows(loaded.assignments)); setCoin(loaded.symbols[0] ?? "");
-    } catch (error) {
-      if (!controller.signal.aborted && request === serial.current) setMessage(error instanceof Error ? error.message : "Monitoring unavailable.");
+    } catch {
+      if (!controller.signal.aborted && request === serial.current) setLoadFailed(true);
     }
   }, [identity]);
 
@@ -70,7 +73,7 @@ export function WatcherAssignmentsSection() {
     const request = recover ? pending : { revision: config.revision, request_key: crypto.randomUUID(), assignments: writeRows(rows) };
     if (!request) return;
     try { monitoringAssignments.validateRequest(request); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "Invalid monitoring request."); return; }
+    catch (error) { setMessage(friendlyError(error, "Invalid monitoring request.")); return; }
     if (!recover) {
       try { sessionStorage.setItem(storageKey, JSON.stringify(request)); }
       catch { setMessage("Request recovery storage unavailable. Nothing was sent."); return; }
@@ -90,7 +93,7 @@ export function WatcherAssignmentsSection() {
         try { sessionStorage.removeItem(storageKey); } catch { /* Cleanup cannot block local state. */ }
         setPending(null);
       }
-      setMessage(error instanceof Error ? error.message : "Reply interrupted. Recover the saved request.");
+      setMessage(friendlyError(error, "Couldn't save. Try again."));
     } finally {
       if (identityRef.current === identity && generation === sessionGeneration()) setBusy(false);
     }
@@ -106,8 +109,7 @@ export function WatcherAssignmentsSection() {
     const version = config?.available_versions.find(v => v.strategy_version_id === selectedDetail.strategy_version_id);
     return <section className="space-y-3 rounded-card border border-border-subtle p-4" data-testid="monitoring-assignment-details">
       <Button variant="secondary" size="sm" onClick={() => setDetail(null)}>Back to monitoring</Button>
-      <h3 className="font-semibold">{version?.strategy_name ?? saved?.strategy_name ?? "Saved strategy"} · {selectedDetail.symbol}</h3>
-      <p className="text-sm">Version {version?.version ?? saved?.version} · {selectedDetail.timeframes.join(" / ")}</p>
+      <h3 className="font-semibold">{formatStrategyLabel(version?.strategy_name ?? saved?.strategy_name, version?.version ?? saved?.version, selectedDetail.timeframes, selectedDetail.symbol)}</h3>
       <p className="text-xs text-text-muted">Saved parameters are immutable. Capture changes in Agent as a new strategy version.</p>
       <details>
         <summary className="min-h-11 cursor-pointer content-center text-sm">Saved parameters</summary>
@@ -118,18 +120,19 @@ export function WatcherAssignmentsSection() {
   }
   return <section className="space-y-3 rounded-card border border-border-subtle p-4" data-testid="monitoring-assignments">
     <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">Coin strategies</h3><Button variant="secondary" size="sm" disabled={busy || !!pending || dirty} onClick={() => void refresh()}>Refresh</Button></div>
-    <p className="text-xs text-text-muted">Assign saved versions for monitoring. Trading requires its existing approvals.</p>
-    {!config && <p className="text-sm">Loading monitoring…</p>}
+    {!config && !loadFailed && <div className="space-y-2" data-testid="assignments-loading" aria-busy="true"><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /></div>}
+    {!config && loadFailed && <div role="alert" className="flex items-center gap-3 text-sm text-text-secondary">Couldn&apos;t load.<Button variant="outline" size="sm" onClick={() => void refresh()}>Retry</Button></div>}
     {config && rows.length === 0 && <p className="text-sm text-text-muted">No saved strategy assignments.</p>}
     <div className="grid gap-2 lg:grid-cols-2">{rows.map(row => {
       const saved = config?.assignments.find(r => r.id === row.id);
       const version = config?.available_versions.find(v => v.strategy_version_id === row.strategy_version_id);
+      const label = formatStrategyLabel(version?.strategy_name ?? saved?.strategy_name, version?.version ?? saved?.version, row.timeframes, row.symbol);
       const changed = !saved || saved.monitoring_enabled !== row.monitoring_enabled;
       return <article key={row.id} className="flex flex-col gap-2 rounded border border-border-subtle p-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between" data-testid="monitoring-assignment">
-        <div className="min-w-0 w-full sm:w-auto sm:flex-1"><p className="break-words text-sm font-medium sm:truncate">{row.symbol} · {version?.strategy_name ?? saved?.strategy_name ?? "Saved strategy"}</p><p className="text-xs text-text-muted">v{version?.version ?? saved?.version} · {row.timeframes.join(" / ")} · {changed ? "Unsaved" : reason(saved?.reason_code ?? "pending")}</p>
+        <div className="min-w-0 w-full sm:w-auto sm:flex-1"><p className="break-words text-sm font-medium sm:truncate">{label}</p><p className="text-xs text-text-muted">{changed ? "Unsaved" : reason(saved?.reason_code ?? "pending")}</p>
           {!changed && saved?.latest && <p className="text-xs text-text-muted">{reason(saved.latest.reason_code)} · {formatDateTime(saved.latest.observed_at)}</p>}</div>
         <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
-        <label className="flex min-h-10 items-center gap-2 text-xs"><input type="checkbox" aria-label={`Monitor ${row.symbol} ${version?.strategy_name ?? saved?.strategy_name ?? "saved strategy"}`} checked={row.monitoring_enabled} disabled={busy || !!pending} onChange={e => setRows(current => current.map(value => value.id === row.id ? { ...value, monitoring_enabled: e.target.checked } : value))} />Monitor</label>
+        <label className="flex min-h-10 items-center gap-2 text-xs"><input type="checkbox" aria-label={`Monitor ${label}`} checked={row.monitoring_enabled} disabled={busy || !!pending} onChange={e => setRows(current => current.map(value => value.id === row.id ? { ...value, monitoring_enabled: e.target.checked } : value))} />Monitor</label>
         <Button size="sm" variant="secondary" onClick={() => setDetail(row.id)}>Details</Button>
         <Button size="sm" variant="secondary" disabled={busy || !!pending} onClick={() => setRows(current => current.filter(value => value.id !== row.id))}>Remove</Button>
         </div>
@@ -137,7 +140,7 @@ export function WatcherAssignmentsSection() {
     })}</div>
     {config && <div className="flex flex-wrap items-center gap-2">
       <select aria-label="Assignment coin" className="min-h-10 rounded border border-border bg-surface-2 px-2 text-sm" value={coin} disabled={busy || !!pending} onChange={e => { setCoin(e.target.value); setVersionId(""); }}>{config.symbols.map(symbol => <option key={symbol}>{symbol}</option>)}</select>
-      <select aria-label="Saved strategy version" className="min-h-10 min-w-0 w-full max-w-full flex-1 basis-full rounded border border-border bg-surface-2 px-2 text-sm sm:w-auto sm:basis-0" value={versionId} disabled={busy || !!pending} onChange={e => setVersionId(e.target.value)}><option value="">Select saved version</option>{options.map(version => <option key={version.strategy_version_id} value={version.strategy_version_id}>{version.strategy_name} · v{version.version} · {version.timeframes.join(" / ")}</option>)}</select>
+      <select aria-label="Saved strategy version" className="min-h-10 min-w-0 w-full max-w-full flex-1 basis-full rounded border border-border bg-surface-2 px-2 text-sm sm:w-auto sm:basis-0" value={versionId} disabled={busy || !!pending} onChange={e => setVersionId(e.target.value)}><option value="">Select saved version</option>{options.map(version => <option key={version.strategy_version_id} value={version.strategy_version_id}>{formatStrategyLabel(version.strategy_name, version.version, version.timeframes)}</option>)}</select>
       <Button size="sm" variant="secondary" disabled={busy || !!pending || !selected || !selected.timeframes.length || rows.length >= config.max_assignments || coinLimit || rows.some(r => r.symbol === coin && r.strategy_version_id === versionId)} onClick={() => {
         if (selected) setRows(current => [...current, { id: crypto.randomUUID(), symbol: coin, strategy_version_id: selected.strategy_version_id, monitoring_enabled: true, timeframes: [...selected.timeframes], parameters: structuredClone(selected.parameters) }]);
       }}>Add</Button>

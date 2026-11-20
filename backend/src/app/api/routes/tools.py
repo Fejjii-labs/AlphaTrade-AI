@@ -22,12 +22,12 @@ class ToolExecuteRequest(StrictModel):
 
 
 @router.get("", response_model=list[ToolSpec], summary="List registered tools")
-async def list_tools(registry: ToolRegistryDep, _tenant: ReaderDep) -> list[ToolSpec]:
+def list_tools(registry: ToolRegistryDep, _tenant: ReaderDep) -> list[ToolSpec]:
     return registry.list_specs()
 
 
 @router.post("/execute", response_model=ToolOutput, summary="Execute a tool (debug/agent)")
-async def execute_tool(
+def execute_tool(
     body: ToolExecuteRequest,
     registry: ToolRegistryDep,
     tenant: TraderDep,

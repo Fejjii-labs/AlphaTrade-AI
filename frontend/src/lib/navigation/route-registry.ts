@@ -1,131 +1,43 @@
 import { PHASE_B_REDIRECTS } from "@/lib/navigation/phase-b-redirects";
 
 /**
- * Every app route, classified once (UI overhaul B1).
+ * Every app route, classified once (UI overhaul B1, slimmed 2026-11-19).
  *
  * - primary: a sidebar destination.
- * - section: a page inside a primary destination (Settings sections, Risk).
+ * - section: a page inside a primary destination (Settings tabs, Knowledge).
  * - deep-link: a detail page opened from a list, an alert or Telegram.
- * - diagnostics: kept working, listed only in the Settings diagnostics index.
- * - redirect: the route only forwards elsewhere (see ROUTE_REDIRECTS).
  * - public: signed-out pages.
+ *
+ * Removed routes have no page file; their config redirects live in
+ * `phase-b-redirects.ts`.
  *
  * `path` uses the App Router folder form (`[id]` for dynamic segments, route
  * groups dropped). Tests check that this list matches the `page.tsx` files.
  */
-export type RouteKind =
-  | "primary"
-  | "section"
-  | "deep-link"
-  | "diagnostics"
-  | "redirect"
-  | "public";
-
-export type DiagnosticsGroup =
-  | "Market & alerts"
-  | "Decisions"
-  | "Validation & research"
-  | "Journal tools"
-  | "Portfolio"
-  | "System";
+export type RouteKind = "primary" | "section" | "deep-link" | "public";
 
 export type RegisteredRoute = {
   path: string;
   kind: RouteKind;
   label: string;
-  group?: DiagnosticsGroup;
 };
-
-export const DIAGNOSTICS_GROUPS: readonly DiagnosticsGroup[] = [
-  "Market & alerts",
-  "Decisions",
-  "Validation & research",
-  "Journal tools",
-  "Portfolio",
-  "System",
-];
 
 export const ROUTE_REGISTRY: readonly RegisteredRoute[] = [
   { path: "/", kind: "primary", label: "Dashboard" },
   { path: "/agent", kind: "primary", label: "Agent" },
-  { path: "/journal", kind: "primary", label: "Journal" },
-  { path: "/knowledge", kind: "primary", label: "Knowledge" },
+  { path: "/journal", kind: "primary", label: "Trades" },
   { path: "/strategies", kind: "primary", label: "Strategies" },
   { path: "/settings", kind: "primary", label: "Settings" },
-  { path: "/autonomous", kind: "primary", label: "Autonomous" },
+  { path: "/autonomous", kind: "primary", label: "Bot" },
 
-  { path: "/settings/billing", kind: "section", label: "Billing & Usage" },
-  { path: "/settings/team", kind: "section", label: "Team" },
-  { path: "/settings/exchange", kind: "section", label: "Exchange status" },
-  { path: "/settings/help", kind: "section", label: "Help" },
-  { path: "/settings/notifications", kind: "section", label: "Notifications" },
-  { path: "/settings/watcher", kind: "section", label: "Watcher" },
-  { path: "/settings/diagnostics", kind: "section", label: "Diagnostics" },
+  // Knowledge belongs to the Agent page.
+  { path: "/knowledge", kind: "section", label: "Knowledge" },
+  { path: "/settings/exchange", kind: "section", label: "Exchange" },
+  { path: "/settings/alerts", kind: "section", label: "Alerts" },
+  { path: "/settings/watcher", kind: "section", label: "Markets" },
 
   { path: "/strategies/setups/[id]", kind: "deep-link", label: "Setup" },
-  { path: "/strategy-lab/[id]", kind: "deep-link", label: "Strategy" },
-  { path: "/backtests/[id]", kind: "deep-link", label: "Backtest" },
   { path: "/execution/manual-demo/[commandId]", kind: "deep-link", label: "Manual demo order" },
-  { path: "/decision/candidates/[candidateId]", kind: "deep-link", label: "Candidate" },
-  { path: "/decision/approvals/[approvalId]", kind: "deep-link", label: "Approval" },
-  { path: "/decision/executions/[executionId]", kind: "deep-link", label: "Execution" },
-  { path: "/decision/plans/[planId]", kind: "deep-link", label: "Trade plan" },
-  { path: "/decision/outcomes/[outcomeId]", kind: "deep-link", label: "Outcome" },
-  { path: "/paper-validation/candidates/[candidateId]", kind: "deep-link", label: "Validation candidate" },
-  { path: "/paper-validation/drafts/[draftId]", kind: "deep-link", label: "Validation draft" },
-  { path: "/paper-validation/run-plans/[planId]", kind: "deep-link", label: "Run plan" },
-  { path: "/paper-validation/run-sessions/[sessionId]", kind: "deep-link", label: "Run session" },
-
-  { path: "/watcher", kind: "diagnostics", label: "Scanner", group: "Market & alerts" },
-  { path: "/market-watcher", kind: "diagnostics", label: "Market watcher", group: "Market & alerts" },
-  { path: "/market", kind: "diagnostics", label: "Market monitor", group: "Market & alerts" },
-  { path: "/alerts", kind: "diagnostics", label: "Alerts", group: "Market & alerts" },
-  { path: "/alerts/review", kind: "diagnostics", label: "Setup review", group: "Market & alerts" },
-  { path: "/tradingview-signals", kind: "diagnostics", label: "Signals inbox", group: "Market & alerts" },
-  { path: "/manual-levels", kind: "diagnostics", label: "Manual levels", group: "Market & alerts" },
-  { path: "/paper-signal-orchestration", kind: "diagnostics", label: "Signal orchestration", group: "Market & alerts" },
-
-  { path: "/decision", kind: "diagnostics", label: "Decision", group: "Decisions" },
-  { path: "/decision/candidates", kind: "diagnostics", label: "Candidates", group: "Decisions" },
-  { path: "/decision/market", kind: "diagnostics", label: "Market quality", group: "Decisions" },
-  { path: "/decision/strategy", kind: "diagnostics", label: "Strategy performance", group: "Decisions" },
-  { path: "/approvals", kind: "diagnostics", label: "Approvals", group: "Decisions" },
-  { path: "/proposals", kind: "diagnostics", label: "Proposals", group: "Decisions" },
-  { path: "/pre-trade", kind: "diagnostics", label: "Pre-trade", group: "Decisions" },
-
-  { path: "/paper-validation", kind: "diagnostics", label: "Validation hub", group: "Validation & research" },
-  { path: "/paper-validation/drafts", kind: "diagnostics", label: "Validation drafts", group: "Validation & research" },
-  { path: "/paper-validation/candidates", kind: "diagnostics", label: "Validation candidates", group: "Validation & research" },
-  { path: "/paper-validation/run-plans", kind: "diagnostics", label: "Run plans", group: "Validation & research" },
-  { path: "/paper-validation/run-sessions", kind: "diagnostics", label: "Run sessions", group: "Validation & research" },
-  { path: "/research-validation", kind: "diagnostics", label: "Research validation", group: "Validation & research" },
-  { path: "/validation-priority", kind: "diagnostics", label: "Validation priority", group: "Validation & research" },
-  { path: "/strategy-quality", kind: "diagnostics", label: "Strategy quality", group: "Validation & research" },
-  { path: "/strategy-lab", kind: "diagnostics", label: "Strategy lab", group: "Validation & research" },
-
-  { path: "/journal/import", kind: "diagnostics", label: "Journal import", group: "Journal tools" },
-  { path: "/journal/comparison", kind: "diagnostics", label: "Human vs system", group: "Journal tools" },
-  { path: "/analytics", kind: "diagnostics", label: "Analytics", group: "Journal tools" },
-  { path: "/learning-analytics", kind: "diagnostics", label: "Learning analytics", group: "Journal tools" },
-  { path: "/lessons", kind: "diagnostics", label: "Lessons", group: "Journal tools" },
-
-  { path: "/portfolio", kind: "diagnostics", label: "Portfolio", group: "Portfolio" },
-  { path: "/positions", kind: "diagnostics", label: "Positions", group: "Portfolio" },
-  { path: "/workspace", kind: "diagnostics", label: "AI assist", group: "Portfolio" },
-
-  { path: "/settings/audit", kind: "diagnostics", label: "Audit", group: "System" },
-
-  { path: "/dashboard", kind: "redirect", label: "Dashboard (old link)" },
-  { path: "/coaching", kind: "redirect", label: "Coaching (old link)" },
-  { path: "/journal/statistics", kind: "redirect", label: "Journal statistics (old link)" },
-  { path: "/audit", kind: "redirect", label: "Audit (old link)" },
-  { path: "/exchange", kind: "redirect", label: "Exchange (old link)" },
-  { path: "/invitations", kind: "redirect", label: "Invitations (old link)" },
-  { path: "/settings/advanced", kind: "redirect", label: "Advanced (old link)" },
-  { path: "/risk", kind: "redirect", label: "Risk settings (old link)" },
-  { path: "/risk/autonomous", kind: "redirect", label: "Autonomous settings (old link)" },
-  // /watchlist and /strategies/detections have no page file any more; their
-  // next.config redirects (phase-b-redirects.ts) keep old links working.
 
   { path: "/login", kind: "public", label: "Sign in" },
   { path: "/register", kind: "public", label: "Register" },
@@ -139,26 +51,38 @@ export type RouteRedirect = {
   destination: string;
   /** Redirect only when the path carries this query. */
   has?: { key: string; value?: string }[];
-  /** `config`: next.config redirects (run before pages). `page`: the page calls `redirect()`. */
-  via: "config" | "page";
 };
 
-/** Page-level redirects: the route's own `page.tsx` calls `redirect()`. */
-export const PAGE_REDIRECTS: readonly RouteRedirect[] = [
-  { source: "/dashboard", destination: "/", via: "page" },
-  { source: "/coaching", destination: "/agent", via: "page" },
-  { source: "/journal/statistics", destination: "/journal?tab=stats", via: "page" },
-];
+/** next.config redirects; they run before pages. */
+export const ROUTE_REDIRECTS: readonly RouteRedirect[] = PHASE_B_REDIRECTS.map((rule) => ({
+  source: rule.source,
+  destination: rule.destination,
+  ...(rule.has ? { has: rule.has.map(({ key, value }) => ({ key, value })) } : {}),
+}));
 
-export const ROUTE_REDIRECTS: readonly RouteRedirect[] = [
-  ...PHASE_B_REDIRECTS.map((rule) => ({
-    source: rule.source,
-    destination: rule.destination,
-    ...(rule.has ? { has: rule.has.map(({ key, value }) => ({ key, value })) } : {}),
-    via: "config" as const,
-  })),
-  ...PAGE_REDIRECTS,
-];
+export function pathMatchesPrefix(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+export function matchesAnyPrefix(pathname: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => pathMatchesPrefix(pathname, prefix));
+}
+
+export type LabeledRoute = { href: string; label: string };
+
+/** Static section pages, for page subtitles. */
+export const LABELED_ROUTES: readonly LabeledRoute[] = routesOfKind("section").map((route) => ({
+  href: route.path,
+  label: route.label,
+}));
+
+/** Longest labeled section route for a pathname. */
+export function resolveLabeledRoute(pathname: string): LabeledRoute | null {
+  const matches = LABELED_ROUTES.filter((route) => pathMatchesPrefix(pathname, route.href)).sort(
+    (a, b) => b.href.length - a.href.length,
+  );
+  return matches[0] ?? null;
+}
 
 function segmentsOf(path: string): string[] {
   return path.split(/[?#]/)[0]!.split("/").filter(Boolean);
@@ -168,17 +92,26 @@ function isDynamic(segment: string): boolean {
   return /^\[.+\]$/.test(segment) || segment.startsWith(":");
 }
 
+function isCatchAll(segment: string | undefined): boolean {
+  return segment != null && segment.startsWith(":") && segment.endsWith("*");
+}
+
+function segmentsMatch(pattern: string[], target: string[]): boolean {
+  if (isCatchAll(pattern.at(-1))) {
+    const fixed = pattern.slice(0, -1);
+    return target.length >= fixed.length && fixed.every((segment, index) => isDynamic(segment) || segment === target[index]);
+  }
+  return (
+    pattern.length === target.length &&
+    pattern.every((segment, index) => isDynamic(segment) || segment === target[index])
+  );
+}
+
 /** The registered route a concrete path renders, ignoring query and hash. */
 export function findRegisteredRoute(path: string): RegisteredRoute | null {
   const target = segmentsOf(path);
-  const matches = ROUTE_REGISTRY.filter((route) => {
-    const pattern = segmentsOf(route.path);
-    return (
-      pattern.length === target.length &&
-      pattern.every((segment, index) => isDynamic(segment) || segment === target[index])
-    );
-  });
-  // A static segment beats a dynamic one (`/decision/candidates` vs `[candidateId]`).
+  const matches = ROUTE_REGISTRY.filter((route) => segmentsMatch(segmentsOf(route.path), target));
+  // A static segment beats a dynamic one.
   matches.sort(
     (a, b) =>
       segmentsOf(a.path).filter(isDynamic).length - segmentsOf(b.path).filter(isDynamic).length,
@@ -190,16 +123,13 @@ function findRedirect(path: string): RouteRedirect | null {
   const target = segmentsOf(path);
   const query = new URLSearchParams(path.split("#")[0]!.split("?")[1] ?? "");
   return (
-    ROUTE_REDIRECTS.find((rule) => {
-      const pattern = segmentsOf(rule.source);
-      return (
-        pattern.length === target.length &&
-        pattern.every((segment, index) => isDynamic(segment) || segment === target[index]) &&
+    ROUTE_REDIRECTS.find(
+      (rule) =>
+        segmentsMatch(segmentsOf(rule.source), target) &&
         (rule.has ?? []).every(({ key, value }) =>
           value === undefined ? query.has(key) : query.get(key) === value,
-        )
-      );
-    }) ?? null
+        ),
+    ) ?? null
   );
 }
 
@@ -219,9 +149,7 @@ export function resolveRoute(path: string): RegisteredRoute | null {
       current = redirect.destination;
       continue;
     }
-    const route = findRegisteredRoute(current);
-    if (!route || route.kind === "redirect") return null;
-    return route;
+    return findRegisteredRoute(current);
   }
 }
 

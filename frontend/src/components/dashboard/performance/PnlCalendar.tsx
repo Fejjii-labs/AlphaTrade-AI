@@ -73,9 +73,10 @@ function DayCell({
     );
   }
   const tone = pnlTone(day.net_pnl);
-  const label = `${date}${todaySuffix}: ${formatMonetary(day.net_pnl)} net, ${day.trade_count} trade${
-    day.trade_count === 1 ? "" : "s"
-  }, win ${formatPercent(day.win_rate, 0)}`;
+  const unverified = (day.unverified_count ?? 0) > 0;
+  const label = `${date}${todaySuffix}: ${formatMonetary(day.net_pnl)} net${unverified ? " (unverified)" : ""}, ${
+    day.trade_count
+  } trade${day.trade_count === 1 ? "" : "s"}, win ${formatPercent(day.win_rate, 0)}`;
   return (
     <div
       role="cell"
@@ -89,8 +90,12 @@ function DayCell({
       aria-current={isToday ? "date" : undefined}
       data-testid={`calendar-day-${date}`}
       data-tone={tone}
+      data-unverified={unverified ? "true" : undefined}
     >
-      <span className="block text-right text-[11px] text-text-secondary">{dayNumber}</span>
+      <span className="flex items-center justify-end gap-1 text-[11px] text-text-secondary">
+        {unverified ? <span className="h-1.5 w-1.5 rounded-full bg-warning" aria-hidden="true" /> : null}
+        {dayNumber}
+      </span>
       {/* Phones get whole units so a 7-column cell never truncates the sign or digits. */}
       <span className={cn("truncate font-data text-[10px] font-semibold sm:hidden", valueTone[tone])}>
         {formatCompactPnl(day.net_pnl, { whole: true })}
@@ -197,8 +202,7 @@ export function PnlCalendar({
           className="mb-3 rounded-control border border-danger-border bg-danger-muted px-3 py-2 text-xs text-danger"
           data-testid="calendar-error"
         >
-          Calendar unavailable for {monthLabel(month)}. Daily figures for this month could not be
-          loaded; this is not a zero-P&amp;L month.
+          Couldn&apos;t load.{" "}
           {onRetry ? (
             <button
               type="button"

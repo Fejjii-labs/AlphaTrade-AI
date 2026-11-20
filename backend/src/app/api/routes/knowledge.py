@@ -132,7 +132,7 @@ async def import_knowledge_file(
     response_model=RagDocument,
     summary="Register knowledge document metadata",
 )
-async def create_document(
+def create_document(
     body: DocumentCreateRequest,
     tenant: TraderDep,
     rag_service: RagServiceDep,
@@ -150,7 +150,7 @@ async def create_document(
     summary="Ingest plain-text document into the knowledge base",
     dependencies=[_KNOWLEDGE_INGEST_RATE_LIMIT, _RAG_INGEST_QUOTA],
 )
-async def ingest_document(
+def ingest_document(
     body: IngestDocumentRequest,
     tenant: TraderDep,
     rag_service: RagServiceDep,
@@ -166,7 +166,7 @@ async def ingest_document(
     response_model=PaginatedRagDocuments,
     summary="List knowledge documents",
 )
-async def list_documents(
+def list_documents(
     tenant: TenantDep,
     rag_service: RagServiceDep,
     source_type: DocumentSourceType | None = Query(default=None),
@@ -211,7 +211,7 @@ def retry_indexing(
     response_model=PaginatedRagChunks,
     summary="List document chunks",
 )
-async def list_chunks(
+def list_chunks(
     tenant: TenantDep,
     rag_service: RagServiceDep,
     document_id: uuid.UUID | None = Query(default=None),
@@ -233,7 +233,7 @@ async def list_chunks(
     response_model=RagSearchResponse,
     summary="Search the knowledge base",
 )
-async def search_knowledge(
+def search_knowledge(
     body: RagQuery,
     tenant: TenantDep,
     rag_service: RagServiceDep,

@@ -32,7 +32,7 @@ def _ensure_own_position(position: Position, tenant: TenantContext) -> None:
 
 
 @router.get("", response_model=PaginatedPositions, summary="List positions")
-async def list_positions(
+def list_positions(
     tenant: TenantDep,
     position_service: PositionServiceDep,
     status: PositionStatus | None = Query(default=None),
@@ -50,7 +50,7 @@ async def list_positions(
 
 
 @router.get("/{position_id}", response_model=Position, summary="Get position")
-async def get_position(
+def get_position(
     position_id: uuid.UUID,
     tenant: TenantDep,
     position_service: PositionServiceDep,
@@ -61,7 +61,7 @@ async def get_position(
 
 
 @router.patch("/{position_id}", response_model=Position, summary="Update position")
-async def update_position(
+def update_position(
     position_id: uuid.UUID,
     body: PositionUpdate,
     tenant: TraderDep,
@@ -80,7 +80,7 @@ async def update_position(
     response_model=Position,
     summary="Close paper position",
 )
-async def close_paper_position(
+def close_paper_position(
     position_id: uuid.UUID,
     body: ClosePaperPositionRequest,
     tenant: TraderDep,

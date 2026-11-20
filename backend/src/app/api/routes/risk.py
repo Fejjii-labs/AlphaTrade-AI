@@ -68,7 +68,7 @@ _KILL_SWITCH_WRITE = Depends(
     summary="Get user risk settings",
     dependencies=[_RISK_SETTINGS_READ],
 )
-async def get_risk_settings(
+def get_risk_settings(
     tenant: ReaderDep,
     service: RiskSettingsServiceDep,
 ) -> UserRiskSettingsResponse:
@@ -81,7 +81,7 @@ async def get_risk_settings(
     summary="Update user risk settings",
     dependencies=[_RISK_SETTINGS_WRITE],
 )
-async def update_risk_settings(
+def update_risk_settings(
     payload: UserRiskSettingsUpdate,
     tenant: TraderDep,
     service: RiskSettingsServiceDep,
@@ -107,7 +107,7 @@ async def update_risk_settings(
     summary="Reset user risk settings to defaults",
     dependencies=[_RISK_SETTINGS_WRITE],
 )
-async def reset_risk_settings(
+def reset_risk_settings(
     tenant: TraderDep,
     service: RiskSettingsServiceDep,
     session: SessionDep,
@@ -151,7 +151,7 @@ def get_kill_switch(
     summary="Activate organization kill switch",
     dependencies=[_KILL_SWITCH_WRITE],
 )
-async def activate_kill_switch(
+def activate_kill_switch(
     payload: KillSwitchMutationRequest,
     tenant: OwnerDep,
     service: KillSwitchServiceDep,
@@ -178,7 +178,7 @@ async def activate_kill_switch(
     summary="Deactivate organization kill switch",
     dependencies=[_KILL_SWITCH_WRITE],
 )
-async def deactivate_kill_switch(
+def deactivate_kill_switch(
     payload: KillSwitchMutationRequest,
     tenant: OwnerDep,
     service: KillSwitchServiceDep,
@@ -199,7 +199,7 @@ async def deactivate_kill_switch(
 
 
 @router.post("/check", response_model=RiskCheckResult, summary="Run deterministic risk check")
-async def check_risk(
+def check_risk(
     request: RiskCheckRequest,
     risk_service: RiskServiceDep,
     _tenant: TraderDep,
@@ -208,7 +208,7 @@ async def check_risk(
 
 
 @router.post("/size", response_model=PositionSizingResult, summary="Calculate position size v2")
-async def calculate_position_size(
+def calculate_position_size(
     request: PositionSizingRequest,
     sizing_service: PositionSizingServiceDep,
     _tenant: TraderDep,
@@ -221,7 +221,7 @@ async def calculate_position_size(
     response_model=LossAcceptanceResult,
     summary="Evaluate loss acceptance gate",
 )
-async def evaluate_loss_acceptance(
+def evaluate_loss_acceptance(
     request: LossAcceptanceRequest,
     loss_service: LossAcceptanceServiceDep,
     _tenant: TraderDep,

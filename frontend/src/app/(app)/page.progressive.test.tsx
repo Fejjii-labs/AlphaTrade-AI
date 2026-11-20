@@ -14,8 +14,7 @@ vi.mock("@/contexts/AppContext", () => ({
   useAppContext: () => ({ killSwitchStatus: null, killSwitchError: null }),
   useSafetyPosture: () => ({ executionMode: "paper", realTradingEnabled: false }),
 }));
-vi.mock("@/components/dashboard/AttentionCard", () => ({ AttentionCard: () => null }));
-vi.mock("@/components/dashboard/DailyReviewCard", () => ({ DailyReviewCard: () => null }));
+vi.mock("@/components/dashboard/AttentionCard", () => ({ AttentionCard: () => null, AttentionBadge: () => null }));
 vi.mock("@/components/dashboard/performance/PerformanceDashboard", () => ({ PerformanceDashboard: () => null }));
 vi.mock("@/components/dashboard/BloFinDemoAccountCard", () => ({
   BloFinDemoAccountCard: () => <section data-testid="demo-card">demo</section>,

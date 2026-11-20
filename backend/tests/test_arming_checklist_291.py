@@ -6,7 +6,6 @@ do not arm a worker and do not send a live Telegram message.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -608,7 +607,7 @@ def test_paper_worker_health_route_reports_a_missing_heartbeat(
     runtime = _read_worker_runtime(settings, now=_NOW)
     assert runtime.available is False
     assert runtime.paper_worker.health_state == "UNAVAILABLE"
-    report = asyncio.run(paper_worker_heartbeat(settings, BackgroundTasks()))
+    report = paper_worker_heartbeat(settings, BackgroundTasks())
     assert report.status == "missing"
     assert report.alert_raised is False
     assert report.observation.health_state == "UNAVAILABLE"

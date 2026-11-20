@@ -5,7 +5,8 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ErrorState, SuccessState } from "@/components/states";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
+import { friendlyError } from "@/lib/api/client";
 
 export function EmailVerificationNotice() {
   const { user, refreshProfile } = useAuth();
@@ -25,7 +26,7 @@ export function EmailVerificationNotice() {
       const response = await api.auth.requestVerifyEmail();
       setMessage(response.message);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not send verification email.");
+      setError(friendlyError(err, "Could not send verification email."));
     } finally {
       setBusy(false);
     }

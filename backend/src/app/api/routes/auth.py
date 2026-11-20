@@ -91,7 +91,7 @@ def _apply_auth_cookies(
     status_code=status.HTTP_201_CREATED,
     dependencies=[_AUTH_REGISTER_LIMIT],
 )
-async def register(
+def register(
     body: RegisterRequest,
     request: Request,
     response: Response,
@@ -110,7 +110,7 @@ async def register(
     response_model=AuthResponse,
     dependencies=[_AUTH_LOGIN_LIMIT],
 )
-async def login(
+def login(
     body: LoginRequest,
     request: Request,
     response: Response,
@@ -136,7 +136,7 @@ async def login(
     response_model=TokenPair,
     dependencies=[_AUTH_REFRESH_LIMIT],
 )
-async def refresh(
+def refresh(
     body: RefreshRequest,
     request: Request,
     response: Response,
@@ -151,7 +151,7 @@ async def refresh(
 
 
 @router.post("/logout", response_model=MessageResponse)
-async def logout(
+def logout(
     body: LogoutRequest,
     request: Request,
     response: Response,
@@ -173,7 +173,7 @@ async def logout(
 
 
 @router.get("/me", response_model=MeResponse)
-async def me(tenant: UnverifiedTenantDep, auth_service: AuthServiceDep) -> MeResponse:
+def me(tenant: UnverifiedTenantDep, auth_service: AuthServiceDep) -> MeResponse:
     response = auth_service.get_me(tenant)
     return MeResponse(
         user=response.user,
@@ -187,7 +187,7 @@ async def me(tenant: UnverifiedTenantDep, auth_service: AuthServiceDep) -> MeRes
     response_model=MessageResponse,
     dependencies=[_VERIFY_EMAIL_LIMIT],
 )
-async def request_verify_email(
+def request_verify_email(
     body: VerifyEmailRequest,
     account: AccountServiceDep,
     session: SessionDep,
@@ -199,7 +199,7 @@ async def request_verify_email(
 
 
 @router.post("/verify-email/confirm", response_model=MessageResponse)
-async def confirm_verify_email(
+def confirm_verify_email(
     body: VerifyEmailConfirmRequest,
     account: AccountServiceDep,
     session: SessionDep,
@@ -214,7 +214,7 @@ async def confirm_verify_email(
     response_model=MessageResponse,
     dependencies=[_PASSWORD_RESET_LIMIT],
 )
-async def request_password_reset(
+def request_password_reset(
     body: PasswordResetRequest,
     account: AccountServiceDep,
     session: SessionDep,
@@ -225,7 +225,7 @@ async def request_password_reset(
 
 
 @router.post("/password-reset/confirm", response_model=MessageResponse)
-async def confirm_password_reset(
+def confirm_password_reset(
     body: PasswordResetConfirmRequest,
     request: Request,
     account: AccountServiceDep,

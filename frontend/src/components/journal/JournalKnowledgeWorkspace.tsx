@@ -130,7 +130,7 @@ export function SavedEntryDetail({
         </Link>
         {current.source_document_id && (
           <Link
-            href={`/knowledge?document_id=${current.source_document_id}`}
+            href={`/agent?tab=documents&document_id=${encodeURIComponent(current.source_document_id)}`}
           >
             Original document
           </Link>
@@ -367,7 +367,9 @@ function JournalWorkspaceContent() {
       ) : null}
       {stats ? <TradeStats /> : <>
       {savedId || documentId ? <JournalReturnLink /> : null}
-      {!knowledge && !savedId && !documentId ? <NativeActivity /> : null}
+      {!knowledge && !savedId && !documentId ? (
+        <NativeActivity />
+      ) : null}
       <div
         data-testid="knowledge-filters"
         className="flex flex-col gap-2 rounded-card border border-border-subtle bg-surface-1 p-3 sm:flex-row sm:flex-wrap sm:items-center"

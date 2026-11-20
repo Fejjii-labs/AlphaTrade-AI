@@ -127,7 +127,7 @@ describe("symbol and revision status boundaries", () => {
     configuration.mockResolvedValue({...config, revision:1, slots:config.slots.map((slot, i) => i ? slot : {...slot, symbol:"SOLUSDT"})});
     fireEvent.click(screen.getByTestId("watchlist-save"));
     await waitFor(() => expect(configuration).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByText("Watchlist saved. Paper only.")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Saved.")).toBeInTheDocument());
     expect(status).toHaveBeenCalledTimes(2);
     expect(replace.mock.calls[0]?.[1]).toBe(0);
     expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Pending / unscanned");
@@ -257,17 +257,33 @@ describe("market configuration availability", () => {
     render(<WatcherWatchlistSection />);
     expect(await screen.findByLabelText("Symbol for slot 1")).toHaveValue("BTCUSDT");
     expect(screen.getByTestId("watchlist-save")).not.toBeDisabled();
-    expect(screen.getByText("Market availability unavailable. Your saved watchlist is shown.")).toBeInTheDocument();
+    expect(screen.queryByText(/unavailable/i)).not.toBeInTheDocument();
     expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Pending / unscanned");
   });
 
-  it("labels failed configuration without inventing default market slots", async () => {
+  it("shows a skeleton while loading, never a Saving button", async () => {
     const { api } = await import("@/lib/api");
-    vi.spyOn(api.watcherWatchlist, "configuration").mockRejectedValue(new Error("Unavailable"));
-    vi.spyOn(api.watcherWatchlist, "status").mockRejectedValue(new Error("Unavailable"));
+    vi.spyOn(api.watcherWatchlist, "configuration").mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api.watcherWatchlist, "status").mockReturnValue(new Promise(() => {}));
     render(<WatcherWatchlistSection />);
-    await screen.findByText("Watchlist configuration unavailable. Reload to try again.");
+    expect(screen.getByTestId("watchlist-loading")).toBeInTheDocument();
+    expect(screen.queryByText("Saving")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("watchlist-save")).not.toBeInTheDocument();
+  });
+
+  it("offers Retry without inventing default market slots when configuration fails", async () => {
+    const { api } = await import("@/lib/api");
+    const configuration = vi.spyOn(api.watcherWatchlist, "configuration").mockRejectedValue(new TypeError("Failed to fetch"));
+    vi.spyOn(api.watcherWatchlist, "status").mockRejectedValue(new TypeError("Failed to fetch"));
+    render(<WatcherWatchlistSection />);
+    await screen.findByText("Couldn't load.");
+    expect(screen.queryByText(/Failed to fetch|Reload/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Symbol for slot 1")).not.toBeInTheDocument();
-    expect(screen.getByTestId("watchlist-save")).toBeDisabled();
+    expect(screen.queryByTestId("watchlist-save")).not.toBeInTheDocument();
+    configuration.mockResolvedValue({
+      revision: 4, slots: DEFAULT_WATCHLIST_SLOTS, max_enabled: 5, paper_only: true, updated_at: new Date().toISOString(),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByLabelText("Symbol for slot 1")).toHaveValue("BTCUSDT");
   });
 });

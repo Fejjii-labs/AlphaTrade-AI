@@ -25,7 +25,7 @@ _READ = Depends(
     summary="Trades and stats per strategy",
     dependencies=[_READ],
 )
-async def get_autonomous_strategy_stats(
+def get_autonomous_strategy_stats(
     tenant: ReaderDep,
     session: SessionDep,
 ) -> AutonomousStrategyStatsView:

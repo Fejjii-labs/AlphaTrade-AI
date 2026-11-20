@@ -69,7 +69,7 @@ export function SavedReceipt({
         <p role="status">
           Source document retained in this conversation.{" "}
           <Link
-            href={`/journal?tab=knowledge&document_id=${encodeURIComponent(sourceDocumentId)}`}
+            href={`/agent?tab=documents&document_id=${encodeURIComponent(sourceDocumentId)}`}
             className="text-accent"
           >
             Open original document
@@ -89,7 +89,7 @@ export function SavedReceipt({
             {!e.undone && <Link
               href={e.category === "journal"
                 ? `/journal?saved=${encodeURIComponent(e.id)}`
-                : `/journal?tab=knowledge&category=${e.category}&saved=${encodeURIComponent(e.id)}`}
+                : `/agent?tab=documents&saved=${encodeURIComponent(e.id)}`}
               className="text-accent"
             >Open</Link>}
           </div>

@@ -5,9 +5,9 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
-import { PaperModeBanner } from "@/components/PaperModeBanner";
 import { ErrorState, SuccessState } from "@/components/states";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
+import { friendlyError } from "@/lib/api/client";
 
 const ERROR_ID = "forgot-password-error";
 
@@ -26,7 +26,7 @@ export default function ForgotPasswordPage() {
       const response = await api.auth.requestPasswordReset(email);
       setMessage(response.message);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Request failed.");
+      setError(friendlyError(err, "Request failed."));
     } finally {
       setBusy(false);
     }
@@ -34,13 +34,7 @@ export default function ForgotPasswordPage() {
 
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col justify-start gap-3 px-4 py-4 [@media(min-height:600px)]:justify-center [@media(min-height:600px)]:gap-6 [@media(min-height:600px)]:py-10">
-      <div>
-        <h1 className="text-2xl font-semibold text-zinc-50">Forgot password</h1>
-        <p className="text-sm text-zinc-400">
-          Enter your email and we will send reset instructions if an account exists.
-        </p>
-      </div>
-      <PaperModeBanner />
+      <h1 className="text-2xl font-semibold text-zinc-50">Forgot password</h1>
       <form onSubmit={onSubmit} className="space-y-4 rounded-xl border border-zinc-800 bg-zinc-900/70 p-5">
         <div className="space-y-2">
           <Label htmlFor="email">Email</Label>

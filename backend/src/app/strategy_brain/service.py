@@ -4,14 +4,14 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
 from app.db.models import JournalTrade, UserStrategy
 from app.db.strategy_brain import BrainSetupEventRow, BrainSetupRow
 from app.repositories.watcher_watchlist import WatcherWatchlistRepository
-from app.schemas.common import StrategyId, StrategyLifecycleState
+from app.schemas.common import JournalTradeStatus, StrategyId, StrategyLifecycleState
 from app.schemas.nested_continuation import (
     NESTED_KIND,
     NestedContinuationSpec,
@@ -203,6 +203,53 @@ def setup_view(session: Session, row: BrainSetupRow, *, now: datetime) -> dict[s
     }
 
 
+# States a setup can only be in after it was confirmed.
+_PAST_CONFIRMED = ("CONFIRMED", "TRADE_CANDIDATE", "BLOCKED_BY_RISK", "COMPLETED")
+
+
+def outcome_counts(session: Session, setups: Select[Any]) -> dict[str, int]:
+    """Confirmed, traded and won setups among ``setups``; read-only.
+
+    Confirmed: the setup reached CONFIRMED (now or before it expired or was invalidated).
+    Traded: a journal trade is linked. Won: that trade is closed with net P&L above zero.
+    """
+    scoped = setups.subquery()
+    confirmed_event = (
+        select(BrainSetupEventRow.id)
+        .where(
+            BrainSetupEventRow.setup_id == scoped.c.id,
+            BrainSetupEventRow.organization_id == scoped.c.organization_id,
+            BrainSetupEventRow.payload["state"].as_string() == "CONFIRMED",
+        )
+        .exists()
+    )
+    confirmed = session.scalar(
+        select(func.count())
+        .select_from(scoped)
+        .where(
+            or_(
+                scoped.c.state.in_(_PAST_CONFIRMED),
+                scoped.c.journal_trade_id.is_not(None),
+                confirmed_event,
+            )
+        )
+    )
+    traded = session.scalar(
+        select(func.count()).select_from(scoped).where(scoped.c.journal_trade_id.is_not(None))
+    )
+    won = session.scalar(
+        select(func.count())
+        .select_from(scoped)
+        .join(
+            JournalTrade,
+            (JournalTrade.id == scoped.c.journal_trade_id)
+            & (JournalTrade.organization_id == scoped.c.organization_id),
+        )
+        .where(JournalTrade.status == JournalTradeStatus.CLOSED, JournalTrade.net_pnl > 0)
+    )
+    return {"confirmed": confirmed or 0, "traded": traded or 0, "won": won or 0}
+
+
 def overview(
     session: Session,
     *,
@@ -282,6 +329,7 @@ def overview(
         "strategies": versions,
         "setups": [setup_view(session, row, now=now) for row in rows],
         "setup_count": setup_count,
+        "outcomes": outcome_counts(session, stmt),
         "limitations": [
             "Stored observations only; no current conditions inferred.",
             "Stored setup evidence retains its recorded availability; optional current OI, "

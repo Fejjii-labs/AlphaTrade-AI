@@ -343,6 +343,17 @@ describe("AppContext posture lifecycle (FP2-105)", () => {
     expect(result.current.ctx.killSwitchError).toBe("kill switch unreachable");
   });
 
+  it("never shows raw network text for a failed kill-switch read", async () => {
+    const { result } = renderAppContext();
+    await flushAsync();
+    vi.mocked(api.risk.killSwitch).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POSTURE_REFRESH_INTERVAL_MS);
+    });
+    await flushAsync();
+    expect(result.current.ctx.killSwitchError).toBe("Couldn't load.");
+  });
+
   it("recovers to verified posture on the next successful refresh", async () => {
     const { result } = renderAppContext();
     await flushAsync();

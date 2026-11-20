@@ -7,8 +7,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event, select
+from sqlalchemy import Connection, create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.mutation_policy import (
@@ -122,7 +123,7 @@ def conv_env(tmp_path: Path) -> Iterator[tuple[TestClient, sessionmaker[Session]
     # Concurrent requests need separate connections and independent transactions.
     engine = create_engine(
         f"sqlite+pysqlite:///{tmp_path / 'conversations.db'}",
-        connect_args={"check_same_thread": False},
+        connect_args={"check_same_thread": False, "timeout": 30},
     )
 
     @event.listens_for(engine, "connect")
@@ -130,9 +131,22 @@ def conv_env(tmp_path: Path) -> Iterator[tuple[TestClient, sessionmaker[Session]
         cursor = dbapi_conn.cursor()  # type: ignore[attr-defined]
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
+        # Emit BEGIN ourselves (see _begin) instead of pysqlite's implicit one.
+        dbapi_conn.isolation_level = None  # type: ignore[attr-defined]
+
+    @event.listens_for(engine, "begin")
+    def _begin(conn: Connection) -> None:
+        # SQLite ignores SELECT ... FOR UPDATE. Mutating requests take the write lock
+        # at BEGIN so concurrent confirmations serialize like Postgres row locks
+        # instead of deadlocking on the read-to-write upgrade ("database is locked").
+        immediate = conn.get_execution_options().get("sqlite_begin") == "immediate"
+        conn.exec_driver_sql("BEGIN IMMEDIATE" if immediate else "BEGIN")
 
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
+    write_factory = sessionmaker(
+        bind=engine.execution_options(sqlite_begin="immediate"), expire_on_commit=False
+    )
     settings = _settings()
     with factory() as session:
         session.add(Organization(id=ORG_A, name="Conv Org A"))
@@ -160,8 +174,8 @@ def conv_env(tmp_path: Path) -> Iterator[tuple[TestClient, sessionmaker[Session]
 
     app = create_app(settings=settings)
 
-    def _override_session() -> Iterator[Session]:
-        with factory() as session:
+    def _override_session(request: Request) -> Iterator[Session]:
+        with (factory if request.method == "GET" else write_factory)() as session:
             yield session
 
     app.dependency_overrides[get_session] = _override_session

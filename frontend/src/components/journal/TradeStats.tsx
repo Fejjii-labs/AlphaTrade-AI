@@ -2,7 +2,6 @@
 
 import { useCallback, useState } from "react";
 
-import { SOURCE_LABELS } from "@/components/dashboard/performance/performance-model";
 import { Row } from "@/components/ui/row";
 import { Stat, StatStrip } from "@/components/ui/stat-strip";
 import { useAsyncData } from "@/hooks/useAsyncData";
@@ -12,7 +11,7 @@ import type {
   JournalTradeSource,
   JournalTradeStatsMetrics,
 } from "@/lib/api/types";
-import { formatMoney, formatPercent, humanizeToken } from "@/lib/format";
+import { formatMoney, formatPercent } from "@/lib/format";
 
 function signedMoney(value: string | null | undefined): string | null {
   if (value == null) return null;
@@ -63,24 +62,22 @@ function Breakdown({ title, buckets }: { title: string; buckets: JournalStatsBuc
   );
 }
 
-function sourceLabel(source: string): string {
-  return SOURCE_LABELS[source as JournalTradeSource] ?? humanizeToken(source);
-}
+// Only the bot and my own BloFin demo trades; backtest, imported and other sources stay out.
+const STATS_SOURCES = {
+  paper_execution: "Bot",
+  blofin_demo_manual: "My BloFin trades",
+} as const satisfies Partial<Record<JournalTradeSource, string>>;
+type StatsSource = keyof typeof STATS_SOURCES;
 
-/**
- * Trades → Stats: overall results, then by source, strategy and symbol.
- * The endpoint aggregates every closed journal trade (backtest, imported and
- * manual rows included) unless one source is picked, so the headline says
- * which sources it covers instead of implying paper/demo only.
- */
+/** Trades → Stats: results for the picked source, then by source, strategy and symbol. */
 export function TradeStats() {
-  const [source, setSource] = useState<JournalTradeSource | "">("");
+  const [source, setSource] = useState<StatsSource>("paper_execution");
   const loader = useCallback(async () => {
-    const scoped = source ? { source } : {};
+    const scoped = { source };
     const [strategy, symbol, bySource] = await Promise.allSettled([
       api.journal.statistics({ group_by: "strategy", ...scoped }),
       api.journal.statistics({ group_by: "symbol", ...scoped }),
-      source ? Promise.resolve(null) : api.journal.statistics({ group_by: "source" }),
+      api.journal.statistics({ group_by: "source" }),
     ]);
     const byStrategy = strategy.status === "fulfilled" ? strategy.value : null;
     const bySymbol = symbol.status === "fulfilled" ? symbol.value : null;
@@ -90,7 +87,9 @@ export function TradeStats() {
       bySymbol: bySymbol?.buckets ?? null,
       bySource:
         bySource.status === "fulfilled"
-          ? (bySource.value?.buckets.map((b) => ({ ...b, label: sourceLabel(b.key) })) ?? null)
+          ? bySource.value.buckets
+              .filter((b) => b.key in STATS_SOURCES)
+              .map((b) => ({ ...b, label: STATS_SOURCES[b.key as StatsSource] }))
           : null,
     };
   }, [source]);
@@ -101,13 +100,12 @@ export function TradeStats() {
       <select
         aria-label="Stats source"
         value={source}
-        onChange={(event) => setSource(event.target.value as JournalTradeSource | "")}
+        onChange={(event) => setSource(event.target.value as StatsSource)}
         className="min-h-11 rounded-control border border-border bg-surface-1 px-2 text-sm text-text-primary"
       >
-        <option value="">All sources (incl. backtest and imported)</option>
-        {(Object.keys(SOURCE_LABELS) as JournalTradeSource[]).map((option) => (
+        {(Object.keys(STATS_SOURCES) as StatsSource[]).map((option) => (
           <option key={option} value={option}>
-            {SOURCE_LABELS[option]}
+            {STATS_SOURCES[option]}
           </option>
         ))}
       </select>
@@ -128,21 +126,14 @@ export function TradeStats() {
         <p role="status">Stats unavailable.</p>
       </div>
     );
-  const scopeText = source ? sourceLabel(source) : "all sources";
   return (
     <div className="page-sections" data-testid="trade-stats">
       {picker}
-      <p className="text-xs text-text-muted" data-testid="trade-stats-scope">
-        Closed journal trades from {scopeText}.
-        {source
-          ? ""
-          : " Backtest, imported and manually logged trades are included; pick a source to compare with the dashboard venue."}
-      </p>
       <StatStrip label="Overall">
         <Stat label="Trades" value={String(m.trade_count)} />
         <Stat label="Win rate" value={m.win_rate == null ? null : formatPercent(m.win_rate)} />
         <Stat
-          label={`Net P&L (${scopeText})`}
+          label="Net P&L"
           value={
             signedMoney(m.net_pnl_total) == null ? null : (
               <span className={pnlClass(m.net_pnl_total)}>{signedMoney(m.net_pnl_total)}</span>
@@ -152,7 +143,7 @@ export function TradeStats() {
         <Stat label="Profit factor" value={m.profit_factor == null ? null : m.profit_factor.toFixed(2)} />
         <Stat label="Avg R" value={m.average_r == null ? null : m.average_r.toFixed(2)} />
       </StatStrip>
-      {source ? null : <Breakdown title="By source" buckets={data.bySource} />}
+      <Breakdown title="By source" buckets={data.bySource} />
       <Breakdown title="By strategy" buckets={data.byStrategy} />
       <Breakdown title="By symbol" buckets={data.bySymbol} />
     </div>

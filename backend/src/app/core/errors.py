@@ -15,6 +15,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.market_contracts.errors import RateLimitedError, UpstreamBanError
 
@@ -153,6 +154,59 @@ def _retry_after_header_value(seconds: float | None) -> int:
     return max(1, min(_MAX_RETRY_AFTER_SECONDS, math.ceil(seconds)))
 
 
+def _unexpected_error_response(request: Request) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content=_error_body(
+            code="internal_error",
+            message="An unexpected error occurred.",
+            request=request,
+        ),
+    )
+
+
+class UnhandledErrorMiddleware:
+    """Answer unhandled exceptions with the 500 envelope *inside* the CORS layer.
+
+    Starlette runs the ``Exception`` handler in ``ServerErrorMiddleware``, the
+    outermost layer, so a 500 built there never passes through
+    ``CORSMiddleware``. Browsers then report a network error ("Failed to
+    fetch") instead of a 500 with a request id. Mount this middleware before
+    ``CORSMiddleware`` (``add_middleware`` nests later additions outside) so the
+    envelope gets the CORS and request-id headers like every other response.
+    Like Starlette's ``ServerErrorMiddleware``, the exception is re-raised after
+    the response is sent so servers can log it and ``TestClient`` can surface
+    it (``raise_server_exceptions``). If the response already started, the
+    exception propagates unchanged.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_started = False
+
+        async def _send(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, _send)
+        except Exception as exc:
+            if response_started:
+                raise
+            logger.error("unhandled_exception", error_type=type(exc).__name__, exc_info=exc)
+            response = _unexpected_error_response(Request(scope))
+            await response(scope, receive, send)
+            raise
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Attach handlers that produce consistent error envelopes."""
 
@@ -202,16 +256,10 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def _handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-        # Log full detail server-side; return an opaque message to the client.
+        # Fallback for errors raised outside ``UnhandledErrorMiddleware`` (in an
+        # outer middleware). Log full detail server-side; opaque message to the client.
         logger.error("unhandled_exception", error_type=type(exc).__name__, exc_info=exc)
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content=_error_body(
-                code="internal_error",
-                message="An unexpected error occurred.",
-                request=request,
-            ),
-        )
+        return _unexpected_error_response(request)
 
 
 # Shared 404 messages: "missing" and "not owned" must be byte-identical so the

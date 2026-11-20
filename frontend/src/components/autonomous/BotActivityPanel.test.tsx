@@ -1,136 +1,52 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AutonomousActivityView, AutonomousTradingSettingsView } from "@/lib/api/types";
+import { api } from "@/lib/api";
+import type { BotAction } from "@/lib/api/types";
 import { expectNoIdentifiers } from "@/test/no-identifiers";
-import { BotActivityPanel, botState } from "./BotActivityPanel";
 
-const useAsyncDataMock = vi.fn();
-vi.mock("@/hooks/useAsyncData", () => ({ useAsyncData: (...args: unknown[]) => useAsyncDataMock(...args) }));
-vi.mock("@/lib/api", () => ({ api: { autonomous: { activity: vi.fn() } } }));
+import { actionSentence, BotActivityPanel } from "./BotActivityPanel";
 
-const TRADE = "11111111-2222-4333-8444-555555555555";
-const view: AutonomousTradingSettingsView = {
-  organization_id: "org",
-  user_id: "user",
-  daily_loss_limit_percent: "3",
-  max_trades_per_day: 5,
-  risk_per_trade_percent: null,
-  strategy_id: "s-1",
-  symbol: "BTCUSDT",
-  using_defaults: false,
-  account_max_trades_per_day: 3,
-  effective_max_trades_per_day: 3,
-  strategy_options: [{ strategy_id: "s-1", name: "Nested BTC" }],
-  symbol_options: ["BTCUSDT"],
-  max_daily_loss_percent_ceiling: "6",
-  max_risk_per_trade_percent_ceiling: "5",
-  internal_paper_enabled: true,
-  internal_paper_effective: true,
-  worker_runtime_health: "RUNNING",
-  worker_flags_stale: false,
-};
-const activity = (over: Partial<AutonomousActivityView> = {}): AutonomousActivityView => ({
-  day: "2026-10-27",
-  timezone: "UTC",
-  trades_today: 1,
-  recent_actions: [],
-  ...over,
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+const action = (over: Partial<BotAction>): BotAction => ({ at: "2026-11-04T03:47:00Z", outcome: "blocked", ...over });
+
+describe("actionSentence", () => {
+  it("says what happened in one plain sentence, never a reason code", () => {
+    expect(actionSentence(action({ outcome: "entered", symbol: "BTCUSDT", direction: "long" }))).toBe("Opened BTCUSDT long");
+    expect(actionSentence(action({ symbol: "ETHUSDT", direction: "SHORT", reason: "insufficient_daily_loss_allocation" })))
+      .toBe("Skipped ETHUSDT short: Daily loss budget used up.");
+    expect(actionSentence(action({ outcome: "rejected", reason: "weird_internal_code" }))).toBe("Rejected: Skipped by a safety check.");
+    expect(actionSentence(action({}))).toBe("Skipped");
+  });
 });
-const loaded = (data: AutonomousActivityView | null, extra: Record<string, unknown> = {}) =>
-  useAsyncDataMock.mockReturnValue({ data, loading: false, error: null, reload: vi.fn(), ...extra });
-const tiles = () =>
-  Object.fromEntries(
-    screen.getAllByTestId("status-tile").map((tile) => [
-      tile.querySelector("span")!.textContent,
-      [tile.textContent!.replace(tile.querySelector("span")!.textContent!, ""), tile.dataset.tone],
-    ]),
-  );
 
-beforeEach(() => useAsyncDataMock.mockReset());
-afterEach(cleanup);
-
-describe("What the bot is doing", () => {
-  it("shows a running bot, its target and today's count against the effective cap", () => {
-    loaded(
-      activity({
-        trades_today: 1,
-        recent_actions: [
-          { at: "2026-10-27T10:42:00Z", outcome: "rejected", symbol: null, reason: "stop_too_wide" },
-          { at: "2026-10-27T09:10:00Z", outcome: "entered", symbol: "BTCUSDT", direction: "long", journal_trade_id: TRADE },
-        ],
-      }),
-    );
-    render(<BotActivityPanel view={view} />);
-    expect(screen.getByTestId("bot-activity-target")).toHaveTextContent("Nested BTC · BTCUSDT");
-    expect(tiles()).toMatchObject({
-      Bot: ["Running", "ok"],
-      "Trades today": ["1 of 3", "ok"],
+describe("BotActivityPanel", () => {
+  it("lists the last five decisions with a trade link when there is one", async () => {
+    vi.spyOn(api.autonomous, "activity").mockResolvedValue({
+      day: "2026-11-04", timezone: "UTC", trades_today: 0,
+      recent_actions: [
+        action({ outcome: "entered", symbol: "BTCUSDT", direction: "long", journal_trade_id: "11111111-1111-4111-8111-111111111111" }),
+        ...Array.from({ length: 6 }, () => action({ reason: "demo_leverage_exceeds_profile_max" })),
+      ],
     });
-    expect(tiles()["Last action"]![0]).toMatch(/^Rejected · /);
-    expect(tiles()["Last action"]![1]).toBe("down");
-    const list = screen.getByText("Last 2 actions").closest("details")!;
-    expect(list).not.toHaveAttribute("open");
-    expect(within(list).getByText(/Rejected · Stop too wide/)).toBeInTheDocument();
-    expect(within(list).getByText(/Entered · BTCUSDT Long/)).toBeInTheDocument();
-    expect(within(list).getByRole("link", { name: "Trade" })).toHaveAttribute("href", `/journal?trade_id=${TRADE}`);
+    render(<BotActivityPanel />);
+    const list = await screen.findByTestId("bot-activity");
+    expect(list.querySelectorAll("li")).toHaveLength(5);
+    expect(list).toHaveTextContent("Opened BTCUSDT long");
+    expect(list).toHaveTextContent("Skipped: Leverage was above the old risk profile cap (no longer applied).");
+    expect(screen.getByRole("link", { name: "Trade" })).toHaveAttribute("href", "/journal?trade_id=11111111-1111-4111-8111-111111111111");
+    expect(list).not.toHaveTextContent("demo_leverage");
     expectNoIdentifiers();
   });
 
-  it("goes amber when today's count reaches the effective cap", () => {
-    loaded(activity({ trades_today: 3 }));
-    render(<BotActivityPanel view={view} />);
-    expect(tiles()["Trades today"]).toEqual(["3 of 3", "warn"]);
-  });
-
-  it("is honest when the bot is idle with nothing recorded", () => {
-    loaded(activity({ trades_today: 0 }));
-    render(<BotActivityPanel view={{ ...view, internal_paper_effective: false }} />);
-    expect(tiles()).toMatchObject({
-      Bot: ["Off", "unknown"],
-      "Trades today": ["0 of 3", "ok"],
-      "Last action": ["None yet", "unknown"],
-    });
-    expect(screen.queryByText(/Last \d+ actions/)).not.toBeInTheDocument();
-  });
-
-  it("marks a stale worker amber even when the switch is on", () => {
-    loaded(activity());
-    render(<BotActivityPanel view={{ ...view, worker_runtime_health: "STALE", worker_flags_stale: true }} />);
-    expect(tiles().Bot).toEqual(["Stale", "warn"]);
-  });
-
-  it("names every selected strategy, or the all-eligible mode", () => {
-    const options = [
-      { strategy_id: "s-1", name: "Nested long" },
-      { strategy_id: "s-2", name: "Nested short" },
-    ];
-    loaded(activity());
-    render(<BotActivityPanel view={{ ...view, strategy_options: options, strategy_ids: ["s-1", "s-2"] }} />);
-    expect(screen.getByTestId("bot-activity-target")).toHaveTextContent("Nested long, Nested short · BTCUSDT");
+  it("says when there is nothing yet or the read failed", async () => {
+    vi.spyOn(api.autonomous, "activity").mockResolvedValue({ day: "d", timezone: "UTC", trades_today: 0, recent_actions: [] });
+    render(<BotActivityPanel />);
+    expect(await screen.findByText("No decisions yet.")).toBeInTheDocument();
     cleanup();
-    loaded(activity());
-    render(<BotActivityPanel view={{ ...view, strategy_scope: "all_eligible" }} />);
-    expect(screen.getByTestId("bot-activity-target")).toHaveTextContent("All eligible strategies");
-  });
-
-  it("says when no strategy or coin is set and the count is unknown", () => {
-    loaded(activity({ trades_today: null }));
-    render(<BotActivityPanel view={{ ...view, strategy_id: null, symbol: null }} />);
-    expect(screen.getByTestId("bot-activity-target")).toHaveTextContent("No strategy or coin set");
-    expect(tiles()["Trades today"]).toEqual(["Unknown", "unknown"]);
-  });
-
-  it("reports unavailable activity without inventing numbers", () => {
-    loaded(null, { error: "Not Found" });
-    render(<BotActivityPanel view={view} />);
-    expect(screen.getByText("Bot activity unavailable.")).toBeInTheDocument();
-    expect(tiles()["Trades today"]).toEqual(["Unknown", "unknown"]);
-    expect(tiles()["Last action"]).toEqual(["None yet", "unknown"]);
-  });
-
-  it("reports a missing worker as not reported", () => {
-    expect(botState({ ...view, worker_runtime_health: undefined })).toEqual({ tone: "unknown", state: "Not reported" });
-    expect(botState({ ...view, worker_runtime_health: "UNAVAILABLE" })).toEqual({ tone: "unknown", state: "Not reported" });
+    vi.mocked(api.autonomous.activity).mockRejectedValue(new Error("down"));
+    render(<BotActivityPanel />);
+    expect(await screen.findByText("Bot activity unavailable.")).toBeInTheDocument();
   });
 });

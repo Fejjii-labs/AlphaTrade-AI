@@ -11,12 +11,12 @@ test.describe("AT-017 edge auth boundary", () => {
   test("unauthenticated navigation to protected routes redirects at the edge", async ({
     page,
   }) => {
-    await page.goto("/portfolio");
-    await expect(page).toHaveURL(/\/login\?next=%2Fportfolio/);
+    await page.goto("/journal");
+    await expect(page).toHaveURL(/\/login\?next=%2Fjournal/);
     await expect(page.getByRole("heading", { name: /sign in/i })).toBeVisible();
 
-    await page.goto("/proposals?id=abc");
-    await expect(page).toHaveURL(/\/login\?next=%2Fproposals%3Fid%3Dabc/);
+    await page.goto("/agent?strategy_id=abc");
+    await expect(page).toHaveURL(/\/login\?next=%2Fagent%3Fstrategy_id%3Dabc/);
 
     await page.goto("/settings#notifications");
     await expect(page).toHaveURL(/\/login\?next=%2Fsettings/);
@@ -53,13 +53,13 @@ test.describe("AT-017 edge auth boundary", () => {
     });
     expect(register.ok()).toBeTruthy();
 
-    await page.goto("/positions");
-    await expect(page).toHaveURL(/\/login\?next=%2Fpositions/);
+    await page.goto("/strategies");
+    await expect(page).toHaveURL(/\/login\?next=%2Fstrategies/);
 
     await page.getByLabel(/email/i).fill(email);
     await page.locator("#password").fill(password);
     await page.getByRole("button", { name: /sign in/i }).click();
-    await expect(page).toHaveURL(/\/positions/);
+    await expect(page).toHaveURL(/\/strategies/);
   });
 
   test("logout clears the session and back navigation stays blocked", async ({
@@ -78,28 +78,28 @@ test.describe("AT-017 edge auth boundary", () => {
     await page.locator("#password").fill(password);
     await page.getByRole("button", { name: /sign in/i }).click();
     await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByRole("status", { name: "Execution status" }).getByText("PAPER", { exact: true })).toBeVisible();
+    await expect(page.getByRole("status", { name: "Execution status" }).getByText("Demo", { exact: true })).toBeVisible();
 
     // Create a real history entry on a protected route before logging out.
-    await page.goto("/portfolio");
-    await expect(page).toHaveURL(/\/portfolio/);
+    await page.goto("/journal");
+    await expect(page).toHaveURL(/\/journal/);
 
-    await page.getByRole("button", { name: "Status", exact: true }).click();
+    await page.getByRole("button", { name: "Account menu", exact: true }).click();
     await page.getByRole("button", { name: /log out/i }).click();
     await expect(page).toHaveURL(/\/login/);
 
     // Back navigation and direct URLs must not restore protected content.
     await page.goBack();
     await expect(page).toHaveURL(/\/login/);
-    await expect(page.getByRole("status", { name: "Execution status" }).getByText("PAPER", { exact: true })).toHaveCount(0);
-    await page.goto("/portfolio");
-    await expect(page).toHaveURL(/\/login\?next=%2Fportfolio/);
+    await expect(page.getByRole("status", { name: "Execution status" }).getByText("Demo", { exact: true })).toHaveCount(0);
+    await page.goto("/journal");
+    await expect(page).toHaveURL(/\/login\?next=%2Fjournal/);
   });
 
   test("stale marker cookie without tokens fails closed to login", async ({ page }) => {
     const base = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
     await page.context().addCookies([{ name: "alphatrade_session", value: "1", url: base }]);
-    await page.goto("/portfolio");
+    await page.goto("/journal");
     // Middleware lets the marker through; the client guard must still redirect
     // because no access token exists, without rendering protected content.
     await expect(page).toHaveURL(/\/login/);

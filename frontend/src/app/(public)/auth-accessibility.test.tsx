@@ -11,10 +11,6 @@ const register = vi.fn();
 const requestPasswordReset = vi.fn();
 const confirmPasswordReset = vi.fn();
 
-vi.mock("@/components/PaperModeBanner", () => ({
-  PaperModeBanner: () => null,
-}));
-
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams("token=reset-token"),
 }));

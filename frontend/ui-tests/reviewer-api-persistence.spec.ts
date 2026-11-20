@@ -2,7 +2,18 @@ import { expect, test } from "@playwright/test";
 import { appConfig } from "../src/lib/config";
 import { strategyPatchResponse } from "../src/lib/api/generated/validators";
 import { strategyPatch } from "../src/lib/api/generated/client";
-import { emptyStrategyCard } from "../src/components/strategy/StrategyCardForm";
+
+function emptyStrategyCard(name: string) {
+  return {
+    strategy_name: name, market_type: "crypto_perp", asset_universe: ["BTCUSDT"], timeframes: ["4h"],
+    entry_conditions: ["Define entry trigger"], confirmation_conditions: ["Define confirmation"],
+    invalidation: ["Define invalidation"], stop_loss: ["Below invalidation"],
+    take_profit_plan: ["TP1 at resistance"], runner_plan: ["Trail after TP1"],
+    position_sizing: ["Max 1% risk"], add_rules: ["No adds until TP1"],
+    no_trade_rules: ["Skip low liquidity"], backtest_rules: ["Placeholder — not run"],
+    success_criteria: ["Paper win rate > 45%"], validation_status: "draft",
+  };
+}
 
 test("generated strategy PATCH persists setup_type and a separate API read reloads it", async ({ request }) => {
   const base = process.env.PLAYWRIGHT_API_URL ?? "http://localhost:8000";

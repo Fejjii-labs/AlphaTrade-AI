@@ -8,7 +8,7 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import SettingsPage from "./page";
-import NotificationSettingsPage from "./notifications/page";
+import AlertsSettingsPage from "./alerts/page";
 import WatcherSettingsPage from "./watcher/page";
 import { api } from "@/lib/api";
 import type {
@@ -30,8 +30,9 @@ let identity = {
 };
 const router = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
+const logout = vi.fn();
 vi.mock("@/contexts/AuthContext", () => ({
-  useAuth: () => identity,
+  useAuth: () => ({ ...identity, logout }),
 }));
 vi.mock("@/contexts/AppContext", () => ({
   useAppContext: () => runtime,
@@ -218,45 +219,23 @@ afterEach(() => {
   router.replace.mockClear();
 });
 
-it("shows the Account section flat, with Team and Billing reachable and no link row", async () => {
+it("shows Account as email, workspace and log out only", async () => {
   render(<SettingsPage />);
-  // The landing h1 matches the sidebar label; the sub-nav marks Account.
-  expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { level: 1, name: "Account" })).toBeInTheDocument();
   expect(screen.getByText("owner@example.com")).toBeVisible();
   expect(screen.getByText("Alpha Org")).toBeVisible();
-  expect(screen.getByRole("link", { name: "Team" })).toHaveAttribute("href", "/settings/team");
-  expect(screen.getByRole("link", { name: "Billing & usage" })).toHaveAttribute("href", "/settings/billing");
-  for (const gone of ["Exchange connections", "Diagnostics", "Help & Guide"])
+  for (const gone of ["Team", "Billing & usage", "Exchange connections", "Diagnostics", "Help & Guide"])
     expect(screen.queryByRole("link", { name: gone })).not.toBeInTheDocument();
-  for (const moved of ["Market Monitoring", "Notifications", "Account & System"])
-    expect(screen.queryByText(moved, { selector: "summary" })).not.toBeInTheDocument();
-  expect(screen.queryByText("System", { selector: "summary" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Refresh system status" })).not.toBeInTheDocument();
-  expect(screen.queryByText("Manual demo preparation & history")).not.toBeInTheDocument();
+  expect(screen.queryByText(/verif/i)).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Set up paper account" })).not.toBeInTheDocument();
+  expect(api.execution.paperAccountStatus).not.toHaveBeenCalled();
   expect(api.marketWatcher.monitoring).not.toHaveBeenCalled();
   expect(api.risk.updateSettings).not.toHaveBeenCalled();
-});
-it("keeps paper account setup in Account", async () => {
-  vi.spyOn(api.execution, "registerPaperAccount").mockResolvedValue({
-    account: {
-      id: "paper-account",
-      name: "Paper account",
-      execution_mode: "PAPER",
-      account_mode: "NET",
-      enabled: true,
-    },
-    created: true,
-  });
-  render(<SettingsPage />);
-  fireEvent.click(
-    await screen.findByRole("button", { name: "Set up paper account" }),
-  );
-  expect(await screen.findByText("paper-account")).toBeInTheDocument();
-  expect(api.execution.registerPaperAccount).toHaveBeenCalledExactlyOnceWith();
-  expect(api.risk.updateSettings).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+  expect(logout).toHaveBeenCalledOnce();
 });
 it.each([
-  ["notifications", "/settings/notifications"],
+  ["notifications", "/settings/alerts"],
   ["markets", "/settings/watcher"],
 ])("forwards the old /settings#%s anchor to %s", (hash, target) => {
   window.location.hash = hash;
@@ -268,9 +247,9 @@ it("stays on Account for the old #account-system anchor", () => {
   render(<SettingsPage />);
   expect(router.replace).not.toHaveBeenCalled();
 });
-it("shows monitoring state on Watcher without treating watchlist enablement as running", async () => {
+it("shows monitoring state on Markets without treating watchlist enablement as running", async () => {
   render(<WatcherSettingsPage />);
-  expect(screen.getByRole("heading", { name: "Watcher" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Markets" })).toBeInTheDocument();
   expect(await screen.findByLabelText("Enable slot 1")).toBeChecked();
   expect(screen.getByLabelText("Enable slot 2")).not.toBeChecked();
   const [watcher, lastScan, worker] = screen.getAllByTestId("status-tile");
@@ -279,20 +258,20 @@ it("shows monitoring state on Watcher without treating watchlist enablement as r
   expect(lastScan).toHaveAttribute("data-tone", "unknown");
   expect(worker).toHaveTextContent("Not reported");
   expect(screen.queryByText("Running")).not.toBeInTheDocument();
-  expect(screen.getByText("Worker details").closest("details")).not.toHaveAttribute("open");
+  expect(screen.queryByText("Worker details")).not.toBeInTheDocument();
 });
-it("refreshes Watcher monitoring", async () => {
+it("refreshes Markets monitoring", async () => {
   render(<WatcherSettingsPage />);
   await screen.findByText("Stopped");
   const previous = vi.mocked(api.marketWatcher.monitoring).mock.calls.length;
-  fireEvent.click(screen.getByRole("button", { name: "Refresh watcher" }));
+  fireEvent.click(screen.getByRole("button", { name: "Refresh markets" }));
   await waitFor(() =>
     expect(api.marketWatcher.monitoring).toHaveBeenCalledTimes(previous + 1),
   );
 });
-it("shows the notification controls on Notifications without sending anything", async () => {
-  render(<NotificationSettingsPage />);
-  expect(screen.getByRole("heading", { name: "Notifications" })).toBeInTheDocument();
+it("shows the notification controls on Alerts without sending anything", async () => {
+  render(<AlertsSettingsPage />);
+  expect(screen.getByRole("heading", { level: 1, name: "Alerts" })).toBeInTheDocument();
   await waitFor(() => expect(api.notifications.preferences).toHaveBeenCalled());
   expect(api.notifications.sendTest).not.toHaveBeenCalled();
   expect(api.alerts.testTelegram).not.toHaveBeenCalled();
