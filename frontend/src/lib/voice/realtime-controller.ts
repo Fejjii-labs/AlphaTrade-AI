@@ -30,15 +30,21 @@ type VoiceConfiguration = {
 class VoiceStop extends Error {
   constructor(message: string, readonly limit: boolean) { super(message); }
 }
+type VoiceContext = { symbol?: string; strategy_id?: string };
+const CANCELLED = "Voice start was cancelled before it connected. Click Talk to Agent to try again.";
+const CONVERSATION_CHANGED = "Voice stopped because the conversation changed. Click Talk to Agent to start again.";
+const PAGE_HIDDEN = "Voice stopped because the page was hidden. Click Talk to Agent to start again.";
 type Options = {
   ensureConversation(signal: AbortSignal): Promise<string | null>;
-  context: { symbol?: string; strategy_id?: string };
+  /** Read when the session starts, so a binding that loads during start is still used. */
+  context: VoiceContext | (() => VoiceContext);
   pending(key: string, body: TurnBody): boolean;
   result(key: string, result: AgentTurnResult): boolean;
   changed(snapshot: RealtimeSnapshot): void;
   audio?: AudioDevice;
   connect?: (url: string) => WebSocket;
   configuration?: (signal: AbortSignal) => Promise<VoiceConfiguration>;
+  hidden?: () => boolean;
 };
 
 export class RealtimeVoiceController {
@@ -110,7 +116,8 @@ export class RealtimeVoiceController {
       const socket = (this.options.connect ?? (address => new WebSocket(address)))(url.toString());
       this.socket = socket;
       socket.onopen = () => {
-        if (current()) this.send({ type: "session.start", access_token: token, conversation_id: conversation, context: this.options.context });
+        const context = typeof this.options.context === "function" ? this.options.context() : this.options.context;
+        if (current()) this.send({ type: "session.start", access_token: token, conversation_id: conversation, context });
       };
       socket.onmessage = event => {
         if (!current()) return;
@@ -121,8 +128,10 @@ export class RealtimeVoiceController {
       socket.onclose = () => { if (current()) this.fail("Voice ended. Recover any pending request or continue typing."); };
       this.timer = setTimeout(() => { if (current()) this.end(); }, this.maximumSeconds * 1000);
     } catch (error) {
-      if (current()) this.fail(error && typeof error === "object" && "name" in error && error.name === "NotAllowedError"
+      const name = error && typeof error === "object" && "name" in error ? error.name : null;
+      if (current()) this.fail(name === "NotAllowedError"
         ? "Microphone access was denied. Continue typing."
+        : name === "AbortError" ? CANCELLED
         : error instanceof Error ? error.message : "Voice unavailable. Continue typing.",
         error instanceof VoiceStop && error.limit);
     }
@@ -131,6 +140,9 @@ export class RealtimeVoiceController {
   private receive(event: Record<string, unknown>): void {
     switch (event.type) {
       case "session.ready":
+        // Hiding the page during the microphone prompt does not cancel a start,
+        // but a session never goes live in a background tab.
+        if (this.hidden()) { this.fail(PAGE_HIDDEN); return; }
         this.ready = true;
         this.update({
           state: "listening",
@@ -252,7 +264,21 @@ export class RealtimeVoiceController {
   }
 
   setConversation(conversation: string | null): void {
-    if (this.conversation !== null && conversation !== this.conversation) this.end();
+    if (this.conversation !== null && conversation !== this.conversation) this.fail(CONVERSATION_CHANGED);
+  }
+
+  /** The user switched conversation; a start or session for the old one stops visibly. */
+  contextChanged(): void {
+    if (this.snapshot.active) this.fail(CONVERSATION_CHANGED);
+  }
+
+  /** The page was hidden. A start still waiting on the microphone prompt continues. */
+  pageHidden(): void {
+    if (this.snapshot.active && this.ready) this.fail(PAGE_HIDDEN);
+  }
+
+  private hidden(): boolean {
+    return this.options.hidden?.() ?? (typeof document !== "undefined" && document.hidden);
   }
 
   end(): void {

@@ -194,8 +194,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       refreshInBackground();
     };
 
+    // Hidden tabs skip ticks (each tick is three rate-limited API reads); the
+    // visibilitychange handler refreshes as soon as the tab is shown again.
     const intervalId = window.setInterval(
-      refreshInBackground,
+      onVisibilityOrFocus,
       POSTURE_REFRESH_INTERVAL_MS,
     );
     window.addEventListener("focus", onVisibilityOrFocus);

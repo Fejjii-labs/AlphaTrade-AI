@@ -111,23 +111,62 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("PerformanceDashboard", () => {
-  it("shows the BloFin P&L of unreconciled trades with a short verified count and day marks", async () => {
+  it("shows 'P&L pending from BloFin' instead of a number when BloFin has not reported P&L", async () => {
     const data = response();
-    data.summary.unverified_pnl_count = 2;
-    data.summary.pnl_trade_coverage = "3 of 5 trades verified";
-    data.days[0] = { ...data.days[0], unverified_count: 1 };
+    // CC trade: closed, BloFin P&L missing. No price-derived figure may appear.
+    data.summary = {
+      ...data.summary,
+      trade_count: 1,
+      pnl_sample_count: 0,
+      pnl_pending_count: 1,
+      pnl_trade_coverage: "0 of 1 trades verified",
+      wins: 0,
+      losses: 0,
+      breakeven: 0,
+      win_rate: null,
+      net_pnl: null,
+      gross_profit: null,
+      gross_loss: null,
+      profit_factor: null,
+      average_win: null,
+      average_loss: null,
+      win_loss_ratio: null,
+      expectancy: null,
+    };
+    data.days = [
+      { date: "2026-07-01", net_pnl: null, trade_count: 1, wins: 0, losses: 0, breakeven: 0, win_rate: null, pnl_pending_count: 1 },
+    ];
+    data.cumulative = [];
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(data);
+    render(<PerformanceDashboard now={NOW} scope="demo" />);
+    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("P&L pending from BloFin"));
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveAttribute("data-pending", "true");
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("0 of 1 verified");
+    expect(screen.getByTestId("kpi-net-pnl")).not.toHaveTextContent("627");
+    const day = screen.getByTestId("calendar-day-2026-07-01");
+    expect(day).toHaveAttribute("data-pending", "true");
+    expect(day).toHaveAccessibleName(/P&L pending from BloFin/);
+    expect(day).toHaveTextContent("Pending");
+    expect(screen.getByTestId("performance-sample-size")).toHaveTextContent("Sample: 1 trades");
+  });
+
+  it("marks only days with pending BloFin P&L next to verified figures", async () => {
+    const data = response();
+    data.summary.pnl_pending_count = 2;
+    data.summary.pnl_sample_count = 3;
+    data.days[0] = { ...data.days[0], pnl_pending_count: 1 };
     vi.mocked(api.journal.performanceCalendar).mockResolvedValue(data);
     render(<PerformanceDashboard now={NOW} scope="demo" />);
     await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
     expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("3 of 5 verified");
-    expect(screen.getByTestId("kpi-net-pnl")).toHaveAttribute("data-unverified", "true");
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("2 pending from BloFin");
     expect(screen.getByTestId("calendar-month-total")).toHaveTextContent("3 of 5 verified");
     for (const id of ["kpi-win-rate", "kpi-expectancy"]) {
       expect(screen.getByTestId(id)).not.toHaveTextContent("verified");
     }
-    expect(screen.getByTestId("calendar-day-2026-07-01")).toHaveAttribute("data-unverified", "true");
-    expect(screen.getByTestId("calendar-day-2026-07-01")).toHaveAccessibleName(/unverified/);
-    expect(screen.getByTestId("calendar-day-2026-07-02")).not.toHaveAttribute("data-unverified");
+    expect(screen.getByTestId("calendar-day-2026-07-01")).toHaveAttribute("data-pending", "true");
+    expect(screen.getByTestId("calendar-day-2026-07-01")).toHaveAccessibleName(/P&L pending from BloFin/);
+    expect(screen.getByTestId("calendar-day-2026-07-02")).not.toHaveAttribute("data-pending");
   });
 
   it("renders real numbers from the endpoint", async () => {
@@ -135,7 +174,7 @@ describe("PerformanceDashboard", () => {
     render(<PerformanceDashboard now={NOW} />);
     await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
     expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("5 of 5 verified");
-    expect(screen.getByTestId("kpi-net-pnl")).not.toHaveAttribute("data-unverified");
+    expect(screen.getByTestId("kpi-net-pnl")).not.toHaveAttribute("data-pending");
     expect(screen.getByTestId("kpi-profit-factor")).toHaveTextContent("1.50");
     expect(screen.getByTestId("kpi-expectancy")).toHaveTextContent("+20.00");
     expect(screen.getByTestId("kpi-expectancy")).not.toHaveTextContent("Net P&L per closed trade");

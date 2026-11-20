@@ -22,7 +22,7 @@ from app.core.dependencies import get_session
 from app.db.autonomous_paper_switch import AutonomousPaperSwitchRow
 from app.db.autonomous_trading_settings import AutonomousTradingSettingsRow
 from app.db.base import Base
-from app.db.models import AuditLog, Membership, Organization, User, UserStrategy
+from app.db.models import AuditLog, BotRiskSettings, Membership, Organization, User, UserStrategy
 from app.main import create_app
 from app.repositories.watcher_watchlist import WatcherWatchlistRepository
 from app.schemas.common import AuditEventType, MembershipRole, StrategyId
@@ -57,6 +57,7 @@ from app.services.risk_policy.profile import (
     placeholder_profile,
     sofien_aggressive_profile,
 )
+from app.services.worker_heartbeat import _publish_effective_flags
 from app.signal_fusion.memory import FrozenClock
 from app.workers.watcher_paper_targets import PaperScanTarget
 
@@ -155,6 +156,76 @@ def _token(client: TestClient, email: str) -> dict[str, str]:
     )
     assert login.status_code == 200
     return {"Authorization": f"Bearer {login.json()['tokens']['access_token']}"}
+
+
+def test_demo_bot_leverage_syncs_to_worker_users_legacy_settings(
+    client: TestClient, settings_db: tuple[sessionmaker[Session], Settings]
+) -> None:
+    factory, settings = settings_db
+    client.app.state.settings = settings.model_copy(
+        update={
+            "governed_blofin_demo_organization_id": str(ORG),
+            "governed_blofin_demo_user_id": str(TRADER),
+            "risk_policy_owner_user_id": str(OWNER),
+            "risk_model_v2_enabled": False,
+        }
+    )
+    with factory.begin() as session:
+        session.add(
+            BotRiskSettings(
+                id=1,
+                risk_per_trade_pct=Decimal("1"),
+                daily_stop_pct=Decimal("3"),
+                leverage=6,
+                margin_mode="isolated",
+                grade_risk_overrides={"A": "2"},
+                grades_gate_entries=True,
+            )
+        )
+    owner = _token(client, "owner-284@test.example")
+    trader = _token(client, "trader-284@test.example")
+    path = "/risk/policy/demo-bot-settings"
+    unreported = client.get("/autonomous/settings", headers=owner).json()
+    assert unreported["risk_model_v2_enabled"] is None
+    _publish_effective_flags(
+        factory, settings.model_copy(update={"risk_model_v2_enabled": True}), now=datetime.now(UTC)
+    )
+    reported = client.get("/autonomous/settings", headers=trader).json()
+    assert reported["risk_model_v2_enabled"] is True
+    assert reported["demo_risk_v2_leverage"] == 6
+    assert reported["demo_leverage"] == 10
+    current = client.get(path, headers=owner)
+    assert current.status_code == 200
+    assert current.json()["leverage"] == 6
+    assert (
+        client.patch("/autonomous/settings", headers=owner, json={"demo_leverage": 3}).status_code
+        == 200
+    )
+    with factory.begin() as session:
+        service = AutonomousTradingSettingsService(session, AuditService(session))
+        service.sync_demo_leverage(organization_id=ORG, user_id=TRADER, leverage=4)
+        row = session.scalar(
+            select(AutonomousTradingSettingsRow).where(
+                AutonomousTradingSettingsRow.user_id == TRADER
+            )
+        )
+        assert row is not None
+        row.max_trades_per_day = 8
+    for leverage in (1, 10):
+        payload = {**current.json(), "leverage": leverage}
+        assert client.put(path, headers=trader, json=payload).status_code == 403
+        saved = client.put(path, headers=owner, json=payload)
+        assert saved.status_code == 200
+        assert saved.json() == payload
+        assert client.get(path, headers=owner).json() == payload
+        mirrored = client.get("/autonomous/settings", headers=trader).json()
+        assert mirrored["demo_leverage"] == mirrored["demo_risk_v2_leverage"] == leverage
+        assert mirrored["max_trades_per_day"] == 8
+    _publish_effective_flags(factory, settings, now=datetime.now(UTC))
+    legacy = client.get("/autonomous/settings", headers=owner).json()
+    assert legacy["risk_model_v2_enabled"] is False
+    assert legacy["demo_risk_v2_leverage"] is None
+    assert legacy["demo_leverage"] == 3
 
 
 def test_validation_edges() -> None:

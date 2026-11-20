@@ -18,6 +18,10 @@ from app.schemas.common import CostSource, UsageStatus
 
 _CLOSE_MARGIN = timedelta(seconds=CLOSE_SECONDS + CLEANUP_SECONDS)
 _EXPIRED_HOLD_CHARGE = "expired-voice-hold"
+# A delegated Agent turn is not cancelled with the socket and may still be
+# running after the session expires. Its holds wait this long past the margin.
+SECONDARY_GRACE = timedelta(minutes=15)
+_LIVE_DURATION_EVENT = "live-duration"
 
 
 def expired_hold_charge_id(reservation_id: uuid.UUID) -> uuid.UUID:
@@ -36,9 +40,22 @@ def _parse_expires_at(ledger: dict[str, Any]) -> datetime | None:
         return None
 
 
-def _live_secondary_unresolved(data: dict[str, Any]) -> bool:
+def _live_secondary(data: dict[str, Any]) -> bool:
     return bool(
         data.get("tools") or data.get("reasoning_attempts") or data.get("embedding_attempts")
+    )
+
+
+def _live_secondary_resolved(data: dict[str, Any]) -> bool:
+    """Every delegated turn answered and every secondary call has a usage receipt.
+
+    Their spend is already in usage events written by the Agent pipeline and
+    ``embedding_done``, so the voice row has nothing left to hold for them.
+    """
+    return (
+        all(t.get("state") == "acknowledged" for t in data.get("tools", {}).values())
+        and all(a.get("state") == "received" for a in data.get("reasoning_attempts", []))
+        and all(a.get("state") == "received" for a in data.get("embedding_attempts", {}).values())
     )
 
 
@@ -60,13 +77,11 @@ def _eligible_for_live_sweep(row: VoiceSessionReservation, moment: datetime) -> 
     # marker (and every Realtime row) are never changed here.
     if not live and _transport_stage(data) != STAGE_PROVIDER_CONTACT:
         return False
-    if live and live.get("finalized"):
-        return False
-    if _live_secondary_unresolved(data):
-        return False
     expires_at = _parse_expires_at(data)
     if expires_at is None:
         return False
+    if _live_secondary(data):
+        return moment >= expires_at + _CLOSE_MARGIN + SECONDARY_GRACE
     return moment >= expires_at + _CLOSE_MARGIN
 
 
@@ -80,6 +95,28 @@ def _eligible_for_pre_contact_release(row: VoiceSessionReservation, moment: date
         and expires_at is not None
         and moment >= expires_at + _CLOSE_MARGIN
     )
+
+
+def _measured_live_cost(session: Session, row: VoiceSessionReservation) -> Decimal | None:
+    """Cost of a confirmed final duration receipt, or None when it is not confirmed.
+
+    Same rule as ``LiveLedger.close``: finalized, within the reservation, priced
+    model, and no unresolved secondary work. The duration usage event written
+    with the final receipt already holds ``seconds * rate``.
+    """
+    data = row.ledger
+    live = data.get("live") or {}
+    if not (
+        live.get("finalized")
+        and live.get("within_reservation")
+        and live.get("resolved_model", row.model) == row.model
+        and _live_secondary_resolved(data)
+    ):
+        return None
+    event = session.get(UsageEvent, uuid5(row.id, _LIVE_DURATION_EVENT))
+    if event is None or event.cost_is_placeholder:
+        return None
+    return event.estimated_cost
 
 
 def _charge_full_reservation(
@@ -136,9 +173,11 @@ def release_expired_voice_holds(
     Scoped to one organization, row-locked, and flushed only so quota reads do
     not commit unrelated work on the caller session. Each released row is charged
     its full ``reserved_cost`` (never zero), except a row whose ledger proves
-    the provider was never contacted, which is released at zero. Realtime rows,
-    legacy Live rows without a transport stage, and finalized Live receipts with
-    unresolved secondary delegation are never changed here.
+    the provider was never contacted, which is released at zero, and a confirmed
+    final duration receipt whose delegated turns all completed, which settles at
+    its measured seconds. Rows with secondary work wait ``SECONDARY_GRACE`` past
+    the close margin. Realtime rows and legacy Live rows without a transport
+    stage are never changed here.
     """
     moment = now or datetime.now(UTC)
     candidate_ids = session.scalars(
@@ -173,10 +212,14 @@ def release_expired_voice_holds(
             continue
         if not _eligible_for_live_sweep(row, moment):
             continue
-        live = row.ledger.get("live", {})
-        if live.get("finalized"):
-            continue
-        _charge_full_reservation(session, row, moment)
+        measured = _measured_live_cost(session, row)
+        if measured is not None:
+            # Secondary spend is already in its own usage events.
+            row.status = "closed"
+            row.accounted_cost = measured
+            row.updated_at = moment
+        else:
+            _charge_full_reservation(session, row, moment)
         released += 1
     if released:
         session.flush()

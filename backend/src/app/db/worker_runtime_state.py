@@ -53,5 +53,6 @@ class WorkerRuntimeStateRow(Base):
     automatic_telegram_delivery_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
+    risk_model_v2_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     watchlist: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)

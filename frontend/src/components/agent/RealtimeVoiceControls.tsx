@@ -67,22 +67,30 @@ export function RealtimeVoiceControls(props: Props) {
   useEffect(() => { current.current.onAvailability?.(availability.available); }, [availability.available]);
   const now = useNow(state.active && state.endsAt != null);
   useEffect(() => {
+    // One controller per sign-in session. Rebuilding it on a strategy binding that
+    // loads mid-start used to abort the start with no message.
     const voice = new RealtimeVoiceController({
-      context: { symbol: current.current.symbol, strategy_id: current.current.strategyId },
+      context: () => ({ symbol: current.current.symbol, strategy_id: current.current.strategyId }),
       ensureConversation: signal => current.current.ensureConversation(signal),
       pending: (key, body) => current.current.onPending(key, body),
       result: (key, result) => current.current.onResult(key, result),
       changed: snapshot => { setState(snapshot); current.current.onActive?.(snapshot.active); },
     });
     controller.current = voice;
-    const visibility = () => { if (document.hidden) voice.end(); };
+    const visibility = () => { if (document.hidden) voice.pageHidden(); };
     document.addEventListener("visibilitychange", visibility);
     return () => {
       voice.dispose(); controller.current = null;
       current.current.onActive?.(false);
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, [props.sessionKey, props.contextKey, props.strategyId, props.symbol]);
+  }, [props.sessionKey]);
+  const context = useRef(props.contextKey);
+  useEffect(() => {
+    if (context.current === props.contextKey) return;
+    context.current = props.contextKey;
+    controller.current?.contextChanged();
+  }, [props.contextKey]);
   useEffect(() => {
     controller.current?.setConversation(props.conversationId);
     if (!props.authenticated) controller.current?.end();

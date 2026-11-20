@@ -35,6 +35,7 @@ class WorkerRuntimeWrite:
     telegram_interaction_enabled: bool
     telegram_alerts_enabled: bool
     automatic_telegram_delivery_enabled: bool
+    risk_model_v2_enabled: bool | None = None
     preserve_cycle: bool = True
     autonomy_mode: str = "off"
     autonomous_internal_paper_db_enabled: bool = False
@@ -179,6 +180,7 @@ def _row_from_snapshot(snapshot: WorkerRuntimeWrite) -> WorkerRuntimeStateRow:
         telegram_interaction_enabled=bool(snapshot.telegram_interaction_enabled),
         telegram_alerts_enabled=bool(snapshot.telegram_alerts_enabled),
         automatic_telegram_delivery_enabled=bool(snapshot.automatic_telegram_delivery_enabled),
+        risk_model_v2_enabled=snapshot.risk_model_v2_enabled,
         watchlist=list(_watchlist(snapshot.watchlist)),
         organization_id=snapshot.organization_id,
     )
@@ -194,6 +196,7 @@ def _apply_snapshot(row: WorkerRuntimeStateRow, snapshot: WorkerRuntimeWrite) ->
     row.telegram_interaction_enabled = bool(snapshot.telegram_interaction_enabled)
     row.telegram_alerts_enabled = bool(snapshot.telegram_alerts_enabled)
     row.automatic_telegram_delivery_enabled = bool(snapshot.automatic_telegram_delivery_enabled)
+    row.risk_model_v2_enabled = snapshot.risk_model_v2_enabled
     if snapshot.preserve_cycle:
         return
     mode = _mode(snapshot.autonomy_mode)

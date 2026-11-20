@@ -4566,6 +4566,17 @@
             "title": "Demo Margin Mode",
             "type": "string"
           },
+          "demo_risk_v2_leverage": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Demo Risk V2 Leverage"
+          },
           "effective_max_trades_per_day": {
             "title": "Effective Max Trades Per Day",
             "type": "integer"
@@ -4616,6 +4627,17 @@
             "format": "uuid",
             "title": "Organization Id",
             "type": "string"
+          },
+          "risk_model_v2_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Model V2 Enabled"
           },
           "risk_per_trade_percent": {
             "anyOf": [
@@ -19720,13 +19742,13 @@
             ],
             "title": "Net Pnl"
           },
-          "trade_count": {
-            "title": "Trade Count",
+          "pnl_pending_count": {
+            "default": 0,
+            "title": "Pnl Pending Count",
             "type": "integer"
           },
-          "unverified_count": {
-            "default": 0,
-            "title": "Unverified Count",
+          "trade_count": {
+            "title": "Trade Count",
             "type": "integer"
           },
           "win_rate": {
@@ -20078,6 +20100,11 @@
             ],
             "title": "Net Pnl"
           },
+          "pnl_pending_count": {
+            "default": 0,
+            "title": "Pnl Pending Count",
+            "type": "integer"
+          },
           "pnl_sample_count": {
             "default": 0,
             "title": "Pnl Sample Count",
@@ -20108,11 +20135,6 @@
           "trade_count": {
             "default": 0,
             "title": "Trade Count",
-            "type": "integer"
-          },
-          "unverified_pnl_count": {
-            "default": 0,
-            "title": "Unverified Pnl Count",
             "type": "integer"
           },
           "win_loss_ratio": {

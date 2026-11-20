@@ -29,20 +29,16 @@ Official contracts, rechecked 2026-11-16 from https://docs.blofin.com/index.html
   by the snapshot. ``GET /api/v1/market/instruments`` supplies
   ``contractValue`` and ``settleCurrency``.
 
-Journal economics follow ``paper_close_pnl``: long price P&L is
-``(exit - entry) * size``, short flips the price delta, and net subtracts
-fees and funding. ``size`` is contracts times ``contractValue``. A
-non-negative positions-history fee is a cost. A negative fee is stored as a
-rebate so the same subtraction adds it. Journal funding is ``-fundingFee``
-(paid is positive, received is negative).
-
-Closed slices are grouped by positionId. Sum of realizedPnl is gross and is
-checked against price movement and closing-order pnl within 0.01 USDT per
-position. Both opening and closing fees must be present and their combined
-cost must reconcile to positions history. Funding paid is positive; received
-is negative. Duplicate venue ids never add a second cost or journal trade.
-Unreconciled rows keep a short closure reason. Headlines use only the
-reconciled subset and disclose incomplete reads.
+Journal economics are BloFin's own figures (Sofien's rule: never computed
+by the app). Closed slices are grouped by positionId; gross is the sum of
+positions-history ``realizedPnl`` and fees the sum of positions-history
+``fee`` (a negative fee is a rebate). Funding is ``-fundingFee`` from the
+funding route when it covers the position, else NULL. Net is gross minus
+fees minus known funding. Prices, sizes and contract values never feed P&L.
+A missing BloFin field leaves the row's P&L pending (NULL) with a short
+``unverified:<reason>``. Closed rows still pending outside the read window
+are re-read individually on later syncs (bounded backfill) and filled in
+place; nothing is deleted.
 """
 
 from __future__ import annotations
@@ -137,6 +133,9 @@ _ROW_FIELDS = (
     "updateTime",
 )
 _LOGGED_SKIPS = 20
+# Pending closes older than the read window re-read per cycle (newest first).
+_BACKFILL_ROWS = 10
+_BACKFILL_MARGIN = timedelta(minutes=1)
 _VERIFIED = "pnl-verified"
 _ORDER_COST_PROOF = "blofin-economics:position-orders-v2"
 _UNVERIFIED = "pnl-unverified"
@@ -151,9 +150,9 @@ _DISABLED = (
     "fillPnl is not documented as gross or net of fees or funding."
 )
 _READY = (
-    "Reconciled BloFin demo journal positions. Net P&L is positions-history "
-    "realizedPnl minus opening and closing order fees, minus funding paid. "
-    "Only verified positions in the recorded window are included."
+    "BloFin demo journal positions. P&L is BloFin's own positions-history "
+    "realizedPnl minus BloFin's fee, minus BloFin funding when reported. "
+    "Positions whose P&L BloFin has not reported yet are excluded."
 )
 
 
@@ -893,39 +892,42 @@ def _position_draft(
     positions: list[dict[str, Any]],
     window_begin: datetime,
 ) -> MirrorDraft:
-    """One position, many closes; venue P&L anchored and costs independently checked."""
+    """One position, many closes. P&L and fees are BloFin's own figures.
+
+    Gross is the sum of positions-history ``realizedPnl`` and fees the sum of
+    positions-history ``fee``, exactly as BloFin reports them. Nothing is
+    derived from prices, sizes or contract values. Funding is BloFin's
+    funding-fee history when it covers the position; otherwise the funding
+    column stays NULL and net is realizedPnl minus fee. A missing BloFin field
+    leaves P&L pending (NULL) with a short reason; it is never estimated.
+    """
+    del window_begin
     group.sort(key=lambda item: (item.closed_at, item.history_id))
     first, last = group[0], group[-1]
     drafts = [_draft_from_slice(item) for item in group]
     quantity = sum((item.contracts for item in group), Decimal(0))
     entry = sum((item.open_price * item.contracts for item in group), Decimal(0)) / quantity
     exit_price = sum((item.close_price * item.contracts for item in group), Decimal(0)) / quantity
-    gross = sum((item.realized or Decimal(0) for item in group), Decimal(0))
-    funding = sum((item.funding or Decimal(0) for item in group), Decimal(0))
     reason = None
     if any((item.inst_id, item.direction) != (first.inst_id, first.direction) for item in group):
         reason = "position_identity_conflict"
-    elif (
-        any(not draft.price_matches for draft in drafts)
-        or abs(sum((_price_pnl(item) or Decimal(0) for item in group), Decimal(0)) - gross)
-        > _TOLERANCE
-    ):
-        reason = "pnl_mismatch"
-    elif min(item.opened_at for item in group) < window_begin:
-        reason = "entry_before_lookback"
-    elif any(not item.funding_ok for item in group):
-        reason = "funding_incomplete"
-    fees, order_ids, cost_reason = _position_costs(
+    elif any(item.realized is None for item in group):
+        reason = "missing_blofin_pnl"
+    elif any(item.fee is None for item in group):
+        reason = "missing_blofin_fee"
+    elif any(item.settle not in {None, "USDT"} for item in group):
+        reason = "non_usdt_settlement"
+    gross = sum((item.realized or Decimal(0) for item in group), Decimal(0))
+    fees = sum((item.fee or Decimal(0) for item in group), Decimal(0))
+    funding: Decimal | None = None
+    if all(item.funding_ok and item.funding is not None for item in group):
+        funding = sum((item.funding or Decimal(0) for item in group), Decimal(0))
+    # Order ids only link the journal row to its BloFin orders; they do not
+    # gate or change the BloFin P&L.
+    _fees, order_ids, _reason = _position_costs(
         group, all_slices, orders, conflicting_order_ids, positions
     )
-    reason = reason or cost_reason
-    if reason is None and (
-        any(item.fee is None for item in group)
-        or fees is None
-        or abs(sum((item.fee or Decimal(0) for item in group), Decimal(0)) - fees) > _TOLERANCE
-    ):
-        reason = "fee_mismatch"
-    net = _money(gross - fees - funding) if reason is None and fees is not None else None
+    net = None if reason else _money(gross - fees - (funding or Decimal(0)))
     result = (
         TradeResult.OPEN
         if net is None
@@ -942,8 +944,9 @@ def _position_draft(
         entry_time=min(i.opened_at for i in group),
         exit_time=last.closed_at,
         size=size,
-        fees=_money(fees) if net is not None and fees is not None else None,
-        funding=_money(funding) if net is not None else None,
+        fees=_money(fees) if net is not None else None,
+        funding=_money(funding) if net is not None and funding is not None else None,
+        slippage=Decimal("0") if net is not None else None,
         gross_pnl=_money(gross) if net is not None else None,
         net_pnl=net,
         result=result,
@@ -1550,6 +1553,13 @@ class BloFinDemoManualMirror:
             window_begin=deps_begin,
             window_end=end,
         )
+        backfill = self._backfill_pending(
+            session,
+            instrument_rows,
+            organization_id=organization_id,
+            user_id=user_id,
+            before=deps_begin,
+        )
         # Raw pages are not needed after parsing; drop them before the writes.
         del instrument_rows, position_rows, history, fills, funding, orders
         if delta_ids is not None:
@@ -1579,15 +1589,20 @@ class BloFinDemoManualMirror:
             or built.instruments_incomplete
             or instruments_dropped
         )
-        if (
-            page_capped
-            or built.history_incomplete
-            or not built.positions_complete
-            or instruments_dropped
-        ):
+        # P&L and fees are positions-history fields, so only an incomplete
+        # history read withholds them. A capped funding read drops funding.
+        if built.history_incomplete:
             built = _without_verified_economics(built)
+        elif funding_capped:
+            built = _without_funding(built)
         lock_journal_mirror(session, organization_id)
         report = self._persist(session, built, organization_id=organization_id, user_id=user_id)
+        if backfill is not None:
+            filled = self._persist(
+                session, backfill, organization_id=organization_id, user_id=user_id
+            )
+            logger.info("blofin_demo_manual_mirror_backfilled", updated=filled.updated)
+            report = replace(report, updated=report.updated + filled.updated)
         if report.ambiguous:
             incomplete = True
         if page_capped:
@@ -1607,6 +1622,91 @@ class BloFinDemoManualMirror:
         elif capped_endpoints:
             report = replace(report, capped_endpoints=capped_endpoints)
         return report
+
+    def _backfill_pending(
+        self,
+        session: Session,
+        instrument_rows: list[dict[str, Any]],
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        before: datetime,
+    ) -> BuildResult | None:
+        """Re-read BloFin positions-history around closed rows still pending P&L.
+
+        Only rows closed before this cycle's window are read here (the main
+        read already covers newer ones). Each read is a narrow window around
+        one stored close, bounded per cycle. Drafts are kept only when BloFin
+        reported the P&L and fee, so a row BloFin no longer returns stays as
+        it is. Rows are updated in place; nothing is created or deleted.
+        """
+        pending = list(
+            session.scalars(
+                select(JournalTrade)
+                .where(
+                    JournalTrade.organization_id == organization_id,
+                    JournalTrade.user_id == user_id,
+                    JournalTrade.source.in_(_MIRROR_SOURCES),
+                    exact_prefix(JournalTrade.external_ref, "blofin-demo-history:"),
+                    JournalTrade.status == JournalTradeStatus.CLOSED,
+                    JournalTrade.net_pnl.is_(None),
+                    JournalTrade.exit_time.is_not(None),
+                    JournalTrade.exit_time < before,
+                )
+                .order_by(JournalTrade.exit_time.desc(), JournalTrade.id)
+                .limit(_BACKFILL_ROWS)
+            ).all()
+        )
+        history: list[dict[str, Any]] = []
+        wanted: set[str] = set()
+        for row in pending:
+            ids = _history_ids(row)
+            if not ids or row.exit_time is None:
+                continue
+            closed = row.exit_time if row.exit_time.tzinfo else row.exit_time.replace(tzinfo=UTC)
+            opened = row.entry_time or closed
+            opened = opened if opened.tzinfo else opened.replace(tzinfo=UTC)
+            begin = max(opened, closed - _WINDOW + 2 * _BACKFILL_MARGIN) - _BACKFILL_MARGIN
+            rows, capped = _history_pages(
+                self._client,
+                _HISTORY,
+                _ms(begin),
+                _ms(closed + _BACKFILL_MARGIN),
+                self._pace,
+                self._retry,
+                self._max_pages,
+                project=True,
+            )
+            if capped:
+                self._log_page_cap(_HISTORY, begin, len(rows))
+                continue
+            wanted |= ids
+            history.extend(item for item in rows if item.get("historyId") in ids)
+        if not history:
+            return None
+        built = drafts_from_raw(
+            instruments=instrument_rows,
+            positions=[],
+            history=history,
+            fills=[],
+            funding=[],
+            orders=[],
+            # No funding is read here, so funding stays unknown (NULL).
+            window_begin=before,
+            window_end=before,
+        )
+        return replace(
+            built,
+            closed=tuple(
+                draft
+                for draft in built.closed
+                if draft.net_pnl is not None and set(draft.history_ids) <= wanted
+            ),
+            opens=(),
+            # Never treat this narrow read as the account's open positions.
+            positions_complete=False,
+            skipped_rows=(),
+        )
 
     def _read(
         self, path: str, since: datetime, end_ms: str, *, capped_error: bool
@@ -1862,6 +1962,21 @@ def _without_verified_economics(built: BuildResult) -> BuildResult:
     )
 
 
+def _without_funding(built: BuildResult) -> BuildResult:
+    """A capped funding read cannot prove funding; keep BloFin realizedPnl and fee."""
+    closed = []
+    for draft in built.closed:
+        if draft.net_pnl is None or draft.gross_pnl is None or draft.fees is None:
+            closed.append(draft)
+            continue
+        net = _money(draft.gross_pnl - draft.fees)
+        result = (
+            TradeResult.WIN if net > 0 else TradeResult.LOSS if net < 0 else TradeResult.BREAKEVEN
+        )
+        closed.append(replace(draft, funding=None, net_pnl=net, result=result))
+    return replace(built, closed=tuple(closed))
+
+
 def cycle_marker_ok(row: JournalTrade | None) -> bool:
     """True only when the stored marker's sole cycle tag is a successful read."""
     if row is None:
@@ -1975,18 +2090,10 @@ def strategy_group_key(
 
 
 def _formula_net(row: JournalTrade) -> Decimal | None:
-    """Price P&L minus stored fee and funding. None when a price input is missing."""
-    if row.entry_price is None or row.exit_price is None or row.size is None:
+    """Net from the stored BloFin figures: realizedPnl - fee - funding (if known)."""
+    if row.fees is None or row.gross_pnl is None or row.net_pnl is None:
         return None
-    if row.fees is None or row.funding is None or row.gross_pnl is None or row.net_pnl is None:
-        return None
-    delta = row.exit_price - row.entry_price
-    if row.direction is TradeDirection.SHORT:
-        delta = -delta
-    gross = _money(delta * row.size)
-    if abs(gross - row.gross_pnl) > _TOLERANCE:
-        return None
-    return _money(row.gross_pnl - row.fees - row.funding)
+    return _money(row.gross_pnl - row.fees - (row.funding or Decimal(0)))
 
 
 def without_annotation_grade(tags: Iterable[object] | None) -> list[str]:
@@ -1999,7 +2106,7 @@ def without_annotation_grade(tags: Iterable[object] | None) -> list[str]:
 
 
 def _verified_row(row: JournalTrade) -> bool:
-    """A headline row is one this mirror verified, recomputed from stored prices."""
+    """A headline row carries BloFin's stored P&L and fee; prices are not used."""
     tags = without_annotation_grade(row.tags)
     ref = row.external_ref or ""
     net = _formula_net(row)

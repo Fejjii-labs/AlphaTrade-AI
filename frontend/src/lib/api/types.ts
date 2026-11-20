@@ -1,5 +1,14 @@
 /** Typed models mirroring backend Pydantic schemas. */
 
+export type DemoBotRiskSettings = {
+  risk_per_trade_pct: string;
+  daily_stop_pct: string;
+  leverage: number;
+  margin_mode: "isolated";
+  grade_risk_overrides: Record<string, string>;
+  grades_gate_entries: boolean;
+};
+
 export type RiskSeverity = "info" | "low" | "medium" | "high" | "critical";
 export type TradeDirection = "long" | "short";
 export type ProposalStatus =
@@ -1205,6 +1214,8 @@ export interface AutonomousTradingSettingsView {
   worker_flags_stale?: boolean;
   autonomy_mode?: string;
   /** BloFin demo only: the app sets this on the demo venue before an entry. */
+  risk_model_v2_enabled?: boolean | null;
+  demo_risk_v2_leverage?: number | null;
   demo_leverage?: number;
   demo_margin_mode?: DemoMarginMode;
   demo_leverage_overrides?: Record<string, DemoLeverageOverride>;
@@ -4585,8 +4596,8 @@ export interface JournalDashboardSummary {
   trade_count: number;
   pnl_sample_count: number;
   pnl_trade_coverage?: string | null;
-  /** Trades whose P&L is the BloFin price move of an unreconciled close (not verified). */
-  unverified_pnl_count?: number;
+  /** Closed trades whose P&L is pending from BloFin (never derived from prices). */
+  pnl_pending_count?: number;
   wins: number;
   losses: number;
   breakeven: number;
@@ -4609,8 +4620,8 @@ export interface JournalDashboardDay {
   wins: number;
   losses: number;
   breakeven: number;
-  /** Trades that day whose P&L is unverified. */
-  unverified_count?: number;
+  /** Trades that day whose P&L is pending from BloFin. */
+  pnl_pending_count?: number;
   win_rate: number | null;
 }
 

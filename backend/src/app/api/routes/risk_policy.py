@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal, Self
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -33,6 +33,7 @@ from app.security.rbac import ReaderDep, TraderDep
 from app.security.tenant import TenantContext
 from app.security.tokens import decode_access_token
 from app.services.audit_service import AuditService
+from app.services.autonomous_trading_settings_service import AutonomousTradingSettingsService
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.governance import (
     PolicyActor,
@@ -336,8 +337,15 @@ def update_demo_bot_settings(
         grade.value: str(percent) for grade, percent in payload.grade_risk_overrides.items()
     }
     row.grades_gate_entries = payload.grades_gate_entries
+    mirror_user = settings.governed_blofin_demo_user_id
+    audit = AuditService(session, strict_mode=True)
+    AutonomousTradingSettingsService(session, audit).sync_demo_leverage(
+        organization_id=tenant.organization_id,
+        user_id=UUID(mirror_user) if mirror_user else tenant.user_id,
+        leverage=payload.leverage,
+    )
     request_id = uuid4().hex
-    AuditService(session, strict_mode=True).record(
+    audit.record(
         AuditRecordCreate(
             request_id=request_id,
             trace_id=request_id,

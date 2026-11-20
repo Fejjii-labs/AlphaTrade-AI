@@ -503,3 +503,45 @@ def test_activity_client_cannot_issue_write_methods(method, path):
     with pytest.raises(ExchangeDemoInactiveError):
         client.request(method, path, signed=True)
     assert venue.requests == []
+
+
+def _fill_page(venue, after):
+    return venue.provider().page(
+        "fill",
+        begin_ms=MS - 100000,
+        end_ms=MS,
+        after=after,
+        limit=100,
+        expected_uid=venue.uid,
+        before_send=lambda: None,
+    )
+
+
+def test_fill_page_after_cursor_ignoring_window_ends_the_window():
+    # Staging 2026-11-20: BloFin demo ignores begin/end once ``after`` paginates
+    # and returns older fills. That page marks the end of the window.
+    venue = HistoryVenue()
+    venue.pages["fill"] = {
+        "f1": [fill("f0", ts=str(MS - 40 * 86400000)), fill("f-1", ts=str(MS - 90 * 86400000))]
+    }
+    assert _fill_page(venue, "f1") == ()
+
+
+def test_fill_page_keeps_in_window_rows_and_drops_older_ones():
+    venue = HistoryVenue()
+    venue.pages["fill"] = {"f2": [fill("f1"), fill("f0", ts=str(MS - 40 * 86400000))]}
+    assert [fact.trade_id for fact in _fill_page(venue, "f2")] == ["f1"]
+
+
+def test_fill_page_newer_than_window_still_refuses():
+    venue = HistoryVenue()
+    venue.pages["fill"] = {None: [fill("f9", ts=str(MS + 1))]}
+    with pytest.raises(ExchangeRequestError, match="outside requested window"):
+        _fill_page(venue, None)
+
+
+def test_older_fill_must_still_be_well_formed():
+    venue = HistoryVenue()
+    venue.pages["fill"] = {"f1": [fill("f0", ts=str(MS - 40 * 86400000), fillPrice="x")]}
+    with pytest.raises(ExchangeRequestError, match="Invalid native decimal"):
+        _fill_page(venue, "f1")

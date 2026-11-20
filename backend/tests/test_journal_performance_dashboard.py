@@ -948,7 +948,7 @@ def test_calendar_endpoint_is_tenant_isolated(
 
 
 # --------------------------------------------------------------------------- #
-# Unreconciled BloFin demo mirror rows: show the venue price P&L, flagged
+# BloFin demo rows without BloFin P&L: pending, never priced from entry/exit
 # --------------------------------------------------------------------------- #
 
 
@@ -971,13 +971,13 @@ def _unverified(
     )
 
 
-def test_unreconciled_mirror_rows_show_venue_price_pnl_flagged_unverified() -> None:
+def test_unreconciled_mirror_rows_are_pending_never_venue_price_pnl() -> None:
     rows = [
         _unverified(datetime(2026, 11, 12, 10, tzinfo=UTC), entry="100", exit_="110", size="2"),
         _unverified(
-            datetime(2026, 11, 19, 10, tzinfo=UTC),
-            entry="50",
-            exit_="52",
+            datetime(2026, 11, 12, 11, tzinfo=UTC),
+            entry="100",
+            exit_="90",
             size="5",
             direction=TradeDirection.SHORT,
             reason="unverified",
@@ -986,19 +986,17 @@ def test_unreconciled_mirror_rows_show_venue_price_pnl_flagged_unverified() -> N
     result = _build(rows)
     s = result.summary
     assert s.trade_count == 2
-    assert s.pnl_sample_count == 2
-    assert s.unverified_pnl_count == 2
-    assert s.net_pnl == Decimal("10")
-    assert (s.wins, s.losses) == (1, 1)
+    assert s.pnl_sample_count == 0
+    assert s.net_pnl is None
+    assert s.pnl_pending_count == 2
     assert s.pnl_trade_coverage == "0 of 2 trades verified"
-    assert [(d.date.isoformat(), d.net_pnl, d.unverified_count) for d in result.days] == [
-        ("2026-11-12", Decimal("20"), 1),
-        ("2026-11-19", Decimal("-10"), 1),
+    assert [(d.date.isoformat(), d.net_pnl, d.pnl_pending_count) for d in result.days] == [
+        ("2026-11-12", None, 2)
     ]
-    assert result.cumulative[-1].cumulative_net_pnl == Decimal("10")
+    assert any("P&L pending from BloFin" in w for w in result.warnings)
 
 
-def test_verified_rows_are_not_flagged_and_keep_recorded_net() -> None:
+def test_verified_rows_keep_recorded_net_and_pending_rows_add_nothing() -> None:
     rows = [
         _row(
             "9.8", datetime(2026, 11, 12, tzinfo=UTC), source=JournalTradeSource.BLOFIN_DEMO_MANUAL
@@ -1006,28 +1004,13 @@ def test_verified_rows_are_not_flagged_and_keep_recorded_net() -> None:
         _unverified(datetime(2026, 11, 13, tzinfo=UTC), entry="100", exit_="101", size="1"),
     ]
     result = _build(rows)
-    assert result.summary.net_pnl == Decimal("10.8")
-    assert result.summary.unverified_pnl_count == 1
+    assert result.summary.net_pnl == Decimal("9.8")
+    assert result.summary.pnl_pending_count == 1
     assert result.summary.pnl_trade_coverage == "1 of 2 trades verified"
-    assert [d.unverified_count for d in result.days] == [0, 1]
+    assert [d.pnl_pending_count for d in result.days] == [0, 1]
 
 
-def test_unreconciled_rows_without_prices_or_marker_stay_without_pnl() -> None:
-    no_size = _unverified(datetime(2026, 11, 12, tzinfo=UTC), entry="100", exit_="110", size=None)
-    no_exit = _unverified(datetime(2026, 11, 12, tzinfo=UTC), entry="100", exit_=None, size="1")
-    plain = replace(
-        _row(None, datetime(2026, 11, 12, tzinfo=UTC)),
-        entry_price=Decimal("100"),
-        exit_price=Decimal("110"),
-        size=Decimal("1"),
-    )
-    s = _build([no_size, no_exit, plain]).summary
-    assert s.pnl_sample_count == 0
-    assert s.unverified_pnl_count == 0
-    assert s.net_pnl is None
-
-
-def test_calendar_endpoint_shows_unreconciled_blofin_rows_on_their_close_day(
+def test_calendar_endpoint_shows_pending_blofin_rows_on_their_close_day(
     client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
     test_client, factory = client
@@ -1050,8 +1033,9 @@ def test_calendar_endpoint_shows_unreconciled_blofin_rows_on_their_close_day(
         headers=headers,
         params={"date_from": "2026-11-01", "date_to": "2026-11-30", "tz": "UTC"},
     ).json()
-    assert Decimal(body["summary"]["net_pnl"]) == Decimal("6")
-    assert body["summary"]["unverified_pnl_count"] == 1
-    assert [(d["date"], Decimal(d["net_pnl"]), d["unverified_count"]) for d in body["days"]] == [
-        ("2026-11-19", Decimal("6"), 1)
+    assert body["summary"]["net_pnl"] is None
+    assert body["summary"]["trade_count"] == 1
+    assert body["summary"]["pnl_pending_count"] == 1
+    assert [(d["date"], d["net_pnl"], d["pnl_pending_count"]) for d in body["days"]] == [
+        ("2026-11-19", None, 1)
     ]

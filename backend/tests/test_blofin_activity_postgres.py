@@ -668,6 +668,23 @@ def test_missed_window_gap_is_explicit(world):
         assert result.partial_coverage
 
 
+def test_fill_window_completes_when_cursor_page_returns_older_history(world):
+    # Staging 2026-11-10..20: the fill cursor stalled because the ``after`` page
+    # returned pre-window fills and the whole page was refused every minute.
+    engine, _, _, scope, venue = world
+    venue.pages["fill"] = {
+        None: [fill("f2")],
+        "f2": [fill("f0", ts=str(MS - 40 * 86400000))],
+    }
+    assert sync(world).status == "bounded"
+    with Session(engine) as session:
+        cursor = session.get(BloFinActivityCursor, (*scope.key(), "fill"))
+        assert cursor.window_complete
+        assert cursor.last_error_code is None and cursor.next_retry_at is None
+        assert session.get(BloFinActivityFact, (*scope.key(), "fill", "f2")) is not None
+        assert session.get(BloFinActivityFact, (*scope.key(), "fill", "f0")) is None
+
+
 def test_later_completion_of_old_order_is_captured_by_next_resumable_sweep(world):
     engine, settings, config, scope, venue = world
     venue.pages["order"] = {None: [order("newer")], "newer": []}

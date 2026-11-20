@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
+from structlog.testing import capture_logs
 
 from app.core.config import Settings, get_settings
 from app.db.base import Base
@@ -428,3 +429,38 @@ def test_redis_is_limited_fails_closed_without_fallback(limit_settings: Settings
     limiter = RedisRateLimiter(settings, InMemoryRateLimiter())
     limiter._redis = _BrokenRedis()
     assert limiter.is_limited("auth:login:email:x", limit=10, window_seconds=60) is True
+
+
+class _CountingRedis:
+    """Healthy Redis stand-in for the fixed-window ``INCR``/``EXPIRE`` path."""
+
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+
+    def incr(self, key: str) -> int:
+        self.counts[key] = self.counts.get(key, 0) + 1
+        return self.counts[key]
+
+    def expire(self, _key: str, _seconds: int) -> bool:
+        return True
+
+
+def test_redis_limit_hit_is_not_reported_as_redis_outage(limit_settings: Settings) -> None:
+    """A real over-limit count is a normal 429, not "service unavailable"."""
+    settings = limit_settings.model_copy(update={"rate_limit_allow_in_memory_fallback": False})
+    limiter = RedisRateLimiter(settings, InMemoryRateLimiter())
+    limiter._redis = _CountingRedis()
+    limiter.check("risk:kill-switch:read:user:u1", limit=1, window_seconds=3600)
+    with capture_logs() as logs, pytest.raises(RateLimitExceededError) as exc_info:
+        limiter.check("risk:kill-switch:read:user:u1", limit=1, window_seconds=3600)
+    assert "temporarily unavailable" not in exc_info.value.message
+    assert not [entry for entry in logs if entry["event"] == "rate_limit_redis_error"]
+
+
+def test_redis_limit_hit_does_not_spill_into_memory_fallback(limit_settings: Settings) -> None:
+    """With fallback allowed, an over-limit Redis count must still block."""
+    limiter = RedisRateLimiter(limit_settings, InMemoryRateLimiter())
+    limiter._redis = _CountingRedis()
+    limiter.check("k", limit=1, window_seconds=3600)
+    with pytest.raises(RateLimitExceededError):
+        limiter.check("k", limit=1, window_seconds=3600)
