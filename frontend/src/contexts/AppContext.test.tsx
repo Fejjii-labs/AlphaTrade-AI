@@ -103,7 +103,7 @@ describe("AppContext posture lifecycle (FP2-105)", () => {
     expect(result.current.posture.realTradingEnabled).toBe(false);
   });
 
-  it("refreshes health and kill switch on the ~60s interval without toggling loading", async () => {
+  it("refreshes health and providers every minute and kill switch every two minutes", async () => {
     const { result } = renderAppContext();
     await flushAsync();
     expect(api.health.get).toHaveBeenCalledTimes(1);
@@ -114,13 +114,16 @@ describe("AppContext posture lifecycle (FP2-105)", () => {
     });
 
     expect(api.health.get).toHaveBeenCalledTimes(2);
-    expect(api.risk.killSwitch).toHaveBeenCalledTimes(2);
+    expect(api.providers.status).toHaveBeenCalledTimes(2);
+    expect(api.risk.killSwitch).toHaveBeenCalledTimes(1);
     expect(result.current.ctx.loading).toBe(false);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(POSTURE_REFRESH_INTERVAL_MS);
     });
     expect(api.health.get).toHaveBeenCalledTimes(3);
+    expect(api.providers.status).toHaveBeenCalledTimes(3);
+    expect(api.risk.killSwitch).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes posture when the window regains focus or becomes visible", async () => {
@@ -140,6 +143,7 @@ describe("AppContext posture lifecycle (FP2-105)", () => {
       await Promise.resolve();
     });
     expect(api.health.get).toHaveBeenCalledTimes(3);
+    expect(api.risk.killSwitch).toHaveBeenCalledTimes(1);
   });
 
   it("does not refresh while the document is hidden", async () => {
@@ -151,9 +155,10 @@ describe("AppContext posture lifecycle (FP2-105)", () => {
       Document.prototype,
       "visibilityState",
     );
+    let visibility = "hidden";
     Object.defineProperty(document, "visibilityState", {
       configurable: true,
-      get: () => "hidden",
+      get: () => visibility,
     });
     try {
       await act(async () => {
@@ -161,6 +166,18 @@ describe("AppContext posture lifecycle (FP2-105)", () => {
         await Promise.resolve();
       });
       expect(api.health.get).toHaveBeenCalledTimes(1);
+      // The periodic tick is skipped too while hidden.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POSTURE_REFRESH_INTERVAL_MS * 2);
+      });
+      expect(api.health.get).toHaveBeenCalledTimes(1);
+      expect(api.providers.status).toHaveBeenCalledTimes(1);
+      expect(api.risk.killSwitch).toHaveBeenCalledTimes(1);
+
+      visibility = "visible";
+      await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+      await act(async () => window.dispatchEvent(new Event("focus")));
+      expect(api.risk.killSwitch).toHaveBeenCalledTimes(2);
     } finally {
       if (visibilityDescriptor) {
         Object.defineProperty(document, "visibilityState", visibilityDescriptor);
@@ -203,7 +220,7 @@ describe("AppContext posture lifecycle (FP2-105)", () => {
     await flushAsync();
     expect(api.health.get).toHaveBeenCalledTimes(2);
     expect(api.providers.status).toHaveBeenCalledTimes(4);
-    expect(api.risk.killSwitch).toHaveBeenCalledTimes(4);
+    expect(api.risk.killSwitch).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       resolveSlow(healthOk);

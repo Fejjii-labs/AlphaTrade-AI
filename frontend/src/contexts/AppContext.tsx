@@ -20,8 +20,8 @@ import type {
 import { appConfig } from "@/lib/config";
 import { isAuthenticated } from "@/lib/auth/session";
 
-/** Health and kill-switch posture refresh cadence (~60 s, FP2-105). */
 export const POSTURE_REFRESH_INTERVAL_MS = 60_000;
+const KILL_SWITCH_REFRESH_INTERVAL_MS = 120_000;
 
 interface AppContextValue {
   health: HealthResponse | null;
@@ -63,6 +63,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const healthInFlightRef = useRef(false);
   const providersInFlightRef = useRef(false);
   const killSwitchInFlightRef = useRef(false);
+  const lastKillSwitchReadRef = useRef(-Infinity);
   const foregroundRefreshesRef = useRef(0);
 
   const runHealthRefresh = useCallback(
@@ -121,7 +122,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setKillSwitchStatus(null);
         return;
       }
-      if (background && killSwitchInFlightRef.current) return;
+      const now = Date.now();
+      if (background && (
+        killSwitchInFlightRef.current ||
+        now - lastKillSwitchReadRef.current < KILL_SWITCH_REFRESH_INTERVAL_MS
+      )) return;
+      lastKillSwitchReadRef.current = now;
       const generation = ++killSwitchGenerationRef.current;
       killSwitchInFlightRef.current = true;
       try {
@@ -157,8 +163,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
       try {
         // Each source refreshes independently: a slow, failed, or hanging
-        // source never blocks or erases a successful sibling. Exactly one
-        // request per source is issued per refresh cycle.
+        // source never blocks or erases a successful sibling.
         await Promise.allSettled([
           runHealthRefresh({ background }),
           runProvidersRefresh({ background }),
@@ -187,23 +192,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // are silent (no global loading flicker) and never overlap.
   useEffect(() => {
     const refreshInBackground = () => {
-      void runStatusRefresh({ background: true });
-    };
-    const onVisibilityOrFocus = () => {
       if (document.visibilityState === "hidden") return;
-      refreshInBackground();
+      void runStatusRefresh({ background: true });
     };
 
     const intervalId = window.setInterval(
       refreshInBackground,
       POSTURE_REFRESH_INTERVAL_MS,
     );
-    window.addEventListener("focus", onVisibilityOrFocus);
-    document.addEventListener("visibilitychange", onVisibilityOrFocus);
+    window.addEventListener("focus", refreshInBackground);
+    document.addEventListener("visibilitychange", refreshInBackground);
     return () => {
       window.clearInterval(intervalId);
-      window.removeEventListener("focus", onVisibilityOrFocus);
-      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
+      window.removeEventListener("focus", refreshInBackground);
+      document.removeEventListener("visibilitychange", refreshInBackground);
     };
   }, [runStatusRefresh]);
 
