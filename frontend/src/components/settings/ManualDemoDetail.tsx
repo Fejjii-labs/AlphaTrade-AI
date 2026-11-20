@@ -171,37 +171,33 @@ export function ManualDemoDetail({ commandId }: { commandId: string }) {
             </Link>
           )}
           <details className="rounded-control border border-border-subtle p-4 text-sm">
-            <summary className="cursor-pointer">Stored identities and history</summary>
+            <summary className="cursor-pointer">Stored evidence and history</summary>
             <div className="mt-3 space-y-2">
             <p>Attempt recorded: {formatDateTime(data.attempted_at)} · submission started: {data.submitted_at ? formatDateTime(data.submitted_at) : "Not recorded"}</p>
-            <p>Account: {data.account_name} ({data.account_id})</p>
+            <p>Account: {data.account_name}</p>
             <p>Remaining entry quantity: {formatQuantity(evidence.remaining_quantity, { maximumFractionDigits: 8 })} contracts</p>
             <p>Planned stop {formatMoney(data.stop)} · target {formatMoney(data.target)} USDT</p>
             <p>Historically configured protection: {humanizeToken(evidence.historical_protection)}</p>
             <p>Active protection: {evidence.position_status === "closed_verified" ? "Not applicable to verified closed exposure" : humanizeToken(evidence.protection)}</p>
             <p>Triggered protection: {humanizeToken(evidence.triggered_protection)}</p>
-            {evidence.protection_history?.map((item) => <p key={item.tpsl_id}>Native protection history: {item.tpsl_id} · {item.state}. A canceled protection record does not establish a position exit.</p>)}
-            {evidence.exit_fills?.map((fill) => <p key={fill.identity}>Exit fill {fill.identity}: {formatQuantity(fill.quantity, { maximumFractionDigits: 8 })} contracts at {formatMoney(fill.price)} USDT · {formatDateTime(fill.occurred_at)} · native fee {formatMoney(fill.fee)} USDT</p>)}
+            {evidence.protection_history?.map((item) => <p key={item.tpsl_id}>Native protection history: {item.state}. A canceled protection record does not establish a position exit.</p>)}
+            {evidence.exit_fills?.map((fill) => <p key={fill.identity}>Exit fill: {formatQuantity(fill.quantity, { maximumFractionDigits: 8 })} contracts at {formatMoney(fill.price)} USDT · {formatDateTime(fill.occurred_at)} · native fee {formatMoney(fill.fee)} USDT</p>)}
             <p>Fees use positive costs and negative rebates. Unknown funding is not zero.</p>
             <p>Venue reported fill PnL: {formatMoney(evidence.venue_reported_fill_pnl)} USDT. Funding and net outcome require separate evidence.</p>
             <p>Account recovery: {humanizeToken(evidence.recovery_status)}. {evidence.recovery_reason}</p>
             <p>This attempt’s reservation: {humanizeToken(evidence.reservation_status)}</p>
-            {evidence.account_claim_command_ids?.length ? <p>Unresolved manual account claims: {evidence.account_claim_command_ids.map((id) => <Link key={id} className="mr-2 underline" href={`/execution/manual-demo/${encodeURIComponent(id)}`}>{id}</Link>)}</p> : null}
+            {evidence.account_claim_command_ids?.length ? <p>Unresolved manual account claims: {evidence.account_claim_command_ids.map((id, index) => <Link key={id} className="mr-2 underline" href={`/execution/manual-demo/${encodeURIComponent(id)}`}>Open attempt {index + 1}</Link>)}</p> : null}
             {[...(evidence.reconciliation_diagnostics ?? []), ...(evidence.protection_diagnostics ?? [])].map((diagnostic, index) => <p key={`${diagnostic.stage}-${index}`}>{diagnostic.stage}: {diagnostic.reason_code} · {diagnostic.endpoint_name}{diagnostic.field_name ? ` · field ${diagnostic.field_name}` : ""}{diagnostic.http_status ? ` · HTTP ${diagnostic.http_status}` : ""}{diagnostic.venue_error_code ? ` · venue ${diagnostic.venue_error_code}` : ""}</p>)}
             {evidence.missing_evidence.map((note) => <p key={note}>{note}</p>)}
-            <p>Command: {commandId}</p>
-            <p>Native order: {evidence.venue_order_id ?? "Unverified"}</p>
+            <p>Native order: {evidence.venue_order_id ? "Recorded on venue" : "Unverified"}</p>
             <p>
-              Client order: {evidence.client_order_id || "No submission effect"}
+              Client order: {evidence.client_order_id ? "Recorded" : "No submission effect"}
             </p>
             <p>
               Protection:{" "}
-              {evidence.protection_order_ids?.join(", ") || "Unverified"}
+              {evidence.protection_order_ids?.length ? "Recorded on venue" : "Unverified"}
             </p>
-            <p>
-              Immutable plan: {evidence.revision_id} · hash {data.content_hash}
-            </p>
-            <p>Journal: {evidence.journal_trade_id ?? "No fill projection"}</p>
+            <p>Journal: {evidence.journal_trade_id ? "Fill projection recorded" : "No fill projection"}</p>
             </div>
           </details>
         </>

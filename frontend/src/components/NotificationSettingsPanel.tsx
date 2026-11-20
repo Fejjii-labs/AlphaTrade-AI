@@ -38,6 +38,14 @@ export function NotificationSettingsPanel({
     (channel) => channel.channel === "telegram",
   );
 
+  const worker = snapshot?.worker_effective;
+  const workerDeliveryEnabled = worker?.source === "worker" &&
+    worker.health_state === "RUNNING" && !worker.stale &&
+    (worker.automatic_telegram_delivery_enabled || worker.telegram_alerts_enabled ||
+      (worker.telegram_paper_activation_armed && worker.telegram_interaction_enabled));
+  const apiDeliveryDisabled = telegram?.status_label === "disabled" ||
+    (!telegram && delivery.data?.telegram_enabled === false);
+
   async function save(patch: Partial<NotificationPreferences>) {
     setBusy(true);
     setMessage(null);
@@ -79,25 +87,26 @@ export function NotificationSettingsPanel({
           <span>Telegram delivery</span>
           <StatusBadge
             label={
-              delivery.loading
-                ? "Loading…"
-                : delivery.error || !delivery.data
-                  ? "Unavailable"
-                  : telegram
-                    ? formatReasonCode(telegram.status_label)
-                    : delivery.data.telegram_enabled === false
-                      ? "Disabled"
-                      : "State unavailable"
+              workerDeliveryEnabled
+                ? "Enabled on worker"
+                : delivery.loading
+                  ? "Loading…"
+                  : delivery.error || !delivery.data
+                    ? "Unavailable"
+                    : apiDeliveryDisabled
+                      ? "API delivery disabled"
+                      : telegram
+                        ? formatReasonCode(telegram.status_label)
+                        : "State unavailable"
             }
-            tone={telegram?.available ? "healthy" : "muted"}
+            tone={workerDeliveryEnabled || telegram?.available ? "healthy" : "muted"}
           />
         </div>
         <p className="text-xs text-text-muted">
           {telegram
-            ? `Telegram configuration: ${telegram.configured ? "configured" : "not configured"}. `
+            ? `API delivery configuration: ${telegram.configured ? "configured" : "not configured"}. `
             : ""}
-          Connection is not verified by this API. Network activation remains
-          separate and is unavailable here.
+          Delivery status reflects service configuration. Message delivery has not been verified here.
         </p>
         {delivery.error ? (
           <SettingsUnavailable
@@ -252,18 +261,6 @@ export function NotificationSettingsPanel({
                 snapshot
                   ? snapshot.symbols_monitored.join(", ") ||
                     "No markets reported"
-                  : "Unavailable",
-              ],
-              [
-                "Reported strategies",
-                snapshot
-                  ? [
-                      ...new Set(
-                        snapshot.approved_strategies.map(
-                          (strategy) => strategy.name,
-                        ),
-                      ),
-                    ].join(", ") || "No approved strategies reported"
                   : "Unavailable",
               ],
             ]}

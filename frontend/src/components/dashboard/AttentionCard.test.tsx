@@ -83,6 +83,31 @@ describe("Dashboard attention", () => {
     expect(screen.getByText(/Review item 0/)).toBeInTheDocument();
     expect(screen.queryByText(/Review item 5/)).not.toBeInTheDocument();
   });
+  it("shows the five latest actionable alerts and expands to include dead letters", () => {
+    const items = Array.from({ length: 7 }, (_, i): AttentionItem => ({
+      ...item,
+      item_id: `risk-${i}`,
+      title: `Review item ${i}`,
+      sources: [{ ...item.sources[0], occurred_at: `2026-10-02T11:0${i}:00Z` }],
+    }));
+    items.push({
+      ...item,
+      item_id: "dead",
+      category: "telegram_delivery_failure",
+      title: "Telegram delivery failed",
+      reason: "Recorded outbox state: DEAD_LETTER; attempts: 5.",
+      sources: [{ ...item.sources[0], occurred_at: "2026-10-02T11:59:00Z" }],
+    });
+    render(<AttentionContent queue={{ ...queue, items }} now={now} collapsible />);
+    expect(screen.getAllByRole("listitem")).toHaveLength(5);
+    expect(screen.getAllByRole("listitem")[0]).toHaveTextContent("Review item 6");
+    expect(screen.queryByText(/Telegram delivery failed/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    expect(screen.getAllByRole("listitem")).toHaveLength(8);
+    expect(screen.getByText(/Telegram delivery failed/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+    expect(screen.getAllByRole("listitem")).toHaveLength(5);
+  });
   it("shows every item when given no compact limit", () => {
     render(<AttentionContent limit={Infinity} queue={{ ...queue, items: Array.from({ length: 7 }, (_, i) => ({
       ...item, item_id: `risk-${i}`, title: `Review item ${i}`,
