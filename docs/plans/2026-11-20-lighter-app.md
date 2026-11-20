@@ -1,0 +1,10 @@
+# Lighter AlphaTrade app
+
+Review base 5391d0ba. Implementation worktree /tmp/p-light on perf/lighter-app.
+
+1. Port the three functional Round 4 patches from the exported patch series, using the bundle to cross-check provenance. Keep agent exports backward compatible and defer graph imports until chat. Keep the watcher symbol cap opt-in by defaulting to five and preserve stored slots. Reconcile the posture visibility guard in the slim shell. Omit the empty full-gate commit.
+2. Add a failing regression test that measures statement growth for a demo-account response with multiple manual demo trades and verifies its evidence and financial output. Batch the reads in ManualDemoHistoryService for dashboard GET and refresh POST with tenant-scoped lookups keyed by command and related IDs. Fetch unresolved claims once per account and preserve their limit and order. Keep current audit tie-breaks, integrity checks, missing-record semantics and single-command callers. Leave BloFin network caching and the Dashboard refresh cadence out of this pass.
+3. Add fake-timer coverage for hidden tabs, repeated focus events and separate kill-switch cadence. Keep health and provider status at their existing visible-tab cadence. Rate-limit automatic kill-switch reads within each tab, including focus and visibility events, with a proposed two-minute interval (30 periodic calls per hour per continuously visible tab). Preserve initial status, explicit retry and pause/resume behavior. Leave limiter error mapping to fix/redis-quota.
+4. Run the affected backend tests and Ruff, the relevant Vitest tests, and frontend typecheck, lint and production build. Record actual counts and caveats in the requested report. Land in reviewable slices for startup/watcher, demo projection, and polling. Run the full backend gate once when the final head is ready for merge review, then obtain Griller's verdict on that SHA.
+
+No staging or shared database changes are needed. The reported RAM and query savings are hypotheses to verify with the import and query regression checks and later staging observation.
