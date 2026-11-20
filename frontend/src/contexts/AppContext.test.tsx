@@ -87,7 +87,7 @@ describe("AppContext posture lifecycle (FP2-105)", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("fetches health, providers, and kill switch exactly once on mount", async () => {
@@ -144,6 +144,15 @@ describe("AppContext posture lifecycle (FP2-105)", () => {
     });
     expect(api.health.get).toHaveBeenCalledTimes(3);
     expect(api.risk.killSwitch).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets an explicit retry bypass the automatic kill-switch throttle", async () => {
+    const { result } = renderAppContext();
+    await flushAsync();
+    await act(async () => result.current.ctx.refreshKillSwitch());
+    expect(api.risk.killSwitch).toHaveBeenCalledTimes(2);
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(api.risk.killSwitch).toHaveBeenCalledTimes(2);
   });
 
   it("does not refresh while the document is hidden", async () => {
@@ -316,7 +325,7 @@ describe("AppContext posture lifecycle (FP2-105)", () => {
     vi.mocked(api.risk.killSwitch).mockRejectedValueOnce(new Error("kill switch unreachable"));
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(POSTURE_REFRESH_INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(POSTURE_REFRESH_INTERVAL_MS * 2);
     });
     await flushAsync();
 
@@ -330,7 +339,7 @@ describe("AppContext posture lifecycle (FP2-105)", () => {
     await flushAsync();
     vi.mocked(api.risk.killSwitch).mockRejectedValueOnce(new TypeError("Failed to fetch"));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(POSTURE_REFRESH_INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(POSTURE_REFRESH_INTERVAL_MS * 2);
     });
     await flushAsync();
     expect(result.current.ctx.killSwitchError).toBe("Couldn't load.");
@@ -365,7 +374,7 @@ describe("AppContext posture-source isolation", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("a hanging /health request does not delay kill-switch or provider results", async () => {
