@@ -269,3 +269,28 @@ export function containsCurrencySymbol(text: string): boolean {
 export function parseDecimal(value: string | null | undefined): number | null {
   return toFiniteNumber(value);
 }
+
+/** Remove implementation identifiers at the point where stored text becomes a label. */
+export function stripDisplayIdentifiers(value: string): string {
+  return value
+    .replace(/\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/gi, "")
+    .replace(/\b[0-9a-f]{8,}\b/gi, (token) => /[a-f]/i.test(token) && (/\d/.test(token) || token.length >= 12) ? "" : token)
+    .replace(/\(\s*\)/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+export function formatStrategyLabel(
+  name?: string | null,
+  version?: number | null,
+  timeframes: readonly string[] = [],
+  assignmentSymbol?: string,
+): string {
+  const cleanName = stripDisplayIdentifiers(name ?? "");
+  const generated = /^(Nested|SFP) ([A-Z0-9]+) (long|short) (\d+[mhdw])(?: [0-9a-f]{12})?$/i.exec(cleanName);
+  const displayTimeframes = [...new Set(generated ? [generated[4], ...timeframes] : timeframes)];
+  const label = generated
+    ? [generated[1], assignmentSymbol ?? generated[2], humanizeToken(generated[3]), displayTimeframes.join(" / ")].join(" · ")
+    : [cleanName || "Saved strategy", assignmentSymbol, displayTimeframes.join(" / ")].filter(Boolean).join(" · ");
+  return version == null ? label : `${label} (v${version})`;
+}
