@@ -7,6 +7,7 @@ silently running with unsafe defaults.
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
@@ -543,6 +544,11 @@ class Settings(BaseSettings):
     blofin_demo_allow_trade_capable_sync_key: bool = False
     blofin_sync_max_positions: int = Field(default=50, ge=1, le=200)
     blofin_sync_max_balances: int = Field(default=50, ge=1, le=200)
+    # Env name: BLOFIN_IMPORT_START_AT (ISO 8601 with a UTC offset). Clean-start
+    # floor for BloFin demo imports: the manual journal mirror skips positions
+    # opened before it and native activity sync skips orders and fills before
+    # it. Unset (default) imports the usual lookback window.
+    blofin_import_start_at: datetime | None = None
 
     # --- Paper-signal orchestration (AT-038 — paper-only; disabled by default) ---
     paper_signal_orchestration_enabled: bool = False
@@ -804,6 +810,13 @@ class Settings(BaseSettings):
     billing_checkout_success_url: str = "http://localhost:3000/billing?checkout=success"
     billing_checkout_cancel_url: str = "http://localhost:3000/billing?checkout=cancel"
     billing_portal_return_url: str = "http://localhost:3000/billing"
+
+    @field_validator("blofin_import_start_at")
+    @classmethod
+    def _blofin_import_start_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.utcoffset() is None:
+            raise ValueError("BLOFIN_IMPORT_START_AT needs a UTC offset (e.g. a trailing Z).")
+        return value
 
     @field_validator("governed_demo_sfp_enabled", mode="before")
     @classmethod
@@ -1135,6 +1148,12 @@ class Settings(BaseSettings):
 
         validate_live_market_activation(self)
         return self
+
+    @property
+    def blofin_import_start_ms(self) -> int | None:
+        """BLOFIN_IMPORT_START_AT as epoch milliseconds, or None when unset."""
+        start = self.blofin_import_start_at
+        return None if start is None else int(start.timestamp() * 1000)
 
     @property
     def must_verify_email(self) -> bool:
