@@ -560,3 +560,23 @@ def test_row_persisted_in_table(
         assert row is not None
         assert row.active is True
         assert row.version >= 2
+
+
+def test_kill_switch_read_budget_covers_multi_tab_posture_polling(
+    at014_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    """The UI polls the kill switch every 60s per tab, plus focus refreshes.
+
+    Three open tabs for an hour plus focus refreshes (~200 reads) must never be
+    answered with 429: losing the kill-switch read blanks the UI safety state.
+    """
+    from app.security.rate_limit import reset_rate_limiter
+
+    reset_rate_limiter()
+    factory, settings = at014_db
+    for client in _client(factory, settings):
+        headers = _login(client, "trader-a@test.example")
+        for _ in range(3 * 60 + 20):
+            response = client.get("/risk/kill-switch", headers=headers)
+            assert response.status_code == 200, response.text
+    reset_rate_limiter()

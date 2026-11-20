@@ -48,9 +48,11 @@ _RISK_SETTINGS_WRITE = Depends(
         "risk:settings:write", limit=30, window_seconds=3600, user_limit=30
     )
 )
+# The UI polls kill-switch status every 60s per open tab plus focus refreshes;
+# 120/h was exhausted by two tabs and blanked the UI safety state.
 _KILL_SWITCH_READ = Depends(
     tenant_rate_limit_dependency(
-        "risk:kill-switch:read", limit=120, window_seconds=3600, user_limit=120
+        "risk:kill-switch:read", limit=600, window_seconds=3600, user_limit=600
     )
 )
 _KILL_SWITCH_WRITE = Depends(
