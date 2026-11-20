@@ -44,6 +44,7 @@ export type StrategyId =
   | "mental_capital_guard"
   | "nested_continuation"
   | "sfp"
+  | "d_line"
   | "manual_review";
 /** Backend DocumentSourceType values (RAG corpus). */
 export type DocumentSourceType =

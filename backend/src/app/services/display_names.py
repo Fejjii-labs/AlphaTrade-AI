@@ -7,7 +7,12 @@ missing parts are left out rather than replaced with placeholders.
 from __future__ import annotations
 
 SEPARATOR = " · "
-_FAMILY_LABELS = {"nested": "Nested", "nested_continuation": "Nested", "sfp": "SFP"}
+_FAMILY_LABELS = {
+    "nested": "Nested",
+    "nested_continuation": "Nested",
+    "sfp": "SFP",
+    "d_line": "D-line",
+}
 
 
 def _text(value: object) -> str:

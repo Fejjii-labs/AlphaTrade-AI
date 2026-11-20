@@ -36,7 +36,7 @@ export default function BrainSetupPage() {
       <h1 className="text-xl">
         {data.family === "sfp"
           ? `SFP ${data.condition}`
-          : `Nested ${data.stage}`}{" "}
+          : data.family === "d_line" ? "D-line" : `Nested ${data.stage}`}{" "}
         · {data.state}
       </h1>
       <p>
@@ -58,6 +58,24 @@ export default function BrainSetupPage() {
           {data.stop ?? "unknown"} · structural targets{" "}
           {data.targets.join(", ") || "none supported"}
         </p>
+      )}
+      {data.family === "d_line" && (
+        <section className="space-y-2" aria-label="D-line research plan">
+          <p>Draft research only. No execution or alerts are authorized. Entry is a reference, not a fill.</p>
+          {data.research_plan && <>
+            <p>Gross R:R {data.research_plan.gross_rr} · after estimated costs {data.research_plan.net_rr}</p>
+            <ul>{data.research_plan.targets.map((target) => (
+              <li key={target.price}>{target.price} · {Number(target.fraction) * 100}% · {target.sources.join(", ")}</li>
+            ))}</ul>
+            <p>Runner concept: {Number(data.research_plan.runner_fraction) * 100}% · aggressive TP: {data.research_plan.aggressive_tp ? "Yes" : "No"}</p>
+            <dl>{Object.entries(data.research_plan.confluences).map(([key, value]) => (
+              <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{value}</dd></div>
+            ))}</dl>
+            <p>Unavailable: {data.research_plan.unavailable.map((v) => v.replaceAll("_", " ")).join(", ")}</p>
+          </>}
+          <h2>Manual reflection · optional</h2>
+          <ul>{data.manual_checklist?.map((question) => <li key={question}>{question}</li>)}</ul>
+        </section>
       )}
       <details>
         <summary className="min-h-11 cursor-pointer">
