@@ -72,12 +72,11 @@ function useDashboardRequest(
   return state;
 }
 
-/** Short "N of M verified" for demo headline P&L (verified = reconciled with BloFin). */
+/** Short "N of M verified" for demo headline P&L (verified = P&L reported by BloFin). */
 function demoTradeCoverage(data: JournalPerformanceDashboardResponse | null) {
   if (data?.filters.scope !== "demo") return undefined;
   const summary = data.summary;
-  const verified = summary.pnl_sample_count - (summary.unverified_pnl_count ?? 0);
-  return `${verified} of ${summary.trade_count} verified`;
+  return `${summary.pnl_sample_count} of ${summary.trade_count} verified`;
 }
 
 export function PerformanceDashboard({
@@ -324,7 +323,7 @@ export function PerformanceDashboard({
               summary={rangeData?.summary ?? null}
               risk={rangeData?.risk ?? null}
               tradeCoverage={sample ? undefined : demoTradeCoverage(rangeData)}
-              unverified={!sample && (rangeData?.summary.unverified_pnl_count ?? 0) > 0}
+              pendingCount={sample ? 0 : (rangeData?.summary.pnl_pending_count ?? 0)}
               loading={rangeLoading}
             />
           )}

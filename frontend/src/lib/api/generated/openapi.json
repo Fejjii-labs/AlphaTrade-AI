@@ -19303,13 +19303,13 @@
             ],
             "title": "Net Pnl"
           },
-          "trade_count": {
-            "title": "Trade Count",
+          "pnl_pending_count": {
+            "default": 0,
+            "title": "Pnl Pending Count",
             "type": "integer"
           },
-          "unverified_count": {
-            "default": 0,
-            "title": "Unverified Count",
+          "trade_count": {
+            "title": "Trade Count",
             "type": "integer"
           },
           "win_rate": {
@@ -19661,6 +19661,11 @@
             ],
             "title": "Net Pnl"
           },
+          "pnl_pending_count": {
+            "default": 0,
+            "title": "Pnl Pending Count",
+            "type": "integer"
+          },
           "pnl_sample_count": {
             "default": 0,
             "title": "Pnl Sample Count",
@@ -19691,11 +19696,6 @@
           "trade_count": {
             "default": 0,
             "title": "Trade Count",
-            "type": "integer"
-          },
-          "unverified_pnl_count": {
-            "default": 0,
-            "title": "Unverified Pnl Count",
             "type": "integer"
           },
           "win_loss_ratio": {
