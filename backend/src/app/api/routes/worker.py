@@ -33,7 +33,7 @@ _WORKER_WRITE_LIMIT = Depends(
     summary="Background worker health",
     dependencies=[_WORKER_READ_LIMIT],
 )
-async def worker_health(
+def worker_health(
     _tenant: ReaderDep,
     settings: SettingsDep,
     session: SessionDep,
@@ -83,7 +83,7 @@ async def worker_health(
     summary="Pause the background worker",
     dependencies=[_WORKER_WRITE_LIMIT],
 )
-async def worker_pause(
+def worker_pause(
     request: Request,
     tenant: PlatformOperatorDep,
     settings: SettingsDep,
@@ -98,7 +98,7 @@ async def worker_pause(
     summary="Resume the background worker",
     dependencies=[_WORKER_WRITE_LIMIT],
 )
-async def worker_resume(
+def worker_resume(
     request: Request,
     tenant: PlatformOperatorDep,
     settings: SettingsDep,

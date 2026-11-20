@@ -175,7 +175,7 @@ def _project_worker_runtime(
 
 
 @router.get("/health", response_model=HealthResponse, summary="Liveness probe")
-async def health(settings: SettingsDep) -> HealthResponse:
+def health(settings: SettingsDep) -> HealthResponse:
     evidence = perpetual_evidence_health(settings)
     observed_at = datetime.now(UTC)
     rows = _load_runtime_rows()
@@ -232,7 +232,7 @@ async def health(settings: SettingsDep) -> HealthResponse:
     response_model=PreflightReport,
     summary="Paper Telegram activation posture",
 )
-async def telegram_paper_activation(settings: SettingsDep, request: Request) -> PreflightReport:
+def telegram_paper_activation(settings: SettingsDep, request: Request) -> PreflightReport:
     """Read-only posture. This route does not arm Telegram or send a message."""
     controller = getattr(request.app.state, "telegram_paper_activation", None)
     mounted = bool(getattr(request.app.state, "telegram_webhook_mounted", False))
@@ -249,7 +249,7 @@ async def telegram_paper_activation(settings: SettingsDep, request: Request) -> 
     response_model=PaperWorkerHeartbeatResponse,
     summary="Paper worker heartbeat",
 )
-async def paper_worker_heartbeat(
+def paper_worker_heartbeat(
     settings: SettingsDep,
     background_tasks: BackgroundTasks,
 ) -> PaperWorkerHeartbeatResponse:

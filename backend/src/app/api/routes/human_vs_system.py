@@ -14,7 +14,7 @@ router = APIRouter(prefix="/human-vs-system", tags=["human-vs-system"])
 
 
 @router.get("/{trade_id}", response_model=HumanVsSystemComparison, summary="Compare trade to plan")
-async def compare_human_vs_system(
+def compare_human_vs_system(
     trade_id: uuid.UUID,
     tenant: TenantDep,
     service: HumanVsSystemServiceDep,
@@ -31,7 +31,7 @@ async def compare_human_vs_system(
     response_model=HumanVsSystemComparison,
     summary="Run full discipline analysis for trade",
 )
-async def analyze_human_vs_system(
+def analyze_human_vs_system(
     trade_id: uuid.UUID,
     tenant: TenantDep,
     service: HumanVsSystemServiceDep,

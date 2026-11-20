@@ -34,7 +34,7 @@ _WRITE_LIMIT = Depends(
     summary="List paper-signal orchestration decisions",
     dependencies=[_READ_LIMIT],
 )
-async def list_decisions(
+def list_decisions(
     tenant: ReaderDep,
     service: PaperSignalOrchestrationServiceDep,
     status: PaperSignalOrchestrationStatus | None = Query(default=None),
@@ -57,7 +57,7 @@ async def list_decisions(
     summary="Paper-signal orchestration decision detail",
     dependencies=[_READ_LIMIT],
 )
-async def get_decision(
+def get_decision(
     decision_id: uuid.UUID,
     tenant: ReaderDep,
     service: PaperSignalOrchestrationServiceDep,
@@ -71,7 +71,7 @@ async def get_decision(
     summary="Evaluate TradingView signal eligibility (no mode side effects)",
     dependencies=[_WRITE_LIMIT],
 )
-async def evaluate_signal(
+def evaluate_signal(
     signal_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperSignalOrchestrationServiceDep,
@@ -95,7 +95,7 @@ async def evaluate_signal(
     summary="Evaluate and advance paper-signal orchestration by configured mode",
     dependencies=[_WRITE_LIMIT],
 )
-async def orchestrate_signal(
+def orchestrate_signal(
     signal_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperSignalOrchestrationServiceDep,
@@ -118,7 +118,7 @@ async def orchestrate_signal(
     summary="Approve creation of a paper trade proposal (approval_required mode)",
     dependencies=[_WRITE_LIMIT],
 )
-async def approve_paper_proposal(
+def approve_paper_proposal(
     decision_id: uuid.UUID,
     payload: PaperSignalOrchestrationApproveRequest,
     tenant: TraderDep,

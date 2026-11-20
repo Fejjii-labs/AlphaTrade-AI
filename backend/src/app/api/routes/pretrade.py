@@ -16,7 +16,7 @@ router = APIRouter(prefix="/pretrade", tags=["pretrade"])
 
 
 @router.post("/analyze", response_model=PreTradeAnalyzeResponse, summary="Run pre-trade analysis")
-async def analyze_pretrade(
+def analyze_pretrade(
     body: PreTradeAnalyzeBody,
     tenant: TraderDep,
     service: PreTradeAnalysisServiceDep,

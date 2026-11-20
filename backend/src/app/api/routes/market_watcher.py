@@ -42,7 +42,7 @@ _MW_WRITE_LIMIT = Depends(
     summary="Market watcher status",
     dependencies=[_MW_READ_LIMIT],
 )
-async def market_watcher_status(
+def market_watcher_status(
     tenant: ReaderDep,
     service: MarketWatcherServiceDep,
 ) -> MarketWatcherStatus:
@@ -75,7 +75,7 @@ def market_watcher_monitoring(
     summary="Market watcher scanner summary (Slice 72)",
     dependencies=[_MW_READ_LIMIT],
 )
-async def market_watcher_summary(
+def market_watcher_summary(
     tenant: ReaderDep,
     service: MarketWatcherServiceDep,
 ) -> MarketWatcherSummary:
@@ -91,7 +91,7 @@ async def market_watcher_summary(
     summary="Manual read-only market watcher scan",
     dependencies=[_MW_WRITE_LIMIT],
 )
-async def market_watcher_scan(
+def market_watcher_scan(
     tenant: OwnerDep,
     body: MarketWatcherScanRequest,
     service: MarketWatcherServiceDep,
@@ -112,7 +112,7 @@ async def market_watcher_scan(
     summary="Recent market watcher scan history",
     dependencies=[_MW_READ_LIMIT],
 )
-async def market_watcher_history(
+def market_watcher_history(
     tenant: ReaderDep,
     service: MarketWatcherServiceDep,
 ) -> PaginatedMarketWatcherHistory:
@@ -125,7 +125,7 @@ async def market_watcher_history(
     summary="Recent persisted market watcher scan summaries (Slice 75)",
     dependencies=[_MW_READ_LIMIT],
 )
-async def market_watcher_recent_scans(
+def market_watcher_recent_scans(
     tenant: ReaderDep,
     service: MarketWatcherServiceDep,
     limit: int = Query(default=10, ge=1, le=25),
@@ -139,7 +139,7 @@ async def market_watcher_recent_scans(
     summary="Market watcher observations",
     dependencies=[_MW_READ_LIMIT],
 )
-async def market_watcher_observations(
+def market_watcher_observations(
     tenant: ReaderDep,
     service: MarketWatcherServiceDep,
     symbol: str | None = None,
@@ -160,7 +160,7 @@ async def market_watcher_observations(
     summary="Market watcher bridge status",
     dependencies=[_MW_READ_LIMIT],
 )
-async def market_watcher_bridge_status(
+def market_watcher_bridge_status(
     tenant: ReaderDep,
     bridge: MarketWatcherBridgeServiceDep,
 ) -> MarketWatcherBridgeStatus:
@@ -173,7 +173,7 @@ async def market_watcher_bridge_status(
     summary="Manual market watcher bridge tick (paper scan only)",
     dependencies=[_MW_WRITE_LIMIT],
 )
-async def market_watcher_bridge_tick(
+def market_watcher_bridge_tick(
     tenant: OwnerDep,
     bridge: MarketWatcherBridgeServiceDep,
     session: SessionDep,
@@ -189,7 +189,7 @@ async def market_watcher_bridge_tick(
     summary="Market watcher bridge decision history",
     dependencies=[_MW_READ_LIMIT],
 )
-async def market_watcher_bridge_history(
+def market_watcher_bridge_history(
     tenant: ReaderDep,
     bridge: MarketWatcherBridgeServiceDep,
     limit: int = Query(default=50, ge=1, le=200),

@@ -50,7 +50,7 @@ def _execute_backtest_background(
 
 
 @router.post("/replays", response_model=BacktestRun, status_code=201)
-async def create_strategy_replay(
+def create_strategy_replay(
     body: StrategyReplayCreate,
     tenant: TraderDep,
     service: BacktestServiceDep,
@@ -74,7 +74,7 @@ async def create_strategy_replay(
 
 
 @router.post("/replays/compare", response_model=ReplayComparison)
-async def compare_strategy_replays(
+def compare_strategy_replays(
     body: ReplayComparisonRequest,
     tenant: TraderDep,
     service: BacktestServiceDep,
@@ -88,7 +88,7 @@ async def compare_strategy_replays(
 
 
 @router.get("/{backtest_id}", response_model=BacktestRun, summary="Get backtest run with metrics")
-async def get_backtest(
+def get_backtest(
     backtest_id: uuid.UUID,
     tenant: TraderDep,
     service: BacktestServiceDep,
@@ -101,7 +101,7 @@ async def get_backtest(
     response_model=PaginatedBacktestTrades,
     summary="List simulated trades for backtest run",
 )
-async def list_backtest_trades(
+def list_backtest_trades(
     backtest_id: uuid.UUID,
     tenant: TraderDep,
     service: BacktestServiceDep,
@@ -121,7 +121,7 @@ async def list_backtest_trades(
     response_model=BacktestRun,
     summary="Cancel a queued or running backtest",
 )
-async def cancel_backtest(
+def cancel_backtest(
     backtest_id: uuid.UUID,
     tenant: TraderDep,
     service: BacktestServiceDep,
@@ -141,7 +141,7 @@ async def cancel_backtest(
     response_model=BacktestVerifyResult,
     summary="Re-run frozen config against stored dataset (no mutation)",
 )
-async def verify_backtest(
+def verify_backtest(
     backtest_id: uuid.UUID,
     tenant: TraderDep,
     service: BacktestServiceDep,
@@ -161,7 +161,7 @@ async def verify_backtest(
     response_model=BacktestJournalResult,
     summary="Bulk-create journal trades from a completed backtest",
 )
-async def journal_backtest_trades(
+def journal_backtest_trades(
     backtest_id: uuid.UUID,
     body: BacktestJournalRequest,
     tenant: TraderDep,
