@@ -142,7 +142,7 @@ def _map_diagnostics_response(snapshot) -> ExchangeDiagnosticsSummaryResponse:
     response_model=ExchangeDiagnosticsSummaryResponse,
     summary="Exchange demo diagnostics summary",
 )
-async def exchange_diagnostics_summary(
+def exchange_diagnostics_summary(
     tenant: OwnerDep,
     settings: SettingsDep,
     registry: ProviderRegistryDep,
@@ -167,7 +167,12 @@ async def exchange_diagnostics_summary(
         stale_after_seconds=settings.watcher_heartbeat_stale_after_seconds,
     )
     telegram_enabled = response.telegram_enabled
+    # ``worker_enabled`` from Settings is the API's in-process worker flag; the
+    # recommended deployment runs a dedicated worker, so report that worker's
+    # heartbeat instead (enabled only while it is fresh).
+    worker_enabled = response.worker_enabled
     if effective.source == "worker":
+        worker_enabled = worker_enabled or not effective.stale
         telegram_enabled = any(
             (
                 effective.telegram_alerts_enabled,
@@ -177,12 +182,16 @@ async def exchange_diagnostics_summary(
             )
         )
     return response.model_copy(
-        update={"worker_effective": effective, "telegram_enabled": telegram_enabled}
+        update={
+            "worker_effective": effective,
+            "worker_enabled": worker_enabled,
+            "telegram_enabled": telegram_enabled,
+        }
     )
 
 
 @router.get("/status", response_model=ExchangeStatusResponse, summary="Exchange status")
-async def exchange_status(
+def exchange_status(
     _tenant: OwnerDep,
     settings: SettingsDep,
     registry: ProviderRegistryDep,
@@ -208,7 +217,7 @@ async def exchange_status(
     response_model=ExchangeInstrumentsResponse,
     summary="List BloFin demo instruments",
 )
-async def list_instruments(
+def list_instruments(
     _tenant: OwnerDep,
     settings: SettingsDep,
     symbol: str | None = Query(default=None, description="Optional platform symbol filter."),
@@ -230,7 +239,7 @@ async def list_instruments(
     response_model=ExchangeBalancesResponse,
     summary="BloFin demo account balances (redacted summary)",
 )
-async def list_balances(
+def list_balances(
     tenant: OwnerDep,
     settings: SettingsDep,
 ) -> ExchangeBalancesResponse:
@@ -249,7 +258,7 @@ async def list_balances(
     response_model=ExchangePositionsResponse,
     summary="Open BloFin demo positions",
 )
-async def list_positions(
+def list_positions(
     tenant: OwnerDep,
     settings: SettingsDep,
 ) -> ExchangePositionsResponse:
@@ -268,7 +277,7 @@ async def list_positions(
     response_model=ExchangePositionModeResponse,
     summary="BloFin demo account position mode",
 )
-async def get_position_mode(
+def get_position_mode(
     tenant: OwnerDep,
     settings: SettingsDep,
 ) -> ExchangePositionModeResponse:
@@ -287,7 +296,7 @@ async def get_position_mode(
     response_model=ExchangeLeverageInfoResponse,
     summary="BloFin demo leverage for an instrument",
 )
-async def get_leverage_info(
+def get_leverage_info(
     tenant: OwnerDep,
     settings: SettingsDep,
     inst_id: str = Query(default="BTC-USDT", description="BloFin instrument id."),
@@ -348,7 +357,7 @@ def _has_cancel_audit(
     response_model=ExchangeOrderStatusResponse,
     summary="BloFin demo order status",
 )
-async def get_order_status(
+def get_order_status(
     inst_id: str,
     exchange_order_id: str,
     tenant: OwnerDep,
@@ -403,7 +412,7 @@ async def get_order_status(
     response_model=ExchangeOrderCancelResponse,
     summary="Cancel a BloFin demo order",
 )
-async def cancel_order(
+def cancel_order(
     inst_id: str,
     exchange_order_id: str,
     tenant: OwnerDep,
@@ -449,7 +458,7 @@ async def cancel_order(
     response_model=BloFinSyncResult,
     summary="Sync BloFin demo account/positions (read-only)",
 )
-async def blofin_demo_sync(
+def blofin_demo_sync(
     tenant: OwnerDep,
     service: BloFinSyncServiceDep,
     session: SessionDep,
@@ -472,7 +481,7 @@ async def blofin_demo_sync(
     response_model=BloFinSyncSnapshotItem,
     summary="Latest BloFin demo sync snapshot",
 )
-async def blofin_demo_sync_latest(
+def blofin_demo_sync_latest(
     tenant: ReaderDep,
     service: BloFinSyncServiceDep,
 ) -> BloFinSyncSnapshotItem:

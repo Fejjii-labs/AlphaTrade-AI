@@ -27,7 +27,7 @@ router = APIRouter(prefix="/approvals", tags=["approvals"])
 
 
 @router.get("", response_model=PaginatedApprovalRequests, summary="List approvals")
-async def list_approvals(
+def list_approvals(
     tenant: TenantDep,
     approval_service: ApprovalServiceDep,
     status: ApprovalStatus | None = Query(default=None),
@@ -49,7 +49,7 @@ async def list_approvals(
     response_model=ApprovalRequest,
     summary="Create an approval request for one immutable plan revision",
 )
-async def create_plan_revision_approval(
+def create_plan_revision_approval(
     revision_id: uuid.UUID,
     body: PlanApprovalRequestCreate,
     tenant: TraderDep,
@@ -68,7 +68,7 @@ async def create_plan_revision_approval(
 
 
 @router.get("/{approval_id}", response_model=ApprovalRequest, summary="Get approval")
-async def get_approval(
+def get_approval(
     approval_id: uuid.UUID,
     tenant: TenantDep,
     approval_service: ApprovalServiceDep,
@@ -85,7 +85,7 @@ async def get_approval(
     response_model=ApprovalWorkflowView,
     summary="Get approval with linked proposal and paper execution eligibility",
 )
-async def get_approval_workflow(
+def get_approval_workflow(
     approval_id: uuid.UUID,
     tenant: TenantDep,
     workflow_service: WorkflowServiceDep,
@@ -103,7 +103,7 @@ async def get_approval_workflow(
 
 
 @router.post("/{approval_id}/approve", response_model=ApprovalRequest)
-async def approve(
+def approve(
     approval_id: uuid.UUID,
     body: ApprovalActionRequest,
     tenant: TraderDep,
@@ -130,7 +130,7 @@ async def approve(
 
 
 @router.post("/{approval_id}/reject", response_model=ApprovalRequest)
-async def reject(
+def reject(
     approval_id: uuid.UUID,
     body: ApprovalActionRequest,
     tenant: TraderDep,
@@ -152,7 +152,7 @@ async def reject(
 
 
 @router.post("/{approval_id}/modify", response_model=ApprovalRequest)
-async def modify(
+def modify(
     approval_id: uuid.UUID,
     body: ApprovalActionRequest,
     tenant: TraderDep,
@@ -178,7 +178,7 @@ async def modify(
 
 
 @router.post("/{approval_id}/needs-more-analysis", response_model=ApprovalRequest)
-async def needs_more_analysis(
+def needs_more_analysis(
     approval_id: uuid.UUID,
     body: ApprovalActionRequest,
     tenant: TraderDep,
@@ -203,7 +203,7 @@ async def needs_more_analysis(
 
 
 @router.post("/{approval_id}/decide", response_model=ApprovalRequest)
-async def decide_approval(
+def decide_approval(
     approval_id: uuid.UUID,
     body: ApprovalDecisionRequest,
     tenant: TraderDep,
@@ -230,7 +230,7 @@ async def decide_approval(
     response_model=ApprovalAuthorization,
     summary="Get an account-bound approval authorization",
 )
-async def get_authorization(
+def get_authorization(
     authorization_id: uuid.UUID,
     tenant: TenantDep,
     approval_service: ApprovalServiceDep,
@@ -247,7 +247,7 @@ async def get_authorization(
     response_model=ApprovalAuthorization,
     summary="Revoke an available approval authorization",
 )
-async def revoke_authorization(
+def revoke_authorization(
     authorization_id: uuid.UUID,
     tenant: TraderDep,
     approval_service: ApprovalServiceDep,

@@ -600,7 +600,6 @@ def test_required_evidence_staleness_missing_and_version_binding(tenant_store, m
 
 
 def test_user_observation_is_idempotent_tenant_scoped_and_cannot_change_rules(tenant_store):
-    import asyncio
 
     from app.api.routes.strategy_brain import ObservationRequest, user_observation
     from app.core.errors import NotFoundError, ValidationAppError
@@ -624,21 +623,17 @@ def test_user_observation_is_idempotent_tenant_scoped_and_cannot_change_rules(te
     identity = scoped_setup_id(org, template["version_id"], detection(series)[-1].setup_id)
     tenant = SimpleNamespace(organization_id=org, user_id=user)
     body = ObservationRequest(idempotency_key=uuid4(), observation="Research idea, not an outcome")
-    first = asyncio.run(user_observation(identity, body, tenant, session))
-    second = asyncio.run(user_observation(identity, body, tenant, session))
+    first = user_observation(identity, body, tenant, session)
+    second = user_observation(identity, body, tenant, session)
     assert first["record_id"] == second["record_id"]
     assert first["provenance"] == "user_belief" and first["changes_active_rules"] is False
     with pytest.raises(ValidationAppError):
-        asyncio.run(
-            user_observation(
-                identity, body.model_copy(update={"observation": "Changed"}), tenant, session
-            )
+        user_observation(
+            identity, body.model_copy(update={"observation": "Changed"}), tenant, session
         )
     with pytest.raises(NotFoundError):
-        asyncio.run(
-            user_observation(
-                identity, body, SimpleNamespace(organization_id=uuid4(), user_id=user), session
-            )
+        user_observation(
+            identity, body, SimpleNamespace(organization_id=uuid4(), user_id=user), session
         )
     assert (
         resolve_executable_strategy_policy(

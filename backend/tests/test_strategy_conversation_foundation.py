@@ -120,16 +120,25 @@ def _settings() -> Settings:
 @pytest.fixture
 def conv_env(tmp_path: Path) -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
     # Concurrent requests need separate connections and independent transactions.
+    # Sync routes run in the threadpool, so requests really overlap. SQLite ignores
+    # SELECT ... FOR UPDATE; BEGIN IMMEDIATE stands in for the Postgres row lock so
+    # a second writer waits instead of deadlocking ("database is locked").
     engine = create_engine(
         f"sqlite+pysqlite:///{tmp_path / 'conversations.db'}",
-        connect_args={"check_same_thread": False},
+        connect_args={"check_same_thread": False, "timeout": 30},
     )
 
     @event.listens_for(engine, "connect")
     def _fk(dbapi_conn: object, _record: object) -> None:
+        dbapi_conn.isolation_level = None  # type: ignore[attr-defined]
         cursor = dbapi_conn.cursor()  # type: ignore[attr-defined]
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=30000")
         cursor.close()
+
+    @event.listens_for(engine, "begin")
+    def _begin(conn: object) -> None:
+        conn.exec_driver_sql("BEGIN IMMEDIATE")  # type: ignore[attr-defined]
 
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -870,8 +879,9 @@ def test_superseded_presented_identity_cannot_confirm_stale_draft(
         pending = stale_confirm.pending_proposal
         assert pending is None or pending.id != stale_id
         assert pending is None or pending.status in {"draft", "superseded"}
-        versions = client.get(f"/strategies/{strategy_id}/versions")
-        assert versions.json()["total"] == 1
+    # Outside the session: under BEGIN IMMEDIATE an open test transaction would block the request.
+    versions = client.get(f"/strategies/{strategy_id}/versions")
+    assert versions.json()["total"] == 1
 
 
 def test_chat_structure_request_supersedes_open_draft_identity(

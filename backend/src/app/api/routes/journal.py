@@ -137,7 +137,7 @@ def _load_owned_attachment(
 
 
 @router.post("/entries", response_model=JournalEntry, summary="Create journal entry")
-async def create_journal_entry(
+def create_journal_entry(
     body: JournalEntryCreate,
     tenant: TraderDep,
     journal_service: JournalServiceDep,
@@ -156,7 +156,7 @@ async def create_journal_entry(
     response_model=JournalEntryPrefill,
     summary="Prefill journal from proposal or position",
 )
-async def prefill_journal_entry(
+def prefill_journal_entry(
     tenant: TenantDep,
     journal_service: JournalServiceDep,
     linked_proposal_id: uuid.UUID | None = Query(default=None),
@@ -175,7 +175,7 @@ async def prefill_journal_entry(
 
 
 @router.get("/entries", response_model=PaginatedJournalEntries, summary="List journal entries")
-async def list_journal_entries(
+def list_journal_entries(
     tenant: TenantDep,
     journal_service: JournalServiceDep,
     limit: int = Query(default=50, ge=1, le=200),
@@ -191,7 +191,7 @@ async def list_journal_entries(
 
 
 @router.get("/entries/{journal_entry_id}", response_model=JournalEntry)
-async def get_journal_entry(
+def get_journal_entry(
     journal_entry_id: uuid.UUID,
     tenant: TenantDep,
     journal_service: JournalServiceDep,
@@ -200,7 +200,7 @@ async def get_journal_entry(
 
 
 @router.patch("/entries/{journal_entry_id}", response_model=JournalEntry)
-async def update_journal_entry(
+def update_journal_entry(
     journal_entry_id: uuid.UUID,
     body: JournalEntryUpdate,
     tenant: TraderDep,
@@ -214,7 +214,7 @@ async def update_journal_entry(
 
 
 @router.delete("/entries/{journal_entry_id}", status_code=204)
-async def delete_journal_entry(
+def delete_journal_entry(
     journal_entry_id: uuid.UUID,
     tenant: TraderDep,
     journal_service: JournalServiceDep,
@@ -230,7 +230,7 @@ async def delete_journal_entry(
     response_model=DisciplineAnalysis,
     summary="Discipline analysis for journal entry",
 )
-async def journal_discipline_analysis(
+def journal_discipline_analysis(
     journal_entry_id: uuid.UUID,
     tenant: TraderDep,
     journal_service: JournalServiceDep,
@@ -255,7 +255,7 @@ async def journal_discipline_analysis(
     status_code=201,
     summary="Create canonical journal trade",
 )
-async def create_journal_trade(
+def create_journal_trade(
     body: JournalTradeCreate,
     tenant: TraderDep,
     service: JournalTradeServiceDep,
@@ -276,7 +276,7 @@ async def create_journal_trade(
     status_code=201,
     summary="Create journal trade prefilled from a paper position",
 )
-async def create_journal_trade_from_position(
+def create_journal_trade_from_position(
     position_id: uuid.UUID,
     tenant: TraderDep,
     service: JournalTradeServiceDep,
@@ -297,7 +297,7 @@ async def create_journal_trade_from_position(
     status_code=201,
     summary="Create journal trade prefilled from a paper-validation trade",
 )
-async def create_journal_trade_from_paper_trade(
+def create_journal_trade_from_paper_trade(
     paper_trade_id: uuid.UUID,
     tenant: TraderDep,
     service: JournalTradeServiceDep,
@@ -317,7 +317,7 @@ async def create_journal_trade_from_paper_trade(
     response_model=PaginatedJournalTrades,
     summary="List canonical journal trades",
 )
-async def list_journal_trades(
+def list_journal_trades(
     tenant: ReaderDep,
     service: JournalTradeServiceDep,
     source: JournalTradeSource | None = Query(default=None),
@@ -347,7 +347,7 @@ async def list_journal_trades(
     response_model=JournalStatsResponse,
     summary="Grouped statistics over canonical journal trades (AT-031)",
 )
-async def journal_trade_statistics(
+def journal_trade_statistics(
     tenant: ReaderDep,
     service: JournalStatisticsServiceDep,
     group_by: JournalStatsGroupBy = Query(default=JournalStatsGroupBy.OVERALL),
@@ -396,7 +396,7 @@ async def journal_trade_statistics(
     response_model=JournalPerformanceDashboardResponse,
     summary="Daily P&L calendar, cumulative curve, and performance score over journal trades",
 )
-async def journal_performance_dashboard(
+def journal_performance_dashboard(
     tenant: ReaderDep,
     service: JournalPerformanceDashboardServiceDep,
     date_from: date | None = Query(default=None, description="Inclusive local date."),
@@ -438,7 +438,7 @@ async def journal_performance_dashboard(
         "Compare human / paper-system / backtest cohorts with decision quality (AT-034/AT-036)"
     ),
 )
-async def journal_comparison(
+def journal_comparison(
     tenant: ReaderDep,
     service: JournalStatisticsServiceDep,
     strategy_id: uuid.UUID | None = Query(default=None),
@@ -478,7 +478,7 @@ async def journal_comparison(
     response_model=SetupEvidenceResponse,
     summary="Advisory setup evidence tiers from backtest OOS + journal confirmation (AT-034)",
 )
-async def journal_setup_evidence(
+def journal_setup_evidence(
     tenant: ReaderDep,
     service: SetupEvidenceServiceDep,
     strategy_id: uuid.UUID | None = Query(default=None),
@@ -499,7 +499,7 @@ async def journal_setup_evidence(
     response_model=JournalExcursionBatchReplayResult,
     summary="Batch replay MFE/MAE from HistoricalCandle (AT-032)",
 )
-async def batch_replay_journal_trade_excursions(
+def batch_replay_journal_trade_excursions(
     body: JournalExcursionBatchReplayRequest,
     tenant: TraderDep,
     service: JournalExcursionReplayServiceDep,
@@ -524,7 +524,7 @@ async def batch_replay_journal_trade_excursions(
     response_model=JournalExcursionReplayResult,
     summary="Replay MFE/MAE from HistoricalCandle for one trade (AT-032)",
 )
-async def replay_journal_trade_excursions(
+def replay_journal_trade_excursions(
     journal_trade_id: uuid.UUID,
     body: JournalExcursionReplayRequest,
     tenant: TraderDep,
@@ -552,7 +552,7 @@ async def replay_journal_trade_excursions(
     response_model=JournalImportResult,
     summary="Bulk import journal trades with dedup, dry-run, and reconciliation (AT-033)",
 )
-async def import_journal_trades(
+def import_journal_trades(
     body: JournalImportRequest,
     tenant: TraderDep,
     service: JournalImportServiceDep,
@@ -578,7 +578,7 @@ async def import_journal_trades(
     response_model=PaginatedJournalImportBatches,
     summary="List committed journal import batches (AT-033)",
 )
-async def list_journal_import_batches(
+def list_journal_import_batches(
     tenant: ReaderDep,
     service: JournalImportServiceDep,
     limit: int = Query(default=50, ge=1, le=200),
@@ -597,7 +597,7 @@ async def list_journal_import_batches(
     response_model=JournalImportBatchRead,
     summary="Get one journal import batch with its row report (AT-033)",
 )
-async def get_journal_import_batch(
+def get_journal_import_batch(
     batch_id: uuid.UUID,
     tenant: ReaderDep,
     service: JournalImportServiceDep,
@@ -645,7 +645,7 @@ async def upload_journal_trade_attachment(
     response_model=JournalTradeAttachmentList,
     summary="List attachments for a journal trade (AT-033)",
 )
-async def list_journal_trade_attachments(
+def list_journal_trade_attachments(
     journal_trade_id: uuid.UUID,
     tenant: ReaderDep,
     trade_service: JournalTradeServiceDep,
@@ -663,7 +663,7 @@ async def list_journal_trade_attachments(
     summary="Download attachment content (AT-033)",
     response_class=Response,
 )
-async def download_journal_trade_attachment(
+def download_journal_trade_attachment(
     attachment_id: uuid.UUID,
     tenant: ReaderDep,
     trade_service: JournalTradeServiceDep,
@@ -687,7 +687,7 @@ async def download_journal_trade_attachment(
     status_code=204,
     summary="Delete an attachment (AT-033)",
 )
-async def delete_journal_trade_attachment(
+def delete_journal_trade_attachment(
     attachment_id: uuid.UUID,
     tenant: TraderDep,
     trade_service: JournalTradeServiceDep,
@@ -708,7 +708,7 @@ async def delete_journal_trade_attachment(
     response_model=JournalTradeDetail,
     summary="Get journal trade with evidence, rule checks, and observations",
 )
-async def get_journal_trade(
+def get_journal_trade(
     journal_trade_id: uuid.UUID,
     tenant: ReaderDep,
     service: JournalTradeServiceDep,
@@ -734,7 +734,7 @@ async def get_journal_trade(
     response_model=JournalTradeRead,
     summary="Update canonical journal trade",
 )
-async def update_journal_trade(
+def update_journal_trade(
     journal_trade_id: uuid.UUID,
     body: JournalTradeUpdate,
     tenant: TraderDep,
@@ -757,7 +757,7 @@ async def update_journal_trade(
     status_code=204,
     summary="Delete canonical journal trade",
 )
-async def delete_journal_trade(
+def delete_journal_trade(
     journal_trade_id: uuid.UUID,
     tenant: TraderDep,
     service: JournalTradeServiceDep,
@@ -775,7 +775,7 @@ async def delete_journal_trade(
     status_code=201,
     summary="Attach evidence to a journal trade",
 )
-async def add_journal_trade_evidence(
+def add_journal_trade_evidence(
     journal_trade_id: uuid.UUID,
     body: JournalTradeEvidenceCreate,
     tenant: TraderDep,
@@ -799,7 +799,7 @@ async def add_journal_trade_evidence(
     status_code=201,
     summary="Record a rule-compliance check for a journal trade",
 )
-async def add_journal_trade_rule_check(
+def add_journal_trade_rule_check(
     journal_trade_id: uuid.UUID,
     body: JournalTradeRuleCheckCreate,
     tenant: TraderDep,
@@ -822,7 +822,7 @@ async def add_journal_trade_rule_check(
     response_model=JournalTradeRead,
     summary="Tag a mirrored BloFin demo trade with strategy, grade, and notes",
 )
-async def annotate_journal_trade(
+def annotate_journal_trade(
     journal_trade_id: uuid.UUID,
     body: JournalTradeAnnotation,
     tenant: TraderDep,
@@ -846,7 +846,7 @@ async def annotate_journal_trade(
     status_code=201,
     summary="Record a behavioral observation for a journal trade",
 )
-async def add_journal_trade_observation(
+def add_journal_trade_observation(
     journal_trade_id: uuid.UUID,
     body: JournalTradeObservationCreate,
     tenant: TraderDep,
@@ -869,7 +869,7 @@ async def add_journal_trade_observation(
     response_model=LessonCandidate,
     summary="Create lesson candidate from discipline analysis",
 )
-async def create_discipline_lesson_candidate(
+def create_discipline_lesson_candidate(
     journal_entry_id: uuid.UUID,
     tenant: TraderDep,
     journal_service: JournalServiceDep,

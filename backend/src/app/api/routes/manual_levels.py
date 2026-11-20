@@ -20,7 +20,7 @@ router = APIRouter(prefix="/manual-levels", tags=["manual-levels"])
 
 
 @router.post("", response_model=ManualChartLevel, summary="Create manual chart level")
-async def create_manual_level(
+def create_manual_level(
     body: ManualLevelCreate,
     tenant: TraderDep,
     service: ManualLevelServiceDep,
@@ -46,7 +46,7 @@ async def create_manual_level(
 
 
 @router.get("", response_model=PaginatedManualChartLevels, summary="List manual chart levels")
-async def list_manual_levels(
+def list_manual_levels(
     tenant: TraderDep,
     service: ManualLevelServiceDep,
     symbol: str | None = Query(default=None),
@@ -68,7 +68,7 @@ async def list_manual_levels(
 
 
 @router.get("/{level_id}", response_model=ManualChartLevel, summary="Get manual chart level")
-async def get_manual_level(
+def get_manual_level(
     level_id: uuid.UUID,
     tenant: TraderDep,
     service: ManualLevelServiceDep,
@@ -77,7 +77,7 @@ async def get_manual_level(
 
 
 @router.patch("/{level_id}", response_model=ManualChartLevel, summary="Update manual chart level")
-async def update_manual_level(
+def update_manual_level(
     level_id: uuid.UUID,
     body: ManualChartLevelUpdate,
     tenant: TraderDep,
@@ -95,7 +95,7 @@ async def update_manual_level(
 
 
 @router.delete("/{level_id}", status_code=204, summary="Delete manual chart level")
-async def delete_manual_level(
+def delete_manual_level(
     level_id: uuid.UUID,
     tenant: TraderDep,
     service: ManualLevelServiceDep,

@@ -32,7 +32,7 @@ _RESEARCH_VALIDATION_WRITE = Depends(
     summary="List research validation evidence for completed backtests",
     dependencies=[_RESEARCH_VALIDATION_READ],
 )
-async def list_research_validation_evidence(
+def list_research_validation_evidence(
     tenant: ReaderDep,
     service: ResearchValidationServiceDep,
     backtest_run_id: uuid.UUID | None = Query(default=None),
@@ -54,7 +54,7 @@ async def list_research_validation_evidence(
     summary="Promote eligible research evidence into the paper validation candidate queue",
     dependencies=[_RESEARCH_VALIDATION_WRITE],
 )
-async def promote_research_validation_candidate(
+def promote_research_validation_candidate(
     payload: ResearchValidationPromoteRequest,
     tenant: TraderDep,
     service: ResearchValidationServiceDep,
@@ -75,7 +75,7 @@ async def promote_research_validation_candidate(
     summary="Research validation status for a backtest run",
     dependencies=[_RESEARCH_VALIDATION_READ],
 )
-async def research_validation_backtest_status(
+def research_validation_backtest_status(
     backtest_run_id: uuid.UUID,
     tenant: ReaderDep,
     service: ResearchValidationServiceDep,

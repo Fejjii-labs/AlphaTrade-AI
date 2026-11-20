@@ -28,7 +28,7 @@ router = APIRouter(prefix="/lessons", tags=["lessons"])
     response_model=PaginatedLessonCandidates,
     summary="List lesson candidates",
 )
-async def list_lesson_candidates(
+def list_lesson_candidates(
     tenant: TraderDep,
     service: LessonCandidateServiceDep,
     status: LessonCandidateStatus | None = Query(default=None),
@@ -52,7 +52,7 @@ async def list_lesson_candidates(
     response_model=LessonCandidate,
     summary="Get lesson candidate",
 )
-async def get_lesson_candidate(
+def get_lesson_candidate(
     lesson_id: uuid.UUID,
     tenant: TraderDep,
     service: LessonCandidateServiceDep,
@@ -69,7 +69,7 @@ async def get_lesson_candidate(
     response_model=LessonCandidate,
     summary="Create lesson candidate",
 )
-async def create_lesson_candidate(
+def create_lesson_candidate(
     body: LessonCandidateCreate,
     tenant: TraderDep,
     service: LessonCandidateServiceDep,
@@ -89,7 +89,7 @@ async def create_lesson_candidate(
     response_model=AcceptedLesson,
     summary="Accept lesson candidate",
 )
-async def accept_lesson_candidate(
+def accept_lesson_candidate(
     lesson_id: uuid.UUID,
     body: LessonCandidateAccept,
     tenant: TraderDep,
@@ -111,7 +111,7 @@ async def accept_lesson_candidate(
     response_model=LessonCandidate,
     summary="Reject lesson candidate",
 )
-async def reject_lesson_candidate(
+def reject_lesson_candidate(
     lesson_id: uuid.UUID,
     body: LessonCandidateReject,
     tenant: TraderDep,
@@ -133,7 +133,7 @@ async def reject_lesson_candidate(
     response_model=LessonCandidate,
     summary="Archive lesson candidate",
 )
-async def archive_lesson_candidate(
+def archive_lesson_candidate(
     lesson_id: uuid.UUID,
     body: LessonCandidateArchive,
     tenant: TraderDep,
@@ -151,7 +151,7 @@ async def archive_lesson_candidate(
 
 
 @router.get("/accepted", response_model=PaginatedAcceptedLessons, summary="List accepted lessons")
-async def list_accepted_lessons(
+def list_accepted_lessons(
     tenant: TraderDep,
     service: LessonCandidateServiceDep,
     mistake_type: str | None = Query(default=None),
