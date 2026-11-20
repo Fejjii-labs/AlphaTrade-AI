@@ -51,23 +51,29 @@ function TradesContent() {
   const savedId = params.get("saved");
   const query = params.get("q") ?? "";
 
-  const loader = useCallback(async () => {
-    if (stats) return null;
-    if (savedId) {
-      const linked = await savedEntries.get(savedId).catch(() => null);
-      return { trades: [], notes: [], linked };
-    }
-    const [trades, notes] = await Promise.allSettled([
-      Promise.all(TRADE_SOURCES.map((source) => api.journal.listTrades({ source, limit: TRADE_LIMIT }))),
-      savedEntries.list({ view: "journal", category: "journal", limit: 20, offset: 0 }),
-    ]);
-    return {
-      trades: trades.status === "fulfilled" ? newestFirst(trades.value.flatMap((p) => p.items).filter(isBloFinDemoTrade)) : null,
-      notes: notes.status === "fulfilled" ? notes.value.items : [],
-      linked: null,
-    };
+  const loadTrades = useCallback(async () => {
+    if (stats || savedId) return null;
+    const pages = await Promise.all(
+      TRADE_SOURCES.map((source) => api.journal.listTrades({ source, limit: TRADE_LIMIT })),
+    );
+    return newestFirst(pages.flatMap((page) => page.items).filter(isBloFinDemoTrade));
   }, [stats, savedId]);
-  const { data, loading, reload } = useAsyncData(loader, [stats, savedId]);
+  const loadNotes = useCallback(
+    () => stats || savedId
+      ? Promise.resolve(null)
+      : savedEntries.list({ view: "journal", category: "journal", limit: 20, offset: 0 }),
+    [stats, savedId],
+  );
+  const loadLinked = useCallback(
+    () => !stats && savedId ? savedEntries.get(savedId) : Promise.resolve(null),
+    [stats, savedId],
+  );
+
+  const { data: trades, loading, reload } = useAsyncData(loadTrades, [loadTrades]);
+  const { data: notes } = useAsyncData(loadNotes, [loadNotes]);
+  const {
+    data: linked, loading: linkedLoading, reload: reloadLinked,
+  } = useAsyncData(loadLinked, [loadLinked]);
 
   const returnKey = journalReturnKey(user?.id, organization?.id);
   const remember = () => {
@@ -86,7 +92,7 @@ function TradesContent() {
   }
 
   const needle = query.toLowerCase();
-  const visible = data?.trades?.filter((t) =>
+  const visible = trades?.filter((t) =>
     `${t.symbol} ${t.direction} ${t.strategy_label ?? ""}`.toLowerCase().includes(needle),
   );
 
@@ -106,10 +112,10 @@ function TradesContent() {
       ) : savedId ? (
         <>
           <JournalReturnLink />
-          {loading ? (
+          {linkedLoading ? (
             <p role="status">Loading…</p>
-          ) : data?.linked ? (
-            <SavedEntryDetail key={data.linked.id} entry={data.linked} onChanged={() => void reload()} />
+          ) : linked ? (
+            <SavedEntryDetail key={linked.id} entry={linked} onChanged={() => void reloadLinked()} />
           ) : (
             <p role="alert">Note unavailable.</p>
           )}
@@ -125,17 +131,17 @@ function TradesContent() {
           />
           {loading ? (
             <p role="status">Loading trades…</p>
-          ) : data?.trades == null ? (
+          ) : trades == null ? (
             <p role="alert">Trades unavailable.</p>
           ) : (
             <JournalTradesTable trades={visible ?? []} onOpen={remember} />
           )}
           <BloFinFills />
-          {data?.notes.length ? (
+          {notes?.items.length ? (
             <details className="text-sm" data-testid="saved-notes">
-              <summary className="min-h-11 cursor-pointer py-2 text-text-secondary">Notes ({data.notes.length})</summary>
+              <summary className="min-h-11 cursor-pointer py-2 text-text-secondary">Notes ({notes.items.length})</summary>
               <ul className="divide-y divide-border-subtle">
-                {data.notes.map((note) => (
+                {notes.items.map((note) => (
                   <li key={note.id}>
                     <Link
                       onClick={remember}
