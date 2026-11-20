@@ -7,13 +7,20 @@ may propose. Neither path places an order or talks to BloFin.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Literal, Self
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import Field, model_validator
 
 from app.core.config import Settings, get_settings
 from app.core.dependencies import SessionDep
 from app.core.errors import ForbiddenError
+from app.db.models import BotRiskSettings
+from app.schemas.audit import AuditRecordCreate
+from app.schemas.common import ActorType, AuditEventType, MembershipRole, StrictModel
 from app.schemas.risk_policy import (
     RiskPolicyApplyRequest,
     RiskPolicyProposalResponse,
@@ -27,9 +34,18 @@ from app.security.tenant import TenantContext
 from app.security.tokens import decode_access_token
 from app.services.audit_service import AuditService
 from app.services.risk_policy.errors import RiskPolicyRejected
-from app.services.risk_policy.governance import PolicyActor, channel_from_access_payload
+from app.services.risk_policy.governance import (
+    PolicyActor,
+    PolicyChannel,
+    channel_from_access_payload,
+)
 from app.services.risk_policy.persistence import RiskPolicyService
-from app.services.risk_policy.profile import PolicyKind, canonical_profile, profile_from_canonical
+from app.services.risk_policy.profile import (
+    Grade,
+    PolicyKind,
+    canonical_profile,
+    profile_from_canonical,
+)
 from app.services.risk_policy.proof import decode_apply_proof
 
 router = APIRouter(prefix="/policy", tags=["risk-policy"])
@@ -251,3 +267,88 @@ def apply_risk_policy(
         actor_channel=row.actor_channel,
         content_hash=row.content_hash,
     )
+
+
+class DemoBotRiskSettings(StrictModel):
+    risk_per_trade_pct: Decimal = Field(gt=0, le=5, max_digits=5, decimal_places=2)
+    daily_stop_pct: Decimal = Field(gt=0, le=5, max_digits=5, decimal_places=2)
+    leverage: int = Field(strict=True, ge=1, le=10)
+    margin_mode: Literal["isolated"]
+    grade_risk_overrides: dict[Grade, Decimal] = Field(default_factory=dict)
+    grades_gate_entries: bool = False
+
+    @model_validator(mode="after")
+    def check_daily_stop(self) -> Self:
+        for percent in (self.risk_per_trade_pct, *self.grade_risk_overrides.values()):
+            if not percent.is_finite() or not 0 < percent <= self.daily_stop_pct:
+                raise ValueError("Risk per trade must be positive and at most the daily stop.")
+        return self
+
+
+def _demo_bot_settings(
+    session: SessionDep,
+    tenant: TenantContext,
+    settings: Settings,
+    *,
+    lock: bool = False,
+) -> BotRiskSettings:
+    if (
+        tenant.membership_role is not MembershipRole.OWNER
+        or str(tenant.organization_id) != settings.governed_blofin_demo_organization_id
+        or str(tenant.user_id) != settings.risk_policy_owner_user_id
+    ):
+        raise ForbiddenError("Only the configured demo risk owner may access bot settings.")
+    row = session.get(BotRiskSettings, 1, with_for_update=lock)
+    if row is None:
+        raise HTTPException(status_code=503, detail="demo_risk_settings_missing")
+    return row
+
+
+@router.get("/demo-bot-settings", dependencies=[_READ])
+def read_demo_bot_settings(
+    tenant: TraderDep,
+    session: SessionDep,
+    settings: Settings = Depends(get_settings),
+) -> DemoBotRiskSettings:
+    return DemoBotRiskSettings.model_validate(
+        _demo_bot_settings(session, tenant, settings), from_attributes=True
+    )
+
+
+@router.put("/demo-bot-settings", dependencies=[_WRITE])
+def update_demo_bot_settings(
+    payload: DemoBotRiskSettings,
+    tenant: TraderDep,
+    session: SessionDep,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    settings: Settings = Depends(get_settings),
+) -> DemoBotRiskSettings:
+    if _actor(tenant, credentials, settings).channel is not PolicyChannel.HUMAN:
+        raise ForbiddenError("An authenticated human must edit demo risk settings.")
+    row = _demo_bot_settings(session, tenant, settings, lock=True)
+    before = DemoBotRiskSettings.model_validate(row, from_attributes=True)
+    after = payload.model_dump(mode="json")
+    row.risk_per_trade_pct = payload.risk_per_trade_pct
+    row.daily_stop_pct = payload.daily_stop_pct
+    row.leverage = payload.leverage
+    row.margin_mode = payload.margin_mode
+    row.grade_risk_overrides = {
+        grade.value: str(percent) for grade, percent in payload.grade_risk_overrides.items()
+    }
+    row.grades_gate_entries = payload.grades_gate_entries
+    request_id = uuid4().hex
+    AuditService(session, strict_mode=True).record(
+        AuditRecordCreate(
+            request_id=request_id,
+            trace_id=request_id,
+            event_type=AuditEventType.RISK_SETTINGS_UPDATED,
+            resource_type="bot_risk_settings",
+            resource_id=str(row.id),
+            actor_type=ActorType.USER,
+            organization_id=tenant.organization_id,
+            user_id=tenant.user_id,
+            metadata={"before": before.model_dump(mode="json"), "after": after},
+        )
+    )
+    session.commit()
+    return payload

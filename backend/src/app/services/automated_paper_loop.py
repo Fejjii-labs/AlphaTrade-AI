@@ -401,15 +401,22 @@ class AutomatedPaperLoop:
                 eligibility_state=state.value,
             )
         now = self._clock.now()
-        active = _load_active_profile(
-            session, target.organization_id, self._risk_policy_kind(), now
+        demo_v2 = self._uses_demo_risk_v2()
+        active = (
+            None
+            if demo_v2
+            else _load_active_profile(
+                session, target.organization_id, self._risk_policy_kind(), now
+            )
         )
         records: list[object] = []
         open_exposure = Decimal("0")
         open_risk_percent = Decimal("0")
         open_positions: int | None = None
         remaining_daily: Decimal | None = None
-        if active is None:
+        if demo_v2:
+            pass  # The claim evaluates the demo ledger under lock.
+        elif active is None:
             open_exposure = _open_exposure(session, target, now=now)
         else:
             funding_rate = self._verified_funding_rate()
@@ -459,7 +466,7 @@ class AutomatedPaperLoop:
             assembled=assembled,
             policy=policy,
             account_id=account.id,
-            equity=_equity(session, target, now=now),
+            equity=Decimal("0") if demo_v2 else _equity(session, target, now=now),
             now=now,
             eligibility_valid_until=eligibility.eligibility.valid_until,
             eligibility_id=eligibility.eligibility.eligibility_id,
@@ -816,6 +823,9 @@ class AutomatedPaperLoop:
     def _policy_version(self) -> str:
         return _POLICY_VERSION
 
+    def _uses_demo_risk_v2(self) -> bool:
+        return False
+
     def _risk_policy_kind(self) -> str:
         return "internal_paper"
 
@@ -1164,6 +1174,8 @@ def _stored_plan_execution_refusal(
     now = _execution_moment(loop)
     if now is None or plan is None:
         return "stored_plan_limits_uncomputed"
+    if loop._uses_demo_risk_v2():
+        return None  # The governed loop revalidates against the venue and locked ledger.
     if _breaker_refusing(session, target.organization_id, now):
         return "breaker_active"
     active = _load_active_profile(session, target.organization_id, loop._risk_policy_kind(), now)
@@ -1377,15 +1389,42 @@ def _eligibility_command(
     assembled: AssembledCanonicalEvidence,
     account: ExecutionAccount,
     now: datetime,
+    demo_equity: Decimal | None = None,
 ) -> ActionEligibilityCommand:
     quote = assembled.current_price
     if quote is None:
         raise ValueError("Paper loop eligibility requires a current price.")
-    accounting = DailyRiskAccounting(session, _risk_settings(session), clock=lambda: now)
-    snapshot = accounting.sync_from_portfolio(
-        organization_id=target.organization_id,
-        user_id=target.user_id,
-    )
+    if demo_equity is None:
+        accounting = DailyRiskAccounting(session, _risk_settings(session), clock=lambda: now)
+        snapshot = accounting.sync_from_portfolio(
+            organization_id=target.organization_id,
+            user_id=target.user_id,
+        )
+        equity, exposure = snapshot.account_equity, snapshot.open_exposure_notional
+        risk_id = uuid5(
+            _NAMESPACE,
+            f"risk:{account.id}:{snapshot.day.isoformat()}:{snapshot.daily_locked}:"
+            f"{snapshot.realized_pnl}:{snapshot.trade_count}",
+        )
+        risk = RiskStateSnapshot(
+            risk_snapshot_id=risk_id,
+            organization_id=target.organization_id,
+            user_id=target.user_id,
+            account_id=account.id,
+            daily_locked=snapshot.daily_locked,
+            daily_loss_limit=snapshot.daily_loss_limit,
+            realized_pnl_today=snapshot.realized_pnl,
+            trades_today=snapshot.trade_count,
+        )
+    else:
+        # The locked demo ledger evaluates capacity at the claim.
+        equity, exposure = demo_equity, Decimal("0")
+        risk = RiskStateSnapshot(
+            risk_snapshot_id=uuid5(_NAMESPACE, f"demo-risk:{account.id}:{now.isoformat()}"),
+            organization_id=target.organization_id,
+            user_id=target.user_id,
+            account_id=account.id,
+        )
     epoch_row = session.scalar(
         select(AccountSafetyEpoch).where(
             AccountSafetyEpoch.organization_id == target.organization_id,
@@ -1393,11 +1432,6 @@ def _eligibility_command(
         )
     )
     epoch = 1 if epoch_row is None else int(epoch_row.epoch)
-    risk_id = uuid5(
-        _NAMESPACE,
-        f"risk:{account.id}:{snapshot.day.isoformat()}:{snapshot.daily_locked}:"
-        f"{snapshot.realized_pnl}:{snapshot.trade_count}",
-    )
     venue_state_id = uuid5(
         _NAMESPACE,
         f"venue:{window.content_hash}:{quote.price}:{quote.source_time.isoformat()}",
@@ -1415,19 +1449,10 @@ def _eligibility_command(
         portfolio=PortfolioState(
             organization_id=target.organization_id,
             account_id=account.id,
-            account_equity=snapshot.account_equity,
-            open_exposure_notional=snapshot.open_exposure_notional,
+            account_equity=equity,
+            open_exposure_notional=exposure,
         ),
-        risk=RiskStateSnapshot(
-            risk_snapshot_id=risk_id,
-            organization_id=target.organization_id,
-            user_id=target.user_id,
-            account_id=account.id,
-            daily_locked=snapshot.daily_locked,
-            daily_loss_limit=snapshot.daily_loss_limit,
-            realized_pnl_today=snapshot.realized_pnl,
-            trades_today=snapshot.trade_count,
-        ),
+        risk=risk,
         safety=SafetyStateSnapshot(
             organization_id=target.organization_id,
             account_id=account.id,

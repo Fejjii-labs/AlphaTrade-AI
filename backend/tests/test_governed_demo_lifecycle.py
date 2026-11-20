@@ -7,6 +7,7 @@ from decimal import Decimal
 from importlib import import_module
 from threading import Barrier, Event, Lock
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -20,6 +21,7 @@ from app.db.learning_attribution import LearningAttributionRecordRow
 from app.db.models import (
     AccountRiskAccountingState,
     AuditLog,
+    BotRiskSettings,
     ExecutionAccount,
     ExecutionCommand,
     ExecutionIdempotencyBinding,
@@ -173,12 +175,25 @@ def open_world(
     exit_fee="0.03",
     exit_fee_currency="USDT",
     child_tpsl_id=None,
+    risk_v2=False,
 ):
     factory = phase7_plan_session_factory()
     with factory() as session:
         _seed(session)
         account = session.scalar(select(ExecutionAccount))
-        settings = demo_settings(str(account.id))
+        settings = demo_settings(str(account.id)).model_copy(
+            update={"risk_model_v2_enabled": risk_v2}
+        )
+        if risk_v2 and session.get(BotRiskSettings, 1) is None:
+            session.add(
+                BotRiskSettings(
+                    id=1,
+                    risk_per_trade_pct=Decimal("1"),
+                    daily_stop_pct=Decimal("5"),
+                    leverage=10,
+                    margin_mode="isolated",
+                )
+            )
         # 1-5% stop-loss band: the fixture stop is ~0.14% away, so 1x cannot
         # reach the 1% floor. Use 10x existing leverage plus ledger headroom.
         seed_band_ledger_headroom(session, account.id)
@@ -279,7 +294,8 @@ def test_actual_exit_projects_journal_learning_audit_and_releases_only_owned_exp
         account = session.scalar(select(AccountRiskAccountingState))
         assert account.actual_notional <= Decimal("0.00000001")
         assert account.reserved_notional == 0
-        assert (account.reserved_daily_loss, account.actual_trade_count) == before[1:]
+        assert account.reserved_daily_loss == 0
+        assert account.actual_trade_count == before[2]
         assert session.scalar(select(RiskReservation)).remaining_reserved_notional == 0
         resolution = session.scalar(select(GovernedDemoLifecycleResolution))
         assert resolution is not None and resolution.released_notional > 0
@@ -674,3 +690,170 @@ def test_a_new_confirmed_candidate_can_enter_after_verified_exit_without_reset(m
         assert has_demo_entry_history(
             session, organization_id=ORG, account_id=commands[-1].account_id
         )
+
+
+def test_demo_utc_roll_resets_realized_loss_and_keeps_open_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = open_world(monkeypatch)  # type: ignore[no-untyped-call]
+    with world.factory() as session:
+        command = session.get(ExecutionCommand, world.command_id)
+        account = session.scalar(select(AccountRiskAccountingState))
+        reserved = account.reserved_daily_loss
+        account.actual_daily_loss = Decimal("25")
+        session.commit()
+        service = world.loop._safety(session)
+        service.lock_epoch(organization_id=ORG, account_id=command.account_id)
+        rolled = service.lock_risk_accounting(
+            organization_id=ORG,
+            account_id=command.account_id,
+            user_id=USER,
+            exposure_unit="USDT",
+            now=EVALUATED_AT + timedelta(days=1),
+            roll_demo_daily_loss=True,
+        )
+        assert rolled.actual_daily_loss == 0
+        assert rolled.reserved_daily_loss == reserved
+
+
+def test_v2_demo_worker_sizes_c_checks_budget_and_arms_equity_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db.models import TradePlanRevision
+    from app.schemas.trade_plan import TradePlanRevisionCreate
+    from app.services import automated_paper_loop, governed_blofin_demo
+    from app.services.demo_risk_v2 import demo_v2_claim_refusal
+    from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
+    from app.services.risk_policy.grader import GradeDecision
+    from app.services.risk_policy.profile import Grade
+
+    original = automated_paper_loop._plan_terms
+
+    def wider_stop(**kwargs: Any) -> TradePlanRevisionCreate | str:
+        plan = original(**kwargs)
+        if isinstance(plan, str):
+            return plan
+        exits = plan.risk_and_exits
+        entry = plan.basis_policy.execution_price.value
+        direction = 1 if plan.side.value == "BUY" else -1
+        return plan.model_copy(
+            update={
+                "risk_and_exits": exits.model_copy(
+                    update={
+                        "stop": exits.stop.model_copy(
+                            update={"value": entry * (1 - direction * Decimal(".01"))}
+                        ),
+                        "targets": (
+                            exits.targets[0].model_copy(
+                                update={
+                                    "price": exits.targets[0].price.model_copy(
+                                        update={"value": entry * (1 + direction * Decimal(".02"))},
+                                    ),
+                                }
+                            ),
+                        ),
+                    }
+                ),
+            }
+        )
+
+    monkeypatch.setattr(governed_blofin_demo, "_plan_terms", wider_stop)
+    monkeypatch.setattr(
+        automated_paper_loop,
+        "_grade_for_plan",
+        lambda *_: (GradeDecision(Grade.C, "deterministic-grade/v1", None, None, None), None),
+    )
+    world = open_world(monkeypatch, risk_v2=True)  # type: ignore[no-untyped-call]
+    with world.factory() as session:
+        account = session.scalar(select(AccountRiskAccountingState))
+        risk = account.demo_reserved_daily_loss
+        assert Decimal("99") < risk <= Decimal("100")
+        assert account.reserved_daily_loss == risk
+        assert account.demo_equity_baseline == Decimal("10000")
+        assert world.venue.leverage == "10"
+        command = session.get(ExecutionCommand, world.command_id)
+        assert has_demo_entry_history(session, organization_id=ORG, account_id=command.account_id)
+
+        plan = trade_plan_revision_to_schema(session.get(TradePlanRevision, command.revision_id))
+        # One position's risk is charged. Three positions' worth and today's
+        # loss can reach 5% exactly; a cent beyond it is refused.
+        account.demo_reserved_daily_loss = Decimal("300")
+        account.actual_daily_loss = Decimal("200") - risk
+        assert demo_v2_claim_refusal(session, account, plan, Decimal("10000")) is None
+        account.actual_daily_loss += Decimal("0.01")
+        assert demo_v2_claim_refusal(session, account, plan, Decimal("10000")) == (
+            "insufficient_daily_loss_allocation"
+        )
+        assert demo_v2_claim_refusal(session, account, plan, None) == "demo_equity_unverified"
+        account_id = command.account_id
+        session.rollback()
+    with world.factory() as session:
+        assert (
+            world.loop._check_demo_equity(session, ORG, USER, account_id, Decimal("9600")) is None
+        )
+        assert world.loop._check_demo_equity(session, ORG, USER, account_id, Decimal("9500")) == (
+            "account_equity_stop"
+        )
+        assert session.scalar(select(KillSwitchState)).active
+        assert session.scalar(select(AccountRiskAccountingState)).demo_equity_baseline == Decimal(
+            "10000"
+        )
+
+
+def test_demo_risk_settings_require_human_owner_and_audit_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routes import risk_policy
+    from app.core.errors import ForbiddenError
+    from app.schemas.common import MembershipRole
+    from app.security.tenant import TenantContext
+    from app.services.risk_policy.governance import PolicyActor, PolicyChannel
+    from app.services.risk_policy.profile import Grade
+
+    factory = phase7_plan_session_factory()
+    with factory() as session:
+        _seed(session)
+        account = session.scalar(select(ExecutionAccount))
+        assert account is not None
+        settings = demo_settings(str(account.id)).model_copy(
+            update={"risk_policy_owner_user_id": str(USER)}
+        )
+        if session.get(BotRiskSettings, 1) is None:
+            session.add(
+                BotRiskSettings(
+                    id=1,
+                    risk_per_trade_pct=Decimal("1"),
+                    daily_stop_pct=Decimal("5"),
+                    leverage=10,
+                    margin_mode="isolated",
+                )
+            )
+        session.commit()
+        tenant = TenantContext(USER, ORG, "", MembershipRole.OWNER)
+        payload = risk_policy.DemoBotRiskSettings(
+            risk_per_trade_pct=Decimal("1"),
+            daily_stop_pct=Decimal("4"),
+            leverage=8,
+            margin_mode="isolated",
+            grade_risk_overrides={Grade.C: Decimal("0.5")},
+        )
+        monkeypatch.setattr(
+            risk_policy, "_actor", lambda *_: PolicyActor(str(USER), PolicyChannel.BOT, True)
+        )
+        with pytest.raises(ForbiddenError):
+            risk_policy.update_demo_bot_settings(payload, tenant, session, None, settings)
+        monkeypatch.setattr(
+            risk_policy, "_actor", lambda *_: PolicyActor(str(USER), PolicyChannel.HUMAN, True)
+        )
+        assert (
+            risk_policy.update_demo_bot_settings(payload, tenant, session, None, settings)
+            == payload
+        )
+        assert risk_policy.read_demo_bot_settings(tenant, session, settings) == payload
+        audit = session.scalar(
+            select(AuditLog).where(AuditLog.resource_type == "bot_risk_settings")
+        )
+        assert audit is not None
+        assert audit.user_id == USER
+        assert audit.redacted_metadata["before"]["leverage"] == 10
+        assert audit.redacted_metadata["after"]["leverage"] == 8
