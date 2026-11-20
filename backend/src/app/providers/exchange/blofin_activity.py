@@ -272,7 +272,12 @@ class BloFinActivityProvider:
             if not isinstance(row, dict):
                 raise ExchangeRequestError("Invalid native history row.")
             fact = parse_fact(kind, row)
-            if kind == "fill" and not begin_ms <= int(fact.occurred_at_ms) <= end_ms:
+            if kind == "fill" and int(fact.occurred_at_ms) > end_ms:
                 raise ExchangeRequestError("Native history outside requested window.")
+            if kind == "fill" and int(fact.occurred_at_ms) < begin_ms:
+                # BloFin ignores begin/end once ``after`` paginates and returns
+                # older fills. They belong to no requested window; an empty page
+                # completes it instead of refusing the same page forever.
+                continue
             facts.append(fact)
         return tuple(facts)
