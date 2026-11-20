@@ -393,7 +393,7 @@ export const api = {
         auth: true,
       }),
     get: (id: string) => apiFetch<ConversationSummary>(`/conversations/${id}`, { auth: true }),
-    listMessages: (id: string, params?: { limit?: number; offset?: number }, options?: { signal?: AbortSignal }) =>
+    listMessages: (id: string, params?: { limit?: number; offset?: number; tail?: boolean }, options?: { signal?: AbortSignal }) =>
       apiFetch<PaginatedConversationMessages>(`/conversations/${id}/messages`, {
         query: params,
         auth: true,

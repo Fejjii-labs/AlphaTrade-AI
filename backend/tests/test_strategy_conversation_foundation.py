@@ -336,6 +336,10 @@ def test_invalid_echo_conversation_id_starts_new_thread(
     messages = client.get(f"/conversations/{conv_id}/messages")
     assert messages.status_code == 200
     assert messages.json()["total"] >= 2
+    tail = client.get(f"/conversations/{conv_id}/messages", params={"tail": True, "limit": 1})
+    assert tail.status_code == 200
+    assert tail.json()["offset"] == messages.json()["total"] - 1
+    assert tail.json()["items"] == messages.json()["items"][-1:]
 
 
 def test_tenant_isolation_returns_404(

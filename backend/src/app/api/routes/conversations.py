@@ -97,6 +97,7 @@ def list_conversation_messages(
     session: SessionDep,
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    tail: bool = Query(default=False, description="Return the latest page in chronological order."),
 ) -> PaginatedConversationMessages:
     result = _conversations(session).list_messages(
         conversation_id,
@@ -104,6 +105,7 @@ def list_conversation_messages(
         user_id=tenant.user_id,
         limit=limit,
         offset=offset,
+        tail=tail,
     )
 
     # Read canonical entries when replaying receipts, including corrections and Undo.

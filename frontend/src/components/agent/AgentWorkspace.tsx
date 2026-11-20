@@ -86,6 +86,8 @@ export function AgentWorkspace({ tabs }: { tabs?: ReactNode } = {}) {
     return () => media.removeEventListener("change", update);
   }, []);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const historyOpenRef = useRef(historyOpen);
+  historyOpenRef.current = historyOpen;
   const closeHistory = useCallback(() => setHistoryOpen(false), []);
   useFocusTrap(historyRef, historyOpen && mobile, closeHistory);
   const [attached, setAttached] = useState<File | null>(null);
@@ -300,13 +302,11 @@ export function AgentWorkspace({ tabs }: { tabs?: ReactNode } = {}) {
     const { controller, isCurrent, finish } = beginHistory(id, "tail");
     setMessagesError(null);
     try {
-      let page = await api.conversations.listMessages(id, { limit: 100 }, { signal: controller.signal });
+      const page = await api.conversations.listMessages(
+        id, { limit: 100, tail: true }, { signal: controller.signal },
+      );
       if (!isCurrent()) return;
-      const tailOffset = Math.max(0, page.total - 100);
-      if (tailOffset > 0) {
-        page = await api.conversations.listMessages(id, { limit: 100, offset: tailOffset }, { signal: controller.signal });
-        if (!isCurrent()) return;
-      }
+      const tailOffset = page.offset;
       const cursor = Math.min(historyCursors.current.get(id) ?? tailOffset, tailOffset);
       historyCursors.current.set(id, cursor);
       setEarlierOffset(cursor);
@@ -366,6 +366,7 @@ export function AgentWorkspace({ tabs }: { tabs?: ReactNode } = {}) {
   }), [changeConversation]);
 
   const refreshConversations = useCallback(async () => {
+    if (!historyOpenRef.current) return;
     const generation = ++conversationListGeneration.current;
     const session = sessionGeneration();
     const scope = currentScope.current;
@@ -390,7 +391,7 @@ export function AgentWorkspace({ tabs }: { tabs?: ReactNode } = {}) {
 
   useEffect(() => {
     void refreshConversations();
-  }, [refreshConversations, recoveryScope]);
+  }, [historyOpen, refreshConversations, recoveryScope]);
 
   useEffect(() => {
     if (!conversationId) {

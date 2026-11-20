@@ -64255,6 +64255,18 @@
               "title": "Offset",
               "type": "integer"
             }
+          },
+          {
+            "description": "Return the latest page in chronological order.",
+            "in": "query",
+            "name": "tail",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Return the latest page in chronological order.",
+              "title": "Tail",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
