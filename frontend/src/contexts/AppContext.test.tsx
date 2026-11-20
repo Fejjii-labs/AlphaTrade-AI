@@ -170,6 +170,41 @@ describe("AppContext posture lifecycle (FP2-105)", () => {
     }
   });
 
+  it("skips interval refreshes while the tab is hidden and resumes when visible", async () => {
+    renderAppContext();
+    await flushAsync();
+    expect(api.risk.killSwitch).toHaveBeenCalledTimes(1);
+
+    const visibilityDescriptor = Object.getOwnPropertyDescriptor(
+      Document.prototype,
+      "visibilityState",
+    );
+    let visibility: DocumentVisibilityState = "hidden";
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibility,
+    });
+    try {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POSTURE_REFRESH_INTERVAL_MS * 3);
+      });
+      expect(api.health.get).toHaveBeenCalledTimes(1);
+      expect(api.risk.killSwitch).toHaveBeenCalledTimes(1);
+
+      visibility = "visible";
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POSTURE_REFRESH_INTERVAL_MS);
+      });
+      expect(api.risk.killSwitch).toHaveBeenCalledTimes(2);
+    } finally {
+      if (visibilityDescriptor) {
+        Object.defineProperty(document, "visibilityState", visibilityDescriptor);
+      } else {
+        delete (document as unknown as Record<string, unknown>).visibilityState;
+      }
+    }
+  });
+
   it("never overlaps background requests for the same source, while siblings keep refreshing", async () => {
     const { result } = renderAppContext();
     await flushAsync();

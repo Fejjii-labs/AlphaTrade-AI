@@ -114,6 +114,9 @@ class RedisRateLimiter:
             try:
                 self._check_redis(key, limit=limit, window_seconds=window_seconds)
                 return
+            except RateLimitExceededError:
+                # A real over-limit count from a healthy Redis, not an outage.
+                raise
             except Exception as exc:
                 logger.warning(
                     "rate_limit_redis_error",
