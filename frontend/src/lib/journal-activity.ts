@@ -12,3 +12,11 @@ export function isAlphaTradeBloFinExecution(
     !["planned", "cancelled"].includes(trade.status),
   );
 }
+
+/** Trades page rows: bot executions on BloFin demo plus my own mirrored BloFin demo trades. */
+export function isBloFinDemoTrade(trade: CanonicalJournalTradeListItem): boolean {
+  if (trade.source === "blofin_demo_manual") {
+    return Boolean(trade.entry_time && !["planned", "cancelled"].includes(trade.status));
+  }
+  return isAlphaTradeBloFinExecution(trade);
+}

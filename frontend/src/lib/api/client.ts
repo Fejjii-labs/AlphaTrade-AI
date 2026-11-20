@@ -15,6 +15,94 @@ export class ApiError extends Error {
   }
 }
 
+/** The server could not be reached (offline, CORS/proxy failure) or did not answer in time. */
+export class NetworkError extends Error {
+  kind: "offline" | "timeout";
+
+  constructor(kind: "offline" | "timeout") {
+    super(kind === "timeout" ? "Request timed out" : "Network request failed");
+    this.name = "NetworkError";
+    this.kind = kind;
+  }
+}
+
+/**
+ * Reads give up after 20 s; writes (sync, save) after 45 s. A write that passes
+ * its own signal (agent and voice turns) owns its time budget and gets none.
+ */
+export const REQUEST_TIMEOUT_MS = { read: 20_000, write: 45_000 } as const;
+const GET_RETRY_DELAY_MS = 400;
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+
+const RAW_NETWORK_TEXT = /failed to fetch|load failed|networkerror|network request failed|timed out|aborted/i;
+
+/**
+ * Short plain text for any request error; never a raw "Failed to fetch".
+ * Network failures, timeouts and 5xx become the fallback; a 4xx keeps the
+ * API's own sentence; a deliberate app error keeps its message.
+ */
+export function friendlyError(error: unknown, fallback = "Couldn't load."): string {
+  if (error instanceof ApiError) {
+    if (error.status === 401) return "Signed out.";
+    if (error.status === 403) return "No access.";
+    if (error.status >= 400 && error.status < 500 && error.status !== 408) {
+      return error.message && !RAW_NETWORK_TEXT.test(error.message) ? error.message : fallback;
+    }
+    return fallback;
+  }
+  if (error instanceof NetworkError || error instanceof TypeError) return fallback;
+  if (error instanceof Error && error.message && !RAW_NETWORK_TEXT.test(error.message)) return error.message;
+  return fallback;
+}
+
+function isCallerAbort(signal: AbortSignal | null | undefined): boolean {
+  return signal?.aborted === true;
+}
+
+/**
+ * fetch with a timeout and, for GETs, one retry after a network error or a
+ * 502/503/504. A caller abort is passed through untouched and never retried.
+ */
+async function fetchWithResilience(url: string, init: RequestInit): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const read = method === "GET" || method === "HEAD";
+  const attempts = read ? 2 : 1;
+  for (let attempt = 1; ; attempt += 1) {
+    const controller = new AbortController();
+    const callerSignal = init.signal;
+    const forward = () => controller.abort(callerSignal?.reason);
+    if (callerSignal?.aborted) forward();
+    else callerSignal?.addEventListener("abort", forward, { once: true });
+    let timedOut = false;
+    const budget = read ? REQUEST_TIMEOUT_MS.read : callerSignal ? null : REQUEST_TIMEOUT_MS.write;
+    const timer =
+      budget === null
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+          }, budget);
+    try {
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      if (attempt < attempts && RETRYABLE_STATUS.has(response.status)) {
+        await new Promise((resolve) => setTimeout(resolve, GET_RETRY_DELAY_MS));
+        if (!isCallerAbort(callerSignal)) continue;
+      }
+      return response;
+    } catch (error) {
+      if (isCallerAbort(callerSignal)) throw error;
+      const failure = timedOut ? new NetworkError("timeout") : error instanceof TypeError ? new NetworkError("offline") : null;
+      if (!failure) throw error;
+      if (attempt >= attempts) throw failure;
+      await new Promise((resolve) => setTimeout(resolve, GET_RETRY_DELAY_MS));
+      if (isCallerAbort(callerSignal)) throw error;
+    } finally {
+      clearTimeout(timer);
+      callerSignal?.removeEventListener("abort", forward);
+    }
+  }
+}
+
 function buildUrl(path: string, query?: Record<string, string | number | boolean | undefined | null>) {
   const url = new URL(path, appConfig.apiBaseUrl);
   if (query) {
@@ -139,14 +227,33 @@ function sessionExpiredLoginPath(): string {
   return next !== "/" ? `/login?next=${encodeURIComponent(next)}` : "/login";
 }
 
-export async function apiFetch<T>(
-  path: string,
-  options: RequestInit & {
-    query?: Record<string, string | number | boolean | undefined | null>;
-    auth?: boolean;
-    retryOnUnauthorized?: boolean;
-  } = {},
-): Promise<T> {
+type ApiFetchOptions = RequestInit & {
+  query?: Record<string, string | number | boolean | undefined | null>;
+  auth?: boolean;
+  retryOnUnauthorized?: boolean;
+};
+
+// Identical GETs started while one is in flight share it (several panels on a
+// page often ask for the same thing at mount). Settled requests are not cached.
+const inFlightGets = new Map<string, Promise<unknown>>();
+
+export function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
+  const method = (options.method ?? "GET").toUpperCase();
+  if (method !== "GET" || options.signal || options.body) return apiFetchOnce<T>(path, options);
+  const auth = options.auth ?? !path.startsWith("/auth/");
+  const key = `${sessionGeneration()}|${auth ? getAccessToken() ?? "" : "-"}|${JSON.stringify(
+    options.headers ?? null,
+  )}|${buildUrl(path, options.query)}`;
+  const shared = inFlightGets.get(key);
+  if (shared) return shared as Promise<T>;
+  const request = apiFetchOnce<T>(path, options).finally(() => {
+    if (inFlightGets.get(key) === request) inFlightGets.delete(key);
+  });
+  inFlightGets.set(key, request);
+  return request;
+}
+
+async function apiFetchOnce<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
   const {
     query,
     headers,
@@ -182,7 +289,7 @@ export async function apiFetch<T>(
     if (token) requestHeaders.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(buildUrl(path, query), {
+  const response = await fetchWithResilience(buildUrl(path, query), {
     ...rest,
     headers: requestHeaders,
     credentials: fetchCredentials(),
@@ -194,7 +301,7 @@ export async function apiFetch<T>(
     const refreshed = await refreshAccessToken();
     checkContext();
     if (refreshed) {
-      return apiFetch<T>(path, { ...options, retryOnUnauthorized: false });
+      return apiFetchOnce<T>(path, { ...options, retryOnUnauthorized: false });
     }
     if (typeof window !== "undefined") {
       clearTokens();

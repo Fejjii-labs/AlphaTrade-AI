@@ -1,9 +1,9 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { BrainSetup } from "@/lib/api/brain-types";
+import type { BrainSetup, BrainStrategy } from "@/lib/api/brain-types";
 import { expectNoIdentifiers } from "@/test/no-identifiers";
-import { dailyCounts, FamilyCard } from "./FamilyCard";
+import { FamilyCard } from "./FamilyCard";
 import { StrategyRules } from "./StrategyRules";
 
 afterEach(cleanup);
@@ -23,39 +23,36 @@ const setup = (i: number, daysAgo: number): BrainSetup =>
   }) as unknown as BrainSetup;
 
 describe("FamilyCard", () => {
-  it("shows the 7-day count, bars, the latest three and the rest behind Show all", () => {
+  const strategies = [
+    { version: 3, enabled: false, spec: { symbol: "ETHUSDT", trigger_timeframe: "15m" } },
+    { version: 5, enabled: true, spec: { symbol: "BTCUSDT", trigger_timeframe: "15m" } },
+  ] as unknown as BrainStrategy[];
+
+  it("shows on/off, coins, latest version, 7-day results, the latest three setups and the rest behind More", () => {
     const setups = [setup(1, 0), setup(2, 0), setup(3, 1), setup(4, 3), setup(5, 6)];
-    render(<FamilyCard id="nested" name="Nested Continuation" loading={false} versions={2} detections={{ setups, count: 5 }} />);
+    render(<FamilyCard id="nested" name="Nested Continuation" loading={false} strategies={strategies} outcomes={{ confirmed: 9, traded: 2, won: 1 }} setups={setups} />);
     const card = screen.getByTestId("strategy-family");
-    expect(within(card).getByTestId("family-count")).toHaveTextContent("5 in 7 days");
-    expect(within(card).getByText("2 versions · Paper")).toBeInTheDocument();
-    expect(within(card).getByTestId("family-bars").children).toHaveLength(7);
+    expect(within(card).getByTestId("family-outcomes")).toHaveTextContent("9 confirmed · 2 traded · 1 won");
+    expect(within(card).getByTestId("family-enabled")).toHaveTextContent("On");
+    expect(card).toHaveTextContent("BTCUSDT, ETHUSDT · 15m · v5");
     const visible = within(card).getAllByRole("link").filter((link) => link.getAttribute("href")?.startsWith("/strategies/setups/"));
     expect(visible).toHaveLength(5);
-    expect(visible[0]).toHaveTextContent("BTCUSDT · Long · 15m · N2 confirmed");
-    const all = within(card).getByText("Show all 7 days").closest("details")!;
-    expect(all).not.toHaveAttribute("open");
-    expect(within(all).getAllByRole("link")).toHaveLength(2);
+    expect(visible[0]).toHaveTextContent("BTCUSDT · Long · Confirmed");
+    expect(visible[0]).not.toHaveTextContent("15m");
+    const more = within(card).getByText("More setups").closest("details")!;
+    expect(more).not.toHaveAttribute("open");
+    expect(within(more).getAllByRole("link")).toHaveLength(2);
     expect(within(card).getByRole("link", { name: "Ask Agent" })).toHaveAttribute("href", "/agent?discuss=nested");
     expect(within(card).getByRole("link", { name: "Versions" })).toHaveAttribute("href", "/strategies?family=nested");
     expectNoIdentifiers();
   });
 
-  it("says when a family has no detections or cannot be read", () => {
-    render(<FamilyCard id="sfp" name="SFP" loading={false} versions={null} detections={{ setups: [], count: 0 }} />);
-    expect(screen.getByText("No detections in 7 days.")).toBeInTheDocument();
-    expect(screen.getByText("Versions unavailable")).toBeInTheDocument();
-    expect(screen.queryByText("Show all 7 days")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("family-bars")).not.toBeInTheDocument();
-    cleanup();
-    render(<FamilyCard id="sfp" name="SFP" loading={false} versions={0} detections={null} />);
-    expect(screen.getByTestId("family-count")).toHaveTextContent("Detections unavailable");
-    expect(screen.queryByTestId("family-bars")).not.toBeInTheDocument();
-  });
-
-  it("counts detections per local day, oldest first", () => {
-    const counts = dailyCounts([setup(1, 0), setup(2, 0), setup(3, 2), setup(4, 9)], NOW).map((d) => d.count);
-    expect(counts).toEqual([0, 0, 0, 0, 1, 0, 2]);
+  it("says when a family has no setups or results cannot be read", () => {
+    render(<FamilyCard id="sfp" name="SFP" loading={false} strategies={null} outcomes={null} setups={[]} />);
+    expect(screen.getByText("No setups in 7 days.")).toBeInTheDocument();
+    expect(screen.getByTestId("family-outcomes")).toHaveTextContent("Results unavailable");
+    expect(screen.queryByTestId("family-enabled")).not.toBeInTheDocument();
+    expect(screen.queryByText("More setups")).not.toBeInTheDocument();
   });
 });
 

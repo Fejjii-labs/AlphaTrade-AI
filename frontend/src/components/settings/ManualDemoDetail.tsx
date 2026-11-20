@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
 import { manualDemo } from "@/lib/api/manual-demo";
+import { friendlyError } from "@/lib/api/client";
 
 export function ManualDemoDetail({ commandId }: { commandId: string }) {
   const load = useCallback(() => manualDemo.detail(commandId), [commandId]);
@@ -29,7 +30,7 @@ export function ManualDemoDetail({ commandId }: { commandId: string }) {
     try {
       await operation();
     } catch (err) {
-      setFailure(err instanceof Error ? err.message : "Request failed");
+      setFailure(friendlyError(err, "Request failed"));
     } finally {
       pending.current = false;
       setBusy(false);

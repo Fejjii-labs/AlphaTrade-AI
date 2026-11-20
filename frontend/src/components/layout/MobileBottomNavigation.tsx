@@ -21,7 +21,7 @@ const tabClass = (active: boolean) =>
     active ? "border-accent-solid bg-accent-muted text-accent" : "border-transparent text-text-secondary",
   );
 
-/** Phone tab bar: Dashboard · Trades · Strategies · Agent · More (Autonomous, Knowledge, Settings). */
+/** Phone tab bar: Dashboard · Trades · Strategies · Bot · More (Agent, Settings). */
 export function MobileBottomNavigation() {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);

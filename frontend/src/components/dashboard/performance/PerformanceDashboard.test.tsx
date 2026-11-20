@@ -111,28 +111,36 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("PerformanceDashboard", () => {
-  it("shows the closed-trade P&L coverage alongside demo headline totals", async () => {
+  it("shows the BloFin P&L of unreconciled trades with a short verified count and day marks", async () => {
     const data = response();
-    data.summary.pnl_sample_count = 4;
-    data.summary.pnl_trade_coverage = "4 of 5 trades verified";
+    data.summary.unverified_pnl_count = 2;
+    data.summary.pnl_trade_coverage = "3 of 5 trades verified";
+    data.days[0] = { ...data.days[0], unverified_count: 1 };
     vi.mocked(api.journal.performanceCalendar).mockResolvedValue(data);
     render(<PerformanceDashboard now={NOW} scope="demo" />);
     await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
-    for (const id of ["kpi-net-pnl", "kpi-win-rate", "calendar-month-total", "cumulative-pnl"]) {
-      expect(screen.getByTestId(id)).toHaveTextContent("4 of 5 trades verified");
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("3 of 5 verified");
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveAttribute("data-unverified", "true");
+    expect(screen.getByTestId("calendar-month-total")).toHaveTextContent("3 of 5 verified");
+    for (const id of ["kpi-win-rate", "kpi-expectancy"]) {
+      expect(screen.getByTestId(id)).not.toHaveTextContent("verified");
     }
+    expect(screen.getByTestId("calendar-day-2026-07-01")).toHaveAttribute("data-unverified", "true");
+    expect(screen.getByTestId("calendar-day-2026-07-01")).toHaveAccessibleName(/unverified/);
+    expect(screen.getByTestId("calendar-day-2026-07-02")).not.toHaveAttribute("data-unverified");
   });
 
   it("renders real numbers from the endpoint", async () => {
     vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
     render(<PerformanceDashboard now={NOW} />);
     await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
-    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("5 of 5 trades verified");
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("5 of 5 verified");
+    expect(screen.getByTestId("kpi-net-pnl")).not.toHaveAttribute("data-unverified");
     expect(screen.getByTestId("kpi-profit-factor")).toHaveTextContent("1.50");
     expect(screen.getByTestId("kpi-expectancy")).toHaveTextContent("+20.00");
-    expect(screen.getByTestId("kpi-expectancy")).toHaveTextContent("Net P&L per closed trade");
+    expect(screen.getByTestId("kpi-expectancy")).not.toHaveTextContent("Net P&L per closed trade");
     expect(screen.getByTestId("kpi-win-rate")).toHaveTextContent("50.0%");
-    expect(screen.getByTestId("kpi-win-rate")).toHaveTextContent("excludes breakevens");
+    expect(screen.getByTestId("kpi-win-rate")).not.toHaveTextContent("excludes breakevens");
     expect(within(screen.getByTestId("win-rate-counts")).getAllByText(/\d/).map((n) => n.textContent)).toEqual([
       "2",
       "1",
@@ -151,6 +159,8 @@ describe("PerformanceDashboard", () => {
     expect(screen.getByTestId("calendar-day-2026-07-02")).toHaveTextContent("+1.20K");
     expect(screen.getByTestId("calendar-day-2026-07-03")).toHaveAttribute("data-tone", "loss");
     expect(screen.queryByTestId("sample-data-badge")).not.toBeInTheDocument();
+    expect(screen.getByTestId("performance-sample-size")).toHaveTextContent(/^Sample: 5 trades$/);
+    expect(screen.queryByText(/confidence/i)).not.toBeInTheDocument();
 
     const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
     expect(calls).toContainEqual(expect.objectContaining({ date_from: "2026-07-01", date_to: "2026-07-31" }));
@@ -168,7 +178,7 @@ describe("PerformanceDashboard", () => {
     expect(screen.getByTestId("kpi-net-pnl")).toHaveAttribute("data-tone", "none");
     expect(screen.getByTestId("score-overall")).toHaveTextContent("—");
     expect(screen.getByText(/Not enough closed trades to score/)).toBeInTheDocument();
-    expect(screen.getByText(/No closed trades with recorded P&L/)).toBeInTheDocument();
+    expect(screen.getAllByText(/No closed trades in this range/).length).toBeGreaterThan(0);
     expect(screen.getByTestId("calendar-month-total")).toHaveTextContent("—");
   });
 
@@ -182,17 +192,32 @@ describe("PerformanceDashboard", () => {
     );
     render(<PerformanceDashboard now={NOW} />);
     expect(await screen.findByTestId("performance-truncated")).toHaveTextContent("Newest 5000 trades since 2026-05-02");
-    expect(screen.getByTestId("performance-warnings")).toHaveTextContent("most recent closed trades from 2026-05-02");
+    expect(screen.queryByTestId("performance-warnings")).not.toBeInTheDocument();
+    expect(screen.queryByText(/most recent closed trades from 2026-05-02/)).not.toBeInTheDocument();
   });
 
-  it("states that partial exits on open trades are not counted", async () => {
-    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response({ open_trades_excluded: 3 }));
-    render(<PerformanceDashboard now={NOW} />);
-    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
-    expect(screen.getByTestId("performance-scope")).toHaveTextContent(
-      "Partial exits on open trades count only once the trade closes",
+  it("shows no Showing line, range, zone or caveats", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(
+      response({
+        open_trades_excluded: 3,
+        warnings: [
+          "Only 3 closed trade(s); treat these figures as anecdotal.",
+          "3 closed trade(s) have no recorded net PnL and are excluded from PnL figures.",
+          "Overall score withheld until at least 5 closed trades.",
+        ],
+      }),
     );
-    expect(screen.getByTestId("performance-open-excluded")).toHaveTextContent("3 open trades not counted");
+    render(<PerformanceDashboard now={NOW} timezone="Europe/Paris" />);
+    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
+    expect(screen.queryByTestId("performance-scope")).not.toBeInTheDocument();
+    const panel = screen.getByTestId("performance-dashboard");
+    for (const removed of [
+      /Days in/, /Europe\/Paris/, /→/, /Closed trades only/, /Partial exits/, /open trades not counted/,
+      /anecdotal/, /no recorded net PnL/, /Overall score withheld/, /Showing/,
+    ]) {
+      expect(panel).not.toHaveTextContent(removed);
+    }
+    expect(screen.queryByTestId("performance-warnings")).not.toBeInTheDocument();
   });
 
   it("navigates months and refetches the calendar range", async () => {
@@ -205,15 +230,15 @@ describe("PerformanceDashboard", () => {
     expect(calls).toContainEqual(expect.objectContaining({ date_from: "2026-06-01", date_to: "2026-06-30" }));
   });
 
-  it("waits for the resolved timezone and shows it in the Showing line", async () => {
+  it("waits for the resolved timezone before requesting figures", async () => {
     vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
     const { rerender } = render(<PerformanceDashboard now={NOW} timezone={null} />);
     expect(api.journal.performanceCalendar).not.toHaveBeenCalled();
-    rerender(<PerformanceDashboard now={NOW} timezone="Asia/Tokyo" timezoneLabel="risk settings" />);
+    rerender(<PerformanceDashboard now={NOW} timezone="Asia/Tokyo" />);
     await waitFor(() => expect(api.journal.performanceCalendar).toHaveBeenCalled());
     const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
     expect(calls.every((params) => params?.tz === "Asia/Tokyo")).toBe(true);
-    expect(screen.getByTestId("performance-timezone")).toHaveTextContent("Days in Asia/Tokyo (risk settings)");
+    expect(screen.queryByTestId("performance-timezone")).not.toBeInTheDocument();
   });
 
   it("follows a page-owned scope and hides its own scope picker", async () => {
@@ -245,7 +270,6 @@ describe("PerformanceDashboard", () => {
     });
     render(<PerformanceDashboard now={NOW} />);
     await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
-    expect(screen.getByTestId("performance-scope")).toHaveTextContent("Showing: Demo trades (BloFin demo)");
     expect(screen.getByRole("radio", { name: "Demo" })).toHaveAttribute("aria-checked", "true");
     const initial = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
     expect(initial.length).toBeGreaterThan(0);
@@ -253,7 +277,7 @@ describe("PerformanceDashboard", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     await waitFor(() =>
-      expect(screen.getByTestId("performance-scope")).toHaveTextContent("Showing: Paper trades"),
+      expect(screen.getByRole("radio", { name: "Paper" })).toHaveAttribute("aria-checked", "true"),
     );
     const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
     expect(calls).toContainEqual(
@@ -265,7 +289,9 @@ describe("PerformanceDashboard", () => {
       target: { value: "backtest" },
     });
     await waitFor(() =>
-      expect(screen.getByTestId("performance-scope")).toHaveTextContent("Showing: Backtest trades"),
+      expect(vi.mocked(api.journal.performanceCalendar).mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({ scope: "backtest" }),
+      ),
     );
     expect(screen.getByRole("radio", { name: "Demo" })).toHaveAttribute("aria-checked", "false");
     // Every request carries exactly one scope.
@@ -280,7 +306,7 @@ describe("PerformanceDashboard", () => {
         : Promise.resolve(response()),
     );
     render(<PerformanceDashboard now={NOW} />);
-    expect(await screen.findByTestId("calendar-error")).toHaveTextContent("Calendar unavailable for July 2026");
+    expect(await screen.findByTestId("calendar-error")).toHaveTextContent("Couldn't load. Retry");
     expect(screen.getByTestId("calendar-month-total")).toHaveTextContent("Monthly: —");
     expect(screen.getByTestId("calendar-month-total")).not.toHaveTextContent("trading day");
     expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00");
@@ -310,30 +336,47 @@ describe("PerformanceDashboard", () => {
     expect(screen.queryByTestId("performance-empty")).not.toBeInTheDocument();
   });
 
-  it("narrows to one source inside the scope and resets with the scope", async () => {
-    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+  it("switches source with an always-visible control, never needing Reset", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockReturnValue(new Promise(() => {}));
     render(<PerformanceDashboard now={NOW} />);
-    const select = await screen.findByRole("combobox", { name: "Source" });
-    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toContain("Manually logged");
-    fireEvent.change(select, { target: { value: "blofin_demo_manual" } });
+    // Visible before any data arrives, so a slow or narrowed response never hides a choice.
+    const group = screen.getByRole("radiogroup", { name: "Trade source" });
+    expect(within(group).getAllByRole("radio").map((radio) => radio.textContent)).toEqual([
+      "All",
+      "My BloFin trades",
+      "Bot",
+    ]);
+    expect(within(group).getByRole("radio", { name: "All" })).toHaveAttribute("aria-checked", "true");
+    const last = () => vi.mocked(api.journal.performanceCalendar).mock.calls.at(-1)?.[0];
+
+    fireEvent.click(within(group).getByRole("radio", { name: "My BloFin trades" }));
+    await waitFor(() => expect(last()).toEqual(expect.objectContaining({ scope: "demo", source: "blofin_demo_manual" })));
+    fireEvent.click(within(group).getByRole("radio", { name: "Bot" }));
+    await waitFor(() => expect(last()).toEqual(expect.objectContaining({ source: "paper_execution" })));
+    expect(within(group).getByRole("radio", { name: "My BloFin trades" })).not.toBeDisabled();
+    fireEvent.click(within(group).getByRole("radio", { name: "All" }));
+    await waitFor(() => expect(last()).not.toHaveProperty("source"));
+    expect(screen.queryByRole("button", { name: "Reset filters" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Source" })).not.toBeInTheDocument();
+  });
+
+  it("drops the source with the scope and offers no source control outside Demo", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    const { rerender } = render(<PerformanceDashboard now={NOW} scope="demo" />);
+    fireEvent.click(screen.getByRole("radio", { name: "Bot" }));
     await waitFor(() =>
-      expect(screen.getByTestId("performance-scope")).toHaveTextContent("BloFin demo (manual) only"),
+      expect(vi.mocked(api.journal.performanceCalendar).mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({ source: "paper_execution" }),
+      ),
     );
-    const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
-    expect(calls).toContainEqual(
-      expect.objectContaining({ scope: "demo", source: "blofin_demo_manual", date_from: "2026-07-01" }),
-    );
-    expect(calls).toContainEqual(
-      expect.objectContaining({ scope: "demo", source: "blofin_demo_manual", date_from: "2026-04-17" }),
-    );
-    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
+    rerender(<PerformanceDashboard now={NOW} scope="paper" />);
     await waitFor(() =>
       expect(vi.mocked(api.journal.performanceCalendar).mock.calls.at(-1)?.[0]).toEqual(
         expect.objectContaining({ scope: "paper" }),
       ),
     );
     expect(vi.mocked(api.journal.performanceCalendar).mock.calls.at(-1)?.[0]).not.toHaveProperty("source");
-    expect(screen.getByTestId("performance-scope")).not.toHaveTextContent("BloFin demo (manual) only");
+    expect(screen.queryByRole("radiogroup", { name: "Trade source" })).not.toBeInTheDocument();
   });
 
   it("custom range sends the picked dates and blocks an inverted range", async () => {
@@ -368,7 +411,7 @@ describe("PerformanceDashboard", () => {
   it("shows unavailable state when the request fails, and Retry refetches", async () => {
     vi.mocked(api.journal.performanceCalendar).mockRejectedValue(new Error("boom"));
     render(<PerformanceDashboard now={NOW} />);
-    expect(await screen.findByText("Journal performance unavailable")).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load.")).toBeInTheDocument();
     vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));

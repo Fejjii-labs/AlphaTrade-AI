@@ -24,10 +24,10 @@ export function resolveExecutionDisplay(
   const paperConfirmed = isPaperModeConfirmed(executionMode, realTradingEnabled);
   if (paperConfirmed) {
     return {
-      label: "PAPER",
+      label: "Demo",
       tone: "paper",
       paperConfirmed: true,
-      announcement: "execution PAPER, verified",
+      announcement: "execution Demo, verified",
     };
   }
 

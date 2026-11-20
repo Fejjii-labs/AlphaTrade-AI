@@ -5,7 +5,7 @@ import { useCallback, useState } from "react";
 import { TelegramPolicyForm } from "@/components/settings/TelegramPolicyForm";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   SettingsReadout,
   SettingsUnavailable,
@@ -71,14 +71,6 @@ export function NotificationSettingsPanel({
 
   return (
     <Card data-testid="notification-settings-panel">
-      <CardHeader>
-        <p
-          className="text-sm text-text-muted"
-          data-testid="notifications-never-trade-copy"
-        >
-          Paper alerts keep you informed and never execute trades.
-        </p>
-      </CardHeader>
       <CardContent className="space-y-4 text-sm">
         <div
           className="flex flex-wrap items-center gap-2"
@@ -276,10 +268,6 @@ export function NotificationSettingsPanel({
               ],
             ]}
           />
-          <p className="text-xs text-text-muted">
-            This is the reported monitoring context, not a notification filter.
-            Configure supported subscriptions in Telegram Policy V2 above.
-          </p>
         </div>
         {message ? (
           <p role="status" className="text-xs text-text-secondary">

@@ -458,19 +458,16 @@ for (const width of [1280, 390]) {
     await expect(
       page.getByRole("link", { name: "Original conversation" }),
     ).toHaveAttribute("href", "/agent?conversation=11111111-1111-4111-8111-111111111111");
-    await page.goto("/journal?tab=knowledge&category=rules&q=close");
-    await expect(page.getByLabel("Knowledge category")).toHaveValue("rules");
+    await page.goto("/journal?tab=knowledge");
+    await expect(page).toHaveURL(/\/agent\?tab=documents/);
     await screenshot("knowledge");
     await noOverflow();
-    await page.getByRole("link", { name: "Open", exact: true }).click();
-    await page.getByRole("link", { name: "Back to Knowledge" }).click();
-    await expect(page).toHaveURL(/category=rules&q=close/);
     await page.goto("/journal");
     await expect(
-      page.getByRole("link", { name: "Open exact trade" }),
+      page.getByRole("link", { name: /^Journal/ }).first(),
     ).toBeVisible();
     await screenshot("journal-list");
-    await page.getByRole("link", { name: "Open exact trade" }).click();
+    await page.getByRole("link", { name: /^Journal/ }).first().click();
     await expect(page.getByTestId("journal-trade-detail")).toContainText(
       "82,234.40 USDT",
     );
@@ -493,8 +490,8 @@ for (const width of [1280, 390]) {
     await expect(page).toHaveURL(/\/strategies$/);
     await page.goto("/settings");
     const sections = page.getByRole("navigation", { name: "Settings sections" });
-    await expect(sections.getByRole("link")).toHaveCount(6);
-    await expect(sections.getByRole("link", { name: "Diagnostics" })).toBeVisible();
+    await expect(sections.getByRole("link")).toHaveCount(4);
+    await expect(sections.getByRole("link", { name: "Markets" })).toBeVisible();
     await screenshot("settings");
     await noOverflow();
     const otherWrites = writes.filter(

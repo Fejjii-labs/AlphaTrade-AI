@@ -46,3 +46,11 @@ export function relatedLessonsHref(candidateId?: string | null): string {
   }
   return "/lessons";
 }
+
+/** Knowledge moved into Agent → Documents; old `/journal?tab=knowledge…` links follow it. */
+export function knowledgeRedirect(searchParams: URLSearchParams): string | null {
+  if (searchParams.get("tab") !== "knowledge") return null;
+  const next = new URLSearchParams(searchParams);
+  next.set("tab", "documents");
+  return `/agent?${next}`;
+}

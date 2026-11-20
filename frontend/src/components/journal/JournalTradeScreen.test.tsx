@@ -26,7 +26,7 @@ it("loads only the exact linked trade with unknown outcomes and precise tiny fee
   expect(screen.getByText("Manual Demo Test")).toBeInTheDocument();
   expect(screen.getByText("0.00493406 USDT")).toBeInTheDocument();
   expect(screen.getAllByText("— USDT").length).toBeGreaterThan(0);
-  expect(screen.getByText(/Account flatness alone/)).toBeInTheDocument();
+  expect(screen.queryByText(/Account flatness alone/)).not.toBeInTheDocument();
   expect(screen.queryByTestId("journal-mirror-annotation")).not.toBeInTheDocument();
   expectNoIdentifiers();
 });

@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { RagDocument } from "@/lib/api/types";
 import { formatDate } from "@/lib/format";
+import { friendlyError } from "@/lib/api/client";
 
 type KnowledgeDocumentCardProps = {
   document: RagDocument;
@@ -76,7 +77,7 @@ export function KnowledgeDocumentCard({
         {status === "failed" ? <Button size="sm" variant="outline" type="button" disabled={retrying} onClick={async () => {
           setRetrying(true); setRetryError(null);
           try { await api.knowledge.retryIndexing(document.id); setRetryError("Retry queued. Refresh the library to check readiness."); }
-          catch (error) { setRetryError(error instanceof Error ? error.message : "Indexing retry failed"); }
+          catch (error) { setRetryError(friendlyError(error, "Indexing retry failed")); }
           finally { setRetrying(false); }
         }}>Retry indexing</Button> : null}
         {retryError ? <p role="status">{retryError}</p> : null}
@@ -87,7 +88,7 @@ export function KnowledgeDocumentCard({
               <Button size="sm" variant="destructive" type="button" disabled={deleting} onClick={async () => {
                 setDeleting(true); setDeleteError(null);
                 try { await api.knowledge.deleteDocument(document.id); onDeleted?.(document.id); }
-                catch (error) { setDeleteError(error instanceof Error ? error.message : "Delete failed"); setConfirmingDelete(false); }
+                catch (error) { setDeleteError(friendlyError(error, "Delete failed")); setConfirmingDelete(false); }
                 finally { setDeleting(false); }
               }}>Confirm delete</Button>
               <Button size="sm" variant="outline" type="button" disabled={deleting} onClick={() => setConfirmingDelete(false)}>Cancel</Button>

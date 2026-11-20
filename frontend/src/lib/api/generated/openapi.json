@@ -19307,6 +19307,11 @@
             "title": "Trade Count",
             "type": "integer"
           },
+          "unverified_count": {
+            "default": 0,
+            "title": "Unverified Count",
+            "type": "integer"
+          },
           "win_rate": {
             "anyOf": [
               {
@@ -19686,6 +19691,11 @@
           "trade_count": {
             "default": 0,
             "title": "Trade Count",
+            "type": "integer"
+          },
+          "unverified_pnl_count": {
+            "default": 0,
+            "title": "Unverified Pnl Count",
             "type": "integer"
           },
           "win_loss_ratio": {

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AttentionCard, AttentionContent } from "./AttentionCard";
+import { AttentionBadge, AttentionCard, AttentionContent } from "./AttentionCard";
 import type { AttentionItem, AttentionQueue } from "@/lib/api/attention-types";
 import { expectNoIdentifiers } from "@/test/no-identifiers";
 
@@ -26,32 +26,32 @@ const queue: AttentionQueue = {
 describe("Dashboard attention", () => {
   beforeEach(() => attention.mockReset());
   afterEach(() => { cleanup(); vi.useRealTimers(); });
-  it("shows provenance, recommendation and review state without mutation controls", () => {
+  it("shows the alert title and reason only, without mutation controls", () => {
     render(<AttentionContent queue={queue} now={now} />);
     expect(screen.getByText(/Risk block to review/)).toBeInTheDocument();
-    expect(screen.getByText(/Risk Events ·/)).toBeInTheDocument();
-    expect(screen.queryByText(/source-1|version-1/)).not.toBeInTheDocument();
-    expect(screen.getByText(/Acknowledgement: Unsupported/)).toBeInTheDocument();
+    expect(screen.getByText("Recorded daily loss restriction.")).toBeInTheDocument();
+    for (const gone of [/source-1|version-1/, /Risk Events ·/, /Acknowledgement/, /Paper review only/, /Coverage/, /Review the risk event/])
+      expect(screen.queryByText(gone)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /execute|approve|send|acknowledge/i })).not.toBeInTheDocument();
     expectNoIdentifiers();
   });
   it("distinguishes no action from unavailable", async () => {
     attention.mockResolvedValue({ ...queue, items: [], recommended_next_action: null });
     render(<AttentionCard />);
-    expect(await screen.findByText(/No action available/)).toBeInTheDocument();
+    expect(await screen.findByText(/^No alerts$/)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
   it.each([null, {}, undefined])("treats missing queue %j as unavailable", async (data) => {
     attention.mockResolvedValue(data);
     render(<AttentionCard />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Attention unavailable");
-    expect(screen.queryByText(/No action available/)).not.toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Alerts unavailable");
+    expect(screen.queryByText(/^No alerts$/)).not.toBeInTheDocument();
   });
   it("reports failed reads and retries using only the attention GET", async () => {
     attention.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(queue);
     render(<AttentionCard />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Attention unavailable");
-    fireEvent.click(screen.getByRole("button", { name: "Refresh attention" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Alerts unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     expect(await screen.findByTestId("attention-content")).toBeInTheDocument();
     expect(attention).toHaveBeenCalledTimes(2);
   });
@@ -59,8 +59,8 @@ describe("Dashboard attention", () => {
     attention.mockResolvedValueOnce(queue).mockImplementationOnce(() => new Promise(() => {}));
     render(<AttentionCard />);
     await screen.findByTestId("attention-content");
-    fireEvent.click(screen.getByRole("button", { name: "Refresh attention" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Loading attention");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Loading…");
     expect(screen.queryByTestId("attention-content")).not.toBeInTheDocument();
   });
   it("removes an item at its expiration boundary without another request", async () => {
@@ -72,15 +72,53 @@ describe("Dashboard attention", () => {
     expect(screen.getByText(/Risk block to review/)).toBeInTheDocument();
     await act(async () => { vi.advanceTimersByTime(1000); });
     expect(screen.queryByText(/Risk block to review/)).not.toBeInTheDocument();
-    expect(screen.getByText(/No action available/)).toBeInTheDocument();
+    expect(screen.getByText(/^No alerts$/)).toBeInTheDocument();
     expect(attention).toHaveBeenCalledTimes(1);
   });
   it("keeps the ordered compact list and shows the full count", () => {
     render(<AttentionContent queue={{ ...queue, items: Array.from({ length: 7 }, (_, i) => ({
       ...item, item_id: `risk-${i}`, title: `Review item ${i}`,
     })) }} now={now} />);
-    expect(screen.getByText(/Showing 5 of 7/)).toBeInTheDocument();
+    expect(screen.getByText(/^5 of 7$/)).toBeInTheDocument();
     expect(screen.getByText(/Review item 0/)).toBeInTheDocument();
     expect(screen.queryByText(/Review item 5/)).not.toBeInTheDocument();
+  });
+  it("shows every item when given no compact limit", () => {
+    render(<AttentionContent limit={Infinity} queue={{ ...queue, items: Array.from({ length: 7 }, (_, i) => ({
+      ...item, item_id: `risk-${i}`, title: `Review item ${i}`,
+    })) }} now={now} />);
+    expect(screen.getByText(/Review item 6/)).toBeInTheDocument();
+    expect(screen.queryByText(/Showing/)).not.toBeInTheDocument();
+  });
+});
+
+describe("Dashboard alert badge", () => {
+  beforeEach(() => attention.mockReset());
+  afterEach(() => { cleanup(); vi.useRealTimers(); });
+  it("counts unexpired items and links to Settings > Alerts", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    attention.mockResolvedValue({ ...queue, items: [
+      item,
+      { ...item, item_id: "stale-1", severity: "medium" },
+      { ...item, item_id: "gone-1", expires_at: "2026-10-02T11:00:00Z" },
+    ] });
+    render(<AttentionBadge />);
+    const link = await screen.findByTestId("dashboard-strip-alerts");
+    expect(link).toHaveTextContent(/^2 alerts$/);
+    expect(link).toHaveAttribute("href", "/settings/alerts");
+  });
+  it("says No alerts for an empty queue", async () => {
+    attention.mockResolvedValue({ ...queue, items: [] });
+    render(<AttentionBadge />);
+    expect(await screen.findByTestId("dashboard-strip-alerts")).toHaveTextContent(/^No alerts$/);
+  });
+  it.each(["failed", "invalid"])("never goes silent when the queue read is %s", async (kind) => {
+    if (kind === "failed") attention.mockRejectedValueOnce(new Error("offline"));
+    else attention.mockResolvedValueOnce({});
+    render(<AttentionBadge />);
+    const link = await screen.findByTestId("dashboard-strip-alerts");
+    expect(link).toHaveTextContent("Alerts unavailable");
+    expect(link).toHaveAttribute("href", "/settings/alerts");
   });
 });

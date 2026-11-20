@@ -20,7 +20,7 @@ describe("stored native activity", () => {
   it("renders exact contracts/prices, unknown fees/PnL and details with a working return control", async () => {
     const item = nativeFill({ origin: "alphatrade_matched", command_id: "22222222-2222-4222-8222-222222222222" });
     vi.mocked(readNativeActivity).mockResolvedValue(activityPage({ items: [item] }));
-    render(<NativeActivity statistics />);
+    render(<NativeActivity />);
     const row = await screen.findByTestId("native-activity-row");
     const summary = row.querySelector("summary")!;
     expect(summary).toHaveTextContent("0.123456789123456789 contracts");
@@ -43,29 +43,58 @@ describe("stored native activity", () => {
     const fill = nativeFill({ origin: "alphatrade_matched", command_id: "22222222-2222-4222-8222-222222222222" });
     vi.mocked(readNativeActivity).mockResolvedValueOnce(activityPage({ items: [fill], next_cursor: "continuation" }))
       .mockResolvedValueOnce(activityPage({ items: [fill, { ...fill, native_id: "fill-2", trade_id: "fill-2" }] }));
-    render(<NativeActivity statistics />);
+    render(<NativeActivity compact />);
     fireEvent.click(await screen.findByRole("button", { name: "Load older activity" }));
     await waitFor(() => expect(screen.getAllByTestId("native-activity-row")).toHaveLength(2));
-    expect(screen.getByText("Native fills shown").nextElementSibling).toHaveTextContent("2");
     expect(readNativeActivity).toHaveBeenLastCalledWith({ kind: "fill", limit: 20, cursor: "continuation" }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
   });
 
-  it("keeps Journal compact and statistics on Dashboard", async () => {
+  it("keeps full coverage detail in Journal", async () => {
     render(<NativeActivity />);
     await screen.findByTestId("native-activity-row");
-    expect(screen.queryByTestId("native-activity-statistics")).not.toBeInTheDocument();
     expect(screen.getByText(/incomplete coverage/)).toBeInTheDocument();
+    expect(screen.getByText("History coverage & age")).toBeInTheDocument();
+    expect(screen.getByText("Fresh at read")).toBeInTheDocument();
+    expect(screen.queryByTestId("native-activity-last-synced")).not.toBeInTheDocument();
+  });
+
+  it("shows only tabs, last sync and readable rows on Dashboard", async () => {
+    vi.mocked(readNativeActivity).mockResolvedValue(activityPage({
+      freshness: "stale",
+      items: [nativeFill({ instrument: "CC-USDT", side: "buy", position_side: "net", quantity: "22598.000000000000000000", price: "0.0886" })],
+      limitations: ["history_retention_not_documented", "funding_not_collected"],
+    }));
+    render(<NativeActivity compact />);
+    const row = await screen.findByTestId("native-activity-row");
+    const card = screen.getByTestId("native-activity");
+    expect(screen.getByText("BloFin activity")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh activity" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Fills" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Completed orders" })).toBeInTheDocument();
+    expect(screen.getByTestId("native-activity-last-synced")).toHaveTextContent(/^Last synced /);
+    expect(row).toHaveTextContent("CC-USDT · buy");
+    expect(row).toHaveTextContent(`${(22598).toLocaleString()} contracts · 0.0886`);
+    expect(row).not.toHaveTextContent("22598.000");
+    expect(row).not.toHaveTextContent("net");
+    expect(row.querySelector("details, summary")).toBeNull();
+    expect(row.closest("details")).toBeNull();
+    for (const removed of [
+      /Stale at read/, /incomplete coverage/, /Native fills shown/, /Instruments shown/, /History coverage/,
+      /Read at/, /history_retention_not_documented/, /funding_not_collected/, /Earlier history/,
+    ]) {
+      expect(card).not.toHaveTextContent(removed);
+    }
+    expect(screen.queryByTestId("native-activity-statistics")).not.toBeInTheDocument();
   });
 
   it("keeps completed orders as context rather than additional fills", async () => {
     vi.mocked(readNativeActivity).mockResolvedValueOnce(activityPage()).mockResolvedValueOnce(activityPage({ items: [
       nativeFill({ kind: "order", trade_id: null, quantity: "10.000", filled_quantity: "3.000", state: "canceled" }),
     ] }));
-    render(<NativeActivity statistics />);
+    render(<NativeActivity />);
     await screen.findByTestId("native-activity-row");
     fireEvent.click(screen.getByRole("button", { name: "Completed orders" }));
     await waitFor(() => expect(screen.getByTestId("native-activity-row").querySelector("summary")).toHaveTextContent("10.000 contracts requested"));
-    expect(screen.queryByTestId("native-activity-statistics")).not.toBeInTheDocument();
     expect(readNativeActivity).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "order" }), expect.anything());
   });
 
@@ -105,10 +134,9 @@ describe("stored native activity", () => {
 
   it("withholds unverified native accounts even if the response carries old items", async () => {
     vi.mocked(readNativeActivity).mockResolvedValue(activityPage({ identity_status: "unverified", freshness: "unverified" }));
-    render(<NativeActivity statistics />);
+    render(<NativeActivity compact />);
     await screen.findByText(/Account identity unverified/);
     expect(screen.queryByTestId("native-activity-row")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("native-activity-statistics")).not.toBeInTheDocument();
   });
 
   it("clears a continuation when the configured native account changes", async () => {

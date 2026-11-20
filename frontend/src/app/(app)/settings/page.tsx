@@ -1,11 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { EmailVerificationNotice } from "@/components/account/EmailVerificationNotice";
-import { PaperAccountSetup } from "@/components/settings/PaperAccountSetup";
 import { SessionScoped } from "@/components/settings/SessionScoped";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { Row } from "@/components/ui/row";
@@ -35,26 +33,22 @@ function useHashForward() {
 }
 
 function AccountSettings() {
-  const { user, organization } = useAuth();
+  const { user, organization, logout } = useAuth();
   useHashForward();
-  const openLink = (href: string, label: string) => (
-    <Link className="inline-flex h-10 items-center text-sm text-accent" href={href} aria-label={label}>
-      Open
-    </Link>
-  );
   return (
-    <div className="page-sections [&_input:not([type=checkbox])]:text-base [&_select]:text-base lg:[&_input:not([type=checkbox])]:text-sm lg:[&_select]:text-sm" data-testid="settings-workspace">
-      <PageHeader title="Settings" />
+    <div className="page-sections" data-testid="settings-workspace">
+      <PageHeader title="Account" />
       <Card>
         <CardContent className="divide-y divide-border-subtle">
           <Row label="Email" value={user?.email || "Unavailable"} />
           <Row label="Workspace" value={organization?.name || "Unavailable"} />
-          <Row label="Team" value="Members and invitations" action={openLink("/settings/team", "Team")} />
-          <Row label="Billing & usage" value="Plan and usage" action={openLink("/settings/billing", "Billing & usage")} />
         </CardContent>
       </Card>
-      <EmailVerificationNotice />
-      <PaperAccountSetup key={`${organization?.id}:${user?.id}`} />
+      <div>
+        <Button variant="outline" className="h-11" onClick={() => void logout()}>
+          Log out
+        </Button>
+      </div>
     </div>
   );
 }
