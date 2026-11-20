@@ -72,7 +72,9 @@ function openCount(text: string) {
 }
 
 beforeEach(() => {
-  latest.mockReset().mockResolvedValue(account());
+  latest.mockReset().mockResolvedValue(account({
+    synced_at: new Date(Date.now() - DEMO_REFRESH_INTERVAL_MS).toISOString(),
+  }));
   refresh.mockReset().mockResolvedValue(account());
 });
 
@@ -107,6 +109,19 @@ describe("BloFin demo Dashboard", () => {
     expect(screen.getByTestId("demo-last-synced")).toHaveTextContent("Last synced");
     expect(screen.getByTestId("dashboard-win-rate")).toHaveTextContent("Not available yet");
     expect(screen.getByTestId("dashboard-pnl")).toHaveTextContent("Not available yet");
+  });
+
+  it("uses a recently synced snapshot and waits until its normal refresh is due", async () => {
+    vi.useFakeTimers();
+    latest.mockResolvedValue(account({
+      synced_at: new Date(Date.now() - 1000).toISOString(),
+    }));
+    render(<BloFinDemoAccountCard />);
+    await act(async () => {});
+    expect(latest).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
+    await act(async () => { vi.advanceTimersByTime(DEMO_REFRESH_INTERVAL_MS - 1000); });
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   it("deduplicates repeated explicit refresh clicks", async () => {

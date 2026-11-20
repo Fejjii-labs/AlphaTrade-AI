@@ -166,14 +166,15 @@ describe("Agent workspace", () => {
       id: `page-message-${index}`, role: "assistant", content: `History ${index}`,
       created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
     }));
-    apiMocks.listMessages.mockImplementation(async (_id, params) => ({
-      items: messages.slice(params.offset ?? 0, (params.offset ?? 0) + 100),
-      total: messages.length, limit: 100, offset: params.offset ?? 0,
-    }));
+    apiMocks.listMessages.mockImplementation(async (_id, params) => {
+      const offset = params.tail ? 130 : params.offset ?? 0;
+      return { items: messages.slice(offset, offset + 100), total: messages.length, limit: 100, offset };
+    });
     render(<AgentWorkspace />);
     await screen.findByText("History 229");
     expect(screen.queryByText("History 0")).not.toBeInTheDocument();
-    expect(apiMocks.listMessages).toHaveBeenLastCalledWith(expect.any(String), { limit: 100, offset: 130 }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(apiMocks.listMessages).toHaveBeenCalledTimes(1);
+    expect(apiMocks.listMessages).toHaveBeenCalledWith(expect.any(String), { limit: 100, tail: true }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     fireEvent.click(screen.getByRole("button", { name: "Earlier messages" }));
     await screen.findByText("History 30");
     expect(screen.getByText("History 229")).toBeInTheDocument();
@@ -205,7 +206,7 @@ describe("Agent workspace", () => {
         }
         return new Promise(resolve => { replacementEarlier = resolve; });
       }
-      return { items: messages.slice(params.offset ?? 0, (params.offset ?? 0) + 100), total: 130, limit: 100, offset: params.offset ?? 0 };
+      return { items: messages.slice(30), total: 130, limit: 100, offset: 30 };
     });
     render(<AgentWorkspace />);
     await screen.findByText("Overlap history 129");
@@ -247,7 +248,7 @@ describe("Agent workspace", () => {
         }
         return new Promise(resolve => { finishNew = resolve; });
       }
-      return { items: items(id).slice(params.offset ?? 0, (params.offset ?? 0) + 100), total: 130, limit: 100, offset: params.offset ?? 0 };
+      return { items: items(id).slice(30), total: 130, limit: 100, offset: 30 };
     });
     const { rerender } = render(<AgentWorkspace />);
     await screen.findByText("first history 129");
@@ -850,7 +851,7 @@ describe("Agent workspace", () => {
     })).mockResolvedValue(new Response(JSON.stringify(agentTurnFixture)));
     vi.stubGlobal("fetch", fetchMock);
     const first = render(<AgentWorkspace />);
-    await waitFor(() => expect(apiMocks.listConversations).toHaveBeenCalled());
+    await act(async () => {});
     vi.useFakeTimers();
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Original intent" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -932,7 +933,7 @@ describe("Agent workspace", () => {
         }),
     );
     render(<AgentWorkspace />);
-    await waitFor(() => expect(apiMocks.listConversations).toHaveBeenCalled());
+    await act(async () => {});
     vi.useFakeTimers();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Record" })));
     fireEvent.click(screen.getByRole("button", { name: "Append to draft" }));
@@ -957,7 +958,7 @@ describe("Agent workspace", () => {
         }),
     );
     render(<AgentWorkspace />);
-    await waitFor(() => expect(apiMocks.listConversations).toHaveBeenCalled());
+    await act(async () => {});
     vi.useFakeTimers();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Record" })));
     fireEvent.click(screen.getByRole("button", { name: "Append to draft" }));
@@ -1063,6 +1064,15 @@ describe("Agent workspace", () => {
     expect(details).toHaveTextContent("Canonical amounts and hash");
     expect(screen.getByText(/BTC short: entry/).closest("details")).toBeNull();
     expect(screen.getByText(/BTC short: entry/)).toBeVisible();
+  });
+
+  it("loads the conversation index only when History opens", async () => {
+    render(<AgentWorkspace />);
+    await act(async () => {});
+    expect(apiMocks.listConversations).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    expect(await screen.findByRole("button", { name: "BTC plan" })).toBeInTheDocument();
+    expect(apiMocks.listConversations).toHaveBeenCalledTimes(1);
   });
 
   it("has collapsed history, no permanent capability panel or standalone trade context", async () => {

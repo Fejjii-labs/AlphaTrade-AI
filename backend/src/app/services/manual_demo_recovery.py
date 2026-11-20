@@ -1,5 +1,6 @@
 """One audited manual resolution under the account epoch; never clear global safety."""
 
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import Any
@@ -57,6 +58,10 @@ def recorded_exit_facts(session: Session, command: ExecutionCommand) -> list[dic
             .limit(2001)
         )
     )
+    return project_exit_facts(rows)
+
+
+def project_exit_facts(rows: Sequence[AuditLog]) -> list[dict[str, Any]]:
     if len(rows) > 2000:
         raise NotFoundError("Manual demo exit evidence budget exceeded.")
     by_id: dict[str, dict[str, Any]] = {}

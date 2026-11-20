@@ -310,6 +310,31 @@ def default_watchlist(*, now: datetime | None = None) -> WatchlistConfiguration:
     return WatchlistConfiguration(slots=slots, revision=0, updated_at=moment)
 
 
+def cap_enabled_slots(config: WatchlistConfiguration, max_symbols: int) -> WatchlistConfiguration:
+    """Keep at most ``max_symbols`` enabled slots, in slot order; disable the rest.
+
+    Revision and timestamps are preserved so optimistic concurrency and the UI
+    still see the stored revision. A cap at or above the slot count returns the
+    configuration unchanged.
+    """
+
+    if max_symbols >= len(config.slots):
+        return config
+    kept = 0
+    slots: list[WatchlistSlot] = []
+    for slot in config.slots:
+        if slot.enabled and kept < max_symbols:
+            kept += 1
+            slots.append(slot)
+        elif slot.enabled:
+            slots.append(WatchlistSlot(position=slot.position, symbol=slot.symbol, enabled=False))
+        else:
+            slots.append(slot)
+    return WatchlistConfiguration(
+        slots=tuple(slots), revision=config.revision, updated_at=config.updated_at
+    )
+
+
 def canonical_perpetual_symbol(symbol: str) -> str:
     try:
         token, _base = require_linear_usdt_symbol(symbol)

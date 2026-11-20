@@ -190,3 +190,10 @@ it("opens a saved note from ?saved= with a way back", async () => {
   expect(await screen.findByRole("heading", { name: "Waited for the close" })).toBeInTheDocument();
   expect(api.journal.listTrades).not.toHaveBeenCalled();
 });
+
+it("renders trades even if saved notes are still loading", async () => {
+  vi.mocked(savedEntries.list).mockImplementation(() => new Promise(() => {}));
+  render(<JournalPage />);
+  expect(await screen.findByTestId("journal-trades-table")).toBeInTheDocument();
+  expect(savedEntries.list).toHaveBeenCalledTimes(1);
+});

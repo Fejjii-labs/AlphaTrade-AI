@@ -422,6 +422,11 @@ class Settings(BaseSettings):
     # Legacy local/test file helper. Production watchlists and runtime status
     # use organization-owned database rows, shared by API and dedicated worker.
     watcher_watchlist_path: str = ""
+    # Hard cap on enabled watchlist symbols, applied when the stored watchlist
+    # is read (API and worker alike). Slots beyond the cap are reported and
+    # scanned as disabled; the stored rows are untouched. 5 (all slots) keeps
+    # today's behaviour. Lower it to scan fewer coins on a small instance.
+    watcher_watchlist_max_symbols: int = Field(default=5, ge=1, le=5)
     watcher_paper_poll_interval_seconds: float = Field(default=15.0, ge=1.0, le=3600.0)
     # Extra seconds to wait after each 15m close before a Watcher scan evaluates
     # evidence. Zero defers to the Binance REST settlement guard only. Non-zero

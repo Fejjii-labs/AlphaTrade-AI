@@ -87,11 +87,15 @@ export function useDemoAccountSnapshot(refreshKey: number) {
       failures.current = 0;
       const interval = demoRefreshIntervalMs(result.refresh_interval_seconds);
       const ownerRefresh = result.can_refresh === true && gatesOpen(result);
-      if (native || automatic || opened.current || !ownerRefresh) {
-        nextDue.current = Date.now() + interval;
-      } else {
+      nextDue.current = Date.now() + interval;
+      if (!native && !automatic && !opened.current && ownerRefresh) {
         opened.current = true;
-        armImmediate.current = true;
+        const syncedAt = Date.parse(result.synced_at ?? "");
+        const expiresAt = Date.parse(result.expires_at ?? "");
+        const due = Math.min(syncedAt + interval, expiresAt);
+        const fresh = (result.status === "ok" || result.status === "degraded") && due > Date.now();
+        nextDue.current = fresh ? due : Date.now();
+        armImmediate.current = !fresh && document.visibilityState !== "hidden";
       }
     } catch {
       if (!mounted.current || request !== generation.current) return;

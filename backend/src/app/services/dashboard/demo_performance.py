@@ -7,7 +7,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.errors import NotFoundError
 from app.db.models import ExecutionAccount, JournalTrade
 from app.schemas.common import JournalTradeSource
 from app.schemas.dashboard_demo_account import DashboardDemoAccount, DemoAccountPerformance
@@ -83,14 +82,22 @@ def attach_demo_performance(
     if truncated:
         performance.coverage += f" Only the latest {_LIMIT} recorded trades were checked."
     verified: list[dict[str, Decimal | None]] = []
-    history = ManualDemoHistoryService(session)
+    attempts = ManualDemoHistoryService(session).get_many(
+        tenant,
+        (
+            row.execution_lifecycle_id
+            for row in rows
+            if row.source == JournalTradeSource.MANUAL_DEMO_TEST
+            and row.execution_lifecycle_id is not None
+        ),
+        account_id=configured.id,
+    )
     for row in rows:
         if row.source != JournalTradeSource.MANUAL_DEMO_TEST or row.execution_lifecycle_id is None:
             performance.unresolved_trades += 1
             continue
-        try:
-            attempt = history.get(tenant, row.execution_lifecycle_id)
-        except NotFoundError:
+        attempt = attempts.get(row.execution_lifecycle_id)
+        if attempt is None:
             performance.unresolved_trades += 1
             continue
         proof = attempt.evidence

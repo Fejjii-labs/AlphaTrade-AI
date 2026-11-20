@@ -1,10 +1,15 @@
 """Authenticated durable manual command reads; no venue IO or execution authority."""
 
+from __future__ import annotations
+
+from collections import defaultdict
+from collections.abc import Iterable, Iterator
 from datetime import datetime
 from decimal import Decimal
+from typing import NamedTuple
 from uuid import UUID
 
-from sqlalchemy import Numeric, Select, func, select
+from sqlalchemy import Numeric, Select, and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
@@ -32,8 +37,20 @@ from app.schemas.trade_plan import TradePlanRevisionSemantic
 from app.security.tenant import TenantContext
 from app.services.canonical_serialization import canonical_sha256
 from app.services.manual_demo_plan import MANUAL_DEMO_ORIGIN
-from app.services.manual_demo_recovery import recorded_exit_facts
+from app.services.manual_demo_recovery import project_exit_facts
 from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
+
+_EXIT_OPERATIONS = ("manual_demo_exit_fill", "manual_demo_exit_fill_currency_evidence")
+
+
+class _CommandEvidence(NamedTuple):
+    revision: TradePlanRevision
+    account: ExecutionAccount
+    effect: VenueSubmitEffect | None
+    projection: ExecutionProjection | None
+    trade: JournalTrade | None
+    reservation: RiskReservation | None
+    resolution: ManualDemoLifecycleResolution | None
 
 
 def current_native_receipt(session: Session, command: ExecutionCommand) -> AuditLog | None:
@@ -146,7 +163,7 @@ class ManualDemoHistoryService:
             .limit(filters.limit)
         )
         return ManualDemoHistory(
-            items=tuple(self.project(tenant, command) for command in commands),
+            items=tuple(self._project_many(tenant, list(commands))),
             total=total,
             limit=filters.limit,
             offset=filters.offset,
@@ -160,40 +177,116 @@ class ManualDemoHistoryService:
             raise NotFoundError("Manual demo command not found in your account scope.")
         return self.project(tenant, command)
 
-    def project(self, tenant: TenantContext, command: ExecutionCommand) -> ManualDemoAttempt:
-        row = self.session.get(TradePlanRevision, command.revision_id)
-        account = self.session.get(ExecutionAccount, command.account_id)
-        assert row is not None and account is not None
-        plan = trade_plan_revision_to_schema(row)
-        if (
-            canonical_sha256(TradePlanRevisionSemantic.model_validate(row.semantic_payload))
-            != command.plan_content_hash
-            or plan.content_hash != command.plan_content_hash
-        ):
-            raise NotFoundError("Manual demo immutable plan integrity failed.")
-        effect = self.session.scalar(
-            select(VenueSubmitEffect).where(VenueSubmitEffect.command_id == command.id)
-        )
-        receipt = self.session.scalar(
-            select(ExecutionReceipt).where(ExecutionReceipt.command_id == command.id)
-        )
-        projection = (
-            self.session.scalar(
-                select(ExecutionProjection).where(ExecutionProjection.receipt_id == receipt.id)
-            )
-            if receipt
-            else None
-        )
-        trade = self.session.scalar(
-            select(JournalTrade).where(
-                JournalTrade.organization_id == tenant.organization_id,
-                JournalTrade.user_id == tenant.user_id,
-                JournalTrade.execution_lifecycle_id == command.id,
-            )
-        )
-        claims = tuple(
+    def get_many(
+        self, tenant: TenantContext, command_ids: Iterable[UUID], *, account_id: UUID
+    ) -> dict[UUID, ManualDemoAttempt]:
+        ids = set(command_ids)
+        if not ids:
+            return {}
+        commands = list(
             self.session.scalars(
-                command_query(tenant, ManualDemoHistoryFilter(account_id=command.account_id))
+                command_query(tenant, ManualDemoHistoryFilter(account_id=account_id)).where(
+                    ExecutionCommand.id.in_(ids)
+                )
+            )
+        )
+        return {
+            attempt.command_id: attempt
+            for attempt in self._project_many(tenant, commands, skip_missing=True)
+        }
+
+    def project(self, tenant: TenantContext, command: ExecutionCommand) -> ManualDemoAttempt:
+        return next(self._project_many(tenant, [command]))
+
+    def _project_many(
+        self, tenant: TenantContext, commands: list[ExecutionCommand], *, skip_missing: bool = False
+    ) -> Iterator[ManualDemoAttempt]:
+        if not commands:
+            return
+        command_ids = [command.id for command in commands]
+
+        def scoped(model):
+            return (
+                model.organization_id == tenant.organization_id,
+                model.user_id == tenant.user_id,
+            )
+
+        related = {
+            row[0]: _CommandEvidence(*row[1:])
+            for row in self.session.execute(
+                select(
+                    ExecutionCommand.id,
+                    TradePlanRevision,
+                    ExecutionAccount,
+                    VenueSubmitEffect,
+                    ExecutionProjection,
+                    JournalTrade,
+                    RiskReservation,
+                    ManualDemoLifecycleResolution,
+                )
+                .join(TradePlanRevision, TradePlanRevision.id == ExecutionCommand.revision_id)
+                .join(ExecutionAccount, ExecutionAccount.id == ExecutionCommand.account_id)
+                .outerjoin(VenueSubmitEffect, VenueSubmitEffect.command_id == ExecutionCommand.id)
+                .outerjoin(
+                    ExecutionReceipt,
+                    and_(
+                        ExecutionReceipt.command_id == ExecutionCommand.id,
+                        *scoped(ExecutionReceipt),
+                    ),
+                )
+                .outerjoin(
+                    ExecutionProjection, ExecutionProjection.receipt_id == ExecutionReceipt.id
+                )
+                .outerjoin(
+                    JournalTrade,
+                    and_(
+                        JournalTrade.execution_lifecycle_id == ExecutionCommand.id,
+                        *scoped(JournalTrade),
+                    ),
+                )
+                .outerjoin(
+                    RiskReservation,
+                    and_(
+                        RiskReservation.command_id == ExecutionCommand.id,
+                        RiskReservation.organization_id == tenant.organization_id,
+                    ),
+                )
+                .outerjoin(
+                    ManualDemoLifecycleResolution,
+                    and_(
+                        ManualDemoLifecycleResolution.command_id == ExecutionCommand.id,
+                        *scoped(ManualDemoLifecycleResolution),
+                    ),
+                )
+                .where(
+                    ExecutionCommand.id.in_(command_ids),
+                    *scoped(ExecutionCommand),
+                    *scoped(TradePlanRevision),
+                    *scoped(ExecutionAccount),
+                )
+            )
+        }
+        claims = {
+            account_id: self._account_claims(tenant, account_id)
+            for account_id in {command.account_id for command in commands}
+        }
+        audits = self._load_audits(tenant, command_ids)
+        for command in commands:
+            try:
+                evidence = related.get(command.id)
+                if evidence is None:
+                    raise NotFoundError("Manual demo command not found in your account scope.")
+                yield self._project(
+                    command, evidence, claims[command.account_id], audits[str(command.id)]
+                )
+            except NotFoundError:
+                if not skip_missing:
+                    raise
+
+    def _account_claims(self, tenant: TenantContext, account_id: UUID) -> tuple[UUID, ...]:
+        return tuple(
+            self.session.scalars(
+                command_query(tenant, ManualDemoHistoryFilter(account_id=account_id))
                 .where(
                     ExecutionCommand.outcome == ExecutionCommandOutcome.ALLOW,
                     ~select(ManualDemoLifecycleResolution.id)
@@ -204,32 +297,94 @@ class ManualDemoHistoryService:
                 .limit(50)
             )
         )
-        reservation = self.session.scalar(
-            select(RiskReservation).where(RiskReservation.command_id == command.id)
-        )
-        resolution = self.session.scalar(
-            select(ManualDemoLifecycleResolution).where(
-                ManualDemoLifecycleResolution.command_id == command.id
-            )
-        )
 
-        def audit(operation: str) -> AuditLog | None:
-            return self.session.scalar(
-                select(AuditLog)
-                .where(
-                    AuditLog.organization_id == tenant.organization_id,
-                    AuditLog.user_id == tenant.user_id,
-                    AuditLog.resource_type == "manual_demo_test",
-                    AuditLog.resource_id == str(command.id),
-                    AuditLog.redacted_metadata["operation"].as_string() == operation,
+    def _load_audits(
+        self, tenant: TenantContext, command_ids: list[UUID]
+    ) -> dict[str, list[AuditLog]]:
+        operation = AuditLog.redacted_metadata["operation"].as_string()
+        exit_evidence = operation.in_(_EXIT_OPERATIONS).is_(True)
+        order = (AuditLog.created_at.desc(), AuditLog.id.desc())
+        # One extra exit row is enough to preserve the per-command evidence limit.
+        ranked = (
+            select(
+                AuditLog.id,
+                exit_evidence.label("is_exit"),
+                func.row_number()
+                .over(
+                    partition_by=(AuditLog.resource_id, exit_evidence),
+                    order_by=order,
                 )
-                .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
-                .limit(1)
+                .label("evidence_rank"),
             )
+            .where(
+                AuditLog.organization_id == tenant.organization_id,
+                AuditLog.user_id == tenant.user_id,
+                AuditLog.resource_type == "manual_demo_test",
+                AuditLog.resource_id.in_([str(command_id) for command_id in command_ids]),
+                or_(
+                    AuditLog.action == AuditEventType.POSITION_UPDATED,
+                    operation.in_(
+                        (
+                            "manual_demo_lifecycle_observed",
+                            "manual_demo_reconciliation_failed",
+                            "manual_demo_native_order_receipt",
+                            *_EXIT_OPERATIONS,
+                        )
+                    ),
+                ),
+            )
+            .subquery()
+        )
+        rows = self.session.scalars(
+            select(AuditLog)
+            .join(ranked, ranked.c.id == AuditLog.id)
+            .where(or_(~ranked.c.is_exit, ranked.c.evidence_rank <= 2001))
+            .order_by(*order)
+        )
+        audits: dict[str, list[AuditLog]] = defaultdict(list)
+        for row in rows:
+            assert row.resource_id is not None
+            audits[row.resource_id].append(row)
+        return audits
 
-        native = current_native_receipt(self.session, command)
-        lifecycle = audit("manual_demo_lifecycle_observed")
-        failure = audit("manual_demo_reconciliation_failed")
+    def _project(
+        self,
+        command: ExecutionCommand,
+        evidence: _CommandEvidence,
+        claims: tuple[UUID, ...],
+        audits: list[AuditLog],
+    ) -> ManualDemoAttempt:
+        row, account, effect, projection, trade, reservation, resolution = evidence
+        plan = trade_plan_revision_to_schema(row)
+        if (
+            canonical_sha256(TradePlanRevisionSemantic.model_validate(row.semantic_payload))
+            != command.plan_content_hash
+            or plan.content_hash != command.plan_content_hash
+        ):
+            raise NotFoundError("Manual demo immutable plan integrity failed.")
+
+        by_operation: dict[str, list[AuditLog]] = defaultdict(list)
+        for audit in audits:
+            by_operation[audit.redacted_metadata.get("operation")].append(audit)
+        observations = by_operation["manual_demo_lifecycle_observed"]
+        lifecycle = next(iter(observations), None)
+        failure = next(iter(by_operation["manual_demo_reconciliation_failed"]), None)
+        digest = next(
+            (
+                a.redacted_metadata["native_receipt_hash"]
+                for a in observations
+                if a.redacted_metadata.get("native_receipt_hash") is not None
+            ),
+            None,
+        )
+        native = next(
+            (
+                a
+                for a in by_operation["manual_demo_native_order_receipt"]
+                if not digest or a.redacted_metadata.get("receipt_hash") == digest
+            ),
+            None,
+        )
         facts = dict(native.redacted_metadata) if native else {}
         if native:
             digest = facts.pop("receipt_hash", None)
@@ -239,17 +394,9 @@ class ManualDemoHistoryService:
                 or facts.get("plan_content_hash") != command.plan_content_hash
             ):
                 raise NotFoundError("Manual demo native receipt integrity failed.")
-        entry_fee_rows = list(
-            self.session.scalars(
-                select(AuditLog).where(
-                    AuditLog.organization_id == tenant.organization_id,
-                    AuditLog.user_id == tenant.user_id,
-                    AuditLog.resource_type == "manual_demo_test",
-                    AuditLog.resource_id == str(command.id),
-                    AuditLog.action == AuditEventType.POSITION_UPDATED,
-                )
-            )
-        )
+        entry_fee_rows = [
+            a for a in reversed(audits) if a.action == AuditEventType.POSITION_UPDATED
+        ]
         entry_fees_by_id = {
             a.redacted_metadata["fill_identity"]: Decimal(a.redacted_metadata["fee"])
             for a in entry_fee_rows
@@ -264,7 +411,13 @@ class ManualDemoHistoryService:
             else None
         )
         life = lifecycle.redacted_metadata if lifecycle else {}
-        exit_facts = recorded_exit_facts(self.session, command)
+        exit_facts = project_exit_facts(
+            [
+                a
+                for a in reversed(audits)
+                if a.redacted_metadata.get("operation") in _EXIT_OPERATIONS
+            ]
+        )
         exit_quantity = sum((Decimal(f["quantity"]) for f in exit_facts), Decimal("0"))
         exit_price = (
             sum((Decimal(f["quantity"]) * Decimal(f["price"]) for f in exit_facts), Decimal("0"))
@@ -298,23 +451,10 @@ class ManualDemoHistoryService:
             assert failure is not None
             diagnostics = [failure.redacted_metadata["diagnostic"]]
         filled = projection.filled_quantity if projection else Decimal("0")
-        closed_proof = (
-            self.session.scalar(
-                select(AuditLog.id)
-                .where(
-                    AuditLog.organization_id == command.organization_id,
-                    AuditLog.user_id == command.user_id,
-                    AuditLog.resource_type == "manual_demo_test",
-                    AuditLog.resource_id == str(command.id),
-                    AuditLog.redacted_metadata["operation"].as_string()
-                    == "manual_demo_lifecycle_observed",
-                    AuditLog.redacted_metadata["position_status"].as_string() == "closed_verified",
-                    AuditLog.redacted_metadata["plan_content_hash"].as_string()
-                    == command.plan_content_hash,
-                )
-                .limit(1)
-            )
-            is not None
+        closed_proof = any(
+            a.redacted_metadata.get("position_status") == "closed_verified"
+            and a.redacted_metadata.get("plan_content_hash") == command.plan_content_hash
+            for a in by_operation["manual_demo_lifecycle_observed"]
         )
         remaining = projection.remaining_quantity if projection else plan.quantity.value
         unsent = command.outcome == ExecutionCommandOutcome.BLOCKED or (

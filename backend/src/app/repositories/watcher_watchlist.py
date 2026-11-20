@@ -15,6 +15,7 @@ from app.workers.watcher_watchlist import (
     SymbolRuntimeStatus,
     SymbolStatusBook,
     WatchlistConfiguration,
+    cap_enabled_slots,
     configuration_from_payload,
     default_watchlist,
     replace_watchlist,
@@ -30,6 +31,11 @@ class WatcherWatchlistRepository:
         self.session = session
 
     def load(self, organization_id: UUID) -> WatchlistConfiguration:
+        """The stored watchlist, capped to ``WATCHER_WATCHLIST_MAX_SYMBOLS`` enabled slots."""
+
+        return cap_enabled_slots(self._load_stored(organization_id), self._max_symbols())
+
+    def _load_stored(self, organization_id: UUID) -> WatchlistConfiguration:
         row = self.session.get(WatcherWatchlistRow, organization_id, populate_existing=True)
         if row is None:
             # The immutable revision-zero default is identical in every process.
@@ -41,6 +47,12 @@ class WatcherWatchlistRepository:
                 "updated_at": aware(row.updated_at).isoformat(),
             }
         )
+
+    @staticmethod
+    def _max_symbols() -> int:
+        from app.core.config import get_settings
+
+        return get_settings().watcher_watchlist_max_symbols
 
     def replace(
         self, organization_id: UUID, slots: list[tuple[str, bool]], *, expected_revision: int
@@ -129,11 +141,14 @@ class WatcherWatchlistRepository:
         if current is None:
             if config.revision != 0:
                 return False
+            # Revision zero is the uncapped default. The worker's view can
+            # disable slots temporarily, so persist the default on first publish.
+            stored = default_watchlist(now=config.updated_at)
             current = WatcherWatchlistRow(
                 organization_id=organization_id,
-                revision=0,
-                slots=[asdict(s) for s in config.slots],
-                updated_at=config.updated_at,
+                revision=stored.revision,
+                slots=[asdict(slot) for slot in stored.slots],
+                updated_at=stored.updated_at,
             )
             self.session.add(current)
             self.session.flush()
@@ -203,6 +218,7 @@ class WatcherWatchlistRepository:
             valid = (
                 row is not None
                 and row.configuration_revision == config.revision
+                and row.payload.get("enabled") == slot.enabled
                 and (
                     timedelta(0)
                     <= aware(now) - aware(row.observed_at)

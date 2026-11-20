@@ -9,7 +9,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.agents.graph import invoke_agent_graph
 from app.agents.runtime import AgentRuntime
 from app.agents.state_utils import parse_state, state_to_dict
 from app.core.config import Settings, get_settings
@@ -35,6 +34,14 @@ from app.services.risk_service import RiskService
 from app.services.strategy_service import StrategyService
 from app.strategies.registry import get_strategy_registry
 from app.tools.registry import build_default_registry as build_tool_registry
+
+
+def invoke_agent_graph(state: dict[str, Any], runtime: AgentRuntime) -> dict[str, Any]:
+    """Run the shared compiled graph. LangGraph is imported on first call, not at API start."""
+
+    from app.agents.graph import invoke_agent_graph as _invoke
+
+    return _invoke(state, runtime)
 
 
 @dataclass(frozen=True)

@@ -97,6 +97,7 @@ class ConversationMessageRepository(SQLAlchemyRepository[ConversationMessage]):
         limit: int = 50,
         offset: int = 0,
         newest_first: bool = False,
+        tail: bool = False,
     ) -> tuple[list[ConversationMessage], int]:
         filters = [
             ConversationMessage.conversation_id == conversation_id,
@@ -114,12 +115,14 @@ class ConversationMessageRepository(SQLAlchemyRepository[ConversationMessage]):
             or 0
         )
         order = (
-            ConversationMessage.created_at.desc()
+            (ConversationMessage.created_at.desc(), ConversationMessage.id.desc())
             if newest_first
-            else ConversationMessage.created_at.asc()
+            else (ConversationMessage.created_at.asc(), ConversationMessage.id.asc())
         )
+        if tail:
+            offset = max(0, total - limit)
         stmt = (
-            select(ConversationMessage).where(*filters).order_by(order).limit(limit).offset(offset)
+            select(ConversationMessage).where(*filters).order_by(*order).limit(limit).offset(offset)
         )
         return list(self._session.scalars(stmt).all()), total
 

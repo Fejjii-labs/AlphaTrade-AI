@@ -189,6 +189,7 @@ class ConversationService:
         user_id: uuid.UUID,
         limit: int = 100,
         offset: int = 0,
+        tail: bool = False,
     ) -> PaginatedConversationMessages:
         self.require(conversation_id, organization_id=organization_id, user_id=user_id)
         rows, total = self._messages.list_for_conversation(
@@ -197,12 +198,13 @@ class ConversationService:
             user_id=user_id,
             limit=limit,
             offset=offset,
+            tail=tail,
         )
         return PaginatedConversationMessages(
             items=[ConversationMessageRecord.model_validate(row) for row in rows],
             total=total,
             limit=limit,
-            offset=offset,
+            offset=max(0, total - limit) if tail else offset,
         )
 
     def history_turns(
