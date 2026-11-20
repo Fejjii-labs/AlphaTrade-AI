@@ -60,7 +60,7 @@ function KpiCard({
   detail,
   visual,
   testId,
-  unverified = false,
+  pending = false,
 }: {
   label: string;
   value: string;
@@ -69,7 +69,8 @@ function KpiCard({
   detail?: ReactNode;
   visual?: ReactNode;
   testId: string;
-  unverified?: boolean;
+  /** Some closed trades still wait for their P&L from BloFin. */
+  pending?: boolean;
 }) {
   return (
     <div
@@ -79,7 +80,7 @@ function KpiCard({
       )}
       data-testid={testId}
       data-tone={tone}
-      data-unverified={unverified ? "true" : undefined}
+      data-pending={pending ? "true" : undefined}
     >
       <span className={cn("absolute inset-x-0 top-0 h-1", toneBar[tone])} aria-hidden="true" />
       <div className="min-w-0">
@@ -94,7 +95,7 @@ function KpiCard({
         </p>
         <p className={cn("mt-1.5 font-data text-2xl font-semibold tabular-nums", toneText[tone])}>{value}</p>
         {detail ? (
-          <div className={cn("mt-1 text-xs", unverified ? "text-badge-warning" : "text-text-secondary")}>{detail}</div>
+          <div className={cn("mt-1 text-xs", pending ? "text-badge-warning" : "text-text-secondary")}>{detail}</div>
         ) : null}
       </div>
       {visual ? <div className="shrink-0">{visual}</div> : null}
@@ -269,38 +270,47 @@ export function PerformanceKpiCards({
   risk = null,
   loading = false,
   tradeCoverage,
-  unverified = false,
+  pendingCount = 0,
 }: {
   summary: JournalDashboardSummary | null;
   risk?: JournalDashboardRisk | null;
   /** Short "N of M verified" shown under Net P&L (demo scope). */
   tradeCoverage?: string;
-  /** Some P&L is BloFin's price move of an unreconciled close (before fees). */
-  unverified?: boolean;
+  /** Closed trades whose P&L BloFin has not reported yet; never priced by the app. */
+  pendingCount?: number;
   loading?: boolean;
 }) {
   if (loading) return <KpiSkeletons />;
   const s = summary;
   const winRate = s?.win_rate ?? null;
   const dayRate = dayWinRate(risk);
+  const pending = pendingCount > 0;
+  const allPending = pending && (s?.net_pnl ?? null) === null;
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="performance-kpis">
       <KpiCard
         testId="kpi-net-pnl"
         label="Net P&L"
         icon={Wallet}
-        value={formatMonetary(s?.net_pnl)}
-        tone={moneyTone(s?.net_pnl)}
+        value={allPending ? "Pending" : formatMonetary(s?.net_pnl)}
+        tone={allPending ? "neutral" : moneyTone(s?.net_pnl)}
         detail={
-          tradeCoverage ? (
-            <span title={unverified ? "Unverified: BloFin price P&L before fees" : undefined}>{tradeCoverage}</span>
-          ) : s ? (
-            `${formatCount(s.trade_count)} closed trades`
-          ) : (
-            "No data"
-          )
+          <>
+            {tradeCoverage ? (
+              <span>{tradeCoverage}</span>
+            ) : s ? (
+              `${formatCount(s.trade_count)} closed trades`
+            ) : (
+              "No data"
+            )}
+            {pending ? (
+              <span className="block">
+                {allPending ? "P&L pending from BloFin" : `${formatCount(pendingCount)} pending from BloFin`}
+              </span>
+            ) : null}
+          </>
         }
-        unverified={unverified}
+        pending={pending}
       />
       <KpiCard
         testId="kpi-expectancy"

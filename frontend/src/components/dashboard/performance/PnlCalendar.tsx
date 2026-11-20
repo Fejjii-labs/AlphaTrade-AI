@@ -73,8 +73,10 @@ function DayCell({
     );
   }
   const tone = pnlTone(day.net_pnl);
-  const unverified = (day.unverified_count ?? 0) > 0;
-  const label = `${date}${todaySuffix}: ${formatMonetary(day.net_pnl)} net${unverified ? " (unverified)" : ""}, ${
+  const pending = (day.pnl_pending_count ?? 0) > 0;
+  const allPending = pending && day.net_pnl === null;
+  const netText = allPending ? "P&L pending from BloFin" : `${formatMonetary(day.net_pnl)} net`;
+  const label = `${date}${todaySuffix}: ${netText}${pending && !allPending ? " (some P&L pending from BloFin)" : ""}, ${
     day.trade_count
   } trade${day.trade_count === 1 ? "" : "s"}, win ${formatPercent(day.win_rate, 0)}`;
   return (
@@ -90,18 +92,18 @@ function DayCell({
       aria-current={isToday ? "date" : undefined}
       data-testid={`calendar-day-${date}`}
       data-tone={tone}
-      data-unverified={unverified ? "true" : undefined}
+      data-pending={pending ? "true" : undefined}
     >
       <span className="flex items-center justify-end gap-1 text-[11px] text-text-secondary">
-        {unverified ? <span className="h-1.5 w-1.5 rounded-full bg-warning" aria-hidden="true" /> : null}
+        {pending ? <span className="h-1.5 w-1.5 rounded-full bg-warning" aria-hidden="true" /> : null}
         {dayNumber}
       </span>
       {/* Phones get whole units so a 7-column cell never truncates the sign or digits. */}
       <span className={cn("truncate font-data text-[10px] font-semibold sm:hidden", valueTone[tone])}>
-        {formatCompactPnl(day.net_pnl, { whole: true })}
+        {allPending ? "Pending" : formatCompactPnl(day.net_pnl, { whole: true })}
       </span>
       <span className={cn("hidden truncate font-data text-sm font-semibold sm:block", valueTone[tone])}>
-        {formatCompactPnl(day.net_pnl)}
+        {allPending ? "Pending" : formatCompactPnl(day.net_pnl)}
       </span>
       <span className="hidden text-[11px] text-text-secondary sm:block">
         {day.trade_count} trade{day.trade_count === 1 ? "" : "s"}
