@@ -4,6 +4,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import event
 
 from app.db.models import JournalTrade
 from app.interactive_agent.contracts import AgentTurnRequest
@@ -12,6 +13,7 @@ from app.schemas.common import JournalTradeSource, JournalTradeStatus, TradeDire
 from app.schemas.dashboard_demo_account import DashboardDemoAccount
 from app.security.tenant import TenantContext
 from app.services.dashboard.demo_performance import attach_demo_performance
+from app.services.manual_demo_history import ManualDemoHistoryService
 from tests.support.postgres_persistence import requires_postgres
 from tests.test_manual_blofin_demo import world as world
 from tests.test_manual_demo_lifecycle_workflow import set_exit
@@ -69,6 +71,59 @@ def test_account_performance_uses_exact_closed_lifecycle_and_retains_unknown_fun
             "1 of 1 trades verified"
         )
         assert "outside venue history" in performance.coverage
+
+
+def test_account_performance_statement_count_does_not_grow_per_trade(native):
+    world, changes = native
+
+    def measured_read():
+        statements = []
+
+        def count(_conn, _cursor, statement, *_args):
+            statements.append(statement)
+
+        with world[0]() as session:
+            connection = session.connection()
+            event.listen(connection, "before_cursor_execute", count)
+            try:
+                return account_view(world, session).performance, len(statements)
+            finally:
+                event.remove(connection, "before_cursor_execute", count)
+
+    _, first = _submit(native)
+    set_exit(native, first)
+    with world[0]() as session:
+        service = _service(world, session)
+        service.reconcile(world[1], first.command_id)
+        service.resolve(world[1], first.command_id)
+    one, one_count = measured_read()
+    assert one.verified_closed_trades == 1
+
+    changes["response"].clear()
+    world[3].order = None
+    world[3].clock_delta = 0
+    changes["fill"]["tradeId"] = "7772188"
+    _, second = _submit(native)
+    set_exit(native, second)
+    with world[0]() as session:
+        _service(world, session).reconcile(world[1], second.command_id)
+    two, two_count = measured_read()
+    assert two.verified_closed_trades == two.manual_test_trades == 2
+    assert two.unresolved_trades == 0
+    assert two.fees == 2 * (Decimal("0.00497364") + Decimal("-0.00498"))
+    assert two.gross_pnl is two.net_pnl is two.funding is None
+    assert two_count == one_count == 6
+
+    account_id = UUID(world[2].governed_blofin_demo_account_id)
+    with world[0]() as session:
+        history = ManualDemoHistoryService(session)
+        attempts = history.get_many(
+            world[1], [first.command_id, second.command_id, uuid4()], account_id=account_id
+        )
+        assert set(attempts) == {first.command_id, second.command_id}
+        for command_id, attempt in attempts.items():
+            assert attempt == history.get(world[1], command_id)
+            assert attempt.evidence.account_claim_command_ids == (second.command_id,)
 
 
 @pytest.mark.parametrize("scope", ["user", "tenant", "account", "unbound"])
