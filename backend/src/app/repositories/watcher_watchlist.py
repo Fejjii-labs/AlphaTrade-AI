@@ -15,6 +15,7 @@ from app.workers.watcher_watchlist import (
     SymbolRuntimeStatus,
     SymbolStatusBook,
     WatchlistConfiguration,
+    cap_enabled_slots,
     configuration_from_payload,
     default_watchlist,
     replace_watchlist,
@@ -30,6 +31,11 @@ class WatcherWatchlistRepository:
         self.session = session
 
     def load(self, organization_id: UUID) -> WatchlistConfiguration:
+        """The stored watchlist, capped to ``WATCHER_WATCHLIST_MAX_SYMBOLS`` enabled slots."""
+
+        return cap_enabled_slots(self._load_stored(organization_id), self._max_symbols())
+
+    def _load_stored(self, organization_id: UUID) -> WatchlistConfiguration:
         row = self.session.get(WatcherWatchlistRow, organization_id, populate_existing=True)
         if row is None:
             # The immutable revision-zero default is identical in every process.
@@ -41,6 +47,12 @@ class WatcherWatchlistRepository:
                 "updated_at": aware(row.updated_at).isoformat(),
             }
         )
+
+    @staticmethod
+    def _max_symbols() -> int:
+        from app.core.config import get_settings
+
+        return get_settings().watcher_watchlist_max_symbols
 
     def replace(
         self, organization_id: UUID, slots: list[tuple[str, bool]], *, expected_revision: int
