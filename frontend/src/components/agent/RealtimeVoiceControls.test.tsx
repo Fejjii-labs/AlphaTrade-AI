@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({ instances: [] as Array<{
   options: Options; start: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn>;
   interrupt: ReturnType<typeof vi.fn>; resume: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>; setConversation: ReturnType<typeof vi.fn>;
+  pageHidden: ReturnType<typeof vi.fn>; contextChanged: ReturnType<typeof vi.fn>;
 }> }));
 
 const config = vi.hoisted(() => ({ voiceConfig: vi.fn() }));
@@ -17,7 +18,7 @@ vi.mock("@/lib/api", () => ({ api: { agent: config } }));
 vi.mock("@/lib/voice/realtime-controller", () => ({
   RealtimeVoiceController: class {
     start = vi.fn(); end = vi.fn(); interrupt = vi.fn(); resume = vi.fn();
-    dispose = vi.fn(); setConversation = vi.fn();
+    dispose = vi.fn(); setConversation = vi.fn(); pageHidden = vi.fn(); contextChanged = vi.fn();
     meter = vi.fn(() => ({ speaking: false, level: 0 }));
     constructor(public options: Options) { mocks.instances.push(this); }
   },
@@ -85,14 +86,32 @@ describe("GPT Live controls (mocked controller, no microphone)", () => {
     expect(p.onPending).not.toHaveBeenCalled(); expect(p.onResult).not.toHaveBeenCalled();
   });
 
-  it("ends on hidden navigation, context replacement and unmount", () => {
+  it("reports hidden navigation and context replacement to one controller, disposing on unmount", () => {
     const p = props(); const view = render(<RealtimeVoiceControls {...p} />); const first = mocks.instances[0];
     vi.spyOn(document, "hidden", "get").mockReturnValue(true);
-    fireEvent(document, new Event("visibilitychange")); expect(first.end).toHaveBeenCalledOnce();
+    fireEvent(document, new Event("visibilitychange")); expect(first.pageHidden).toHaveBeenCalledOnce();
+    expect(first.end).not.toHaveBeenCalled();
     view.rerender(<RealtimeVoiceControls {...p} contextKey="another-context" />);
-    expect(first.dispose).toHaveBeenCalledOnce();
-    const second = mocks.instances[1];
-    view.unmount(); expect(second.dispose).toHaveBeenCalledOnce(); expect(p.onActive).toHaveBeenLastCalledWith(false);
+    expect(first.contextChanged).toHaveBeenCalledOnce();
+    expect(first.dispose).not.toHaveBeenCalled();
+    view.unmount(); expect(first.dispose).toHaveBeenCalledOnce(); expect(p.onActive).toHaveBeenLastCalledWith(false);
+    expect(mocks.instances).toHaveLength(1);
+  });
+
+  it("a strategy binding that loads during start neither rebuilds nor cancels the controller", () => {
+    const p = props(); const view = render(<RealtimeVoiceControls {...p} />); const voice = mocks.instances[0];
+    view.rerender(<RealtimeVoiceControls {...p} strategyId="strategy-1" />);
+    view.rerender(<RealtimeVoiceControls {...p} strategyId="strategy-1" symbol="ETHUSDT" />);
+    expect(mocks.instances).toHaveLength(1);
+    expect(voice.dispose).not.toHaveBeenCalled(); expect(voice.contextChanged).not.toHaveBeenCalled();
+    const context = voice.options.context as () => { symbol?: string; strategy_id?: string };
+    expect(context()).toEqual({ symbol: "ETHUSDT", strategy_id: "strategy-1" });
+  });
+
+  it("a new sign-in session gets a fresh controller", () => {
+    const p = props(); const view = render(<RealtimeVoiceControls {...p} />); const first = mocks.instances[0];
+    view.rerender(<RealtimeVoiceControls {...p} sessionKey="another-session" />);
+    expect(first.dispose).toHaveBeenCalledOnce(); expect(mocks.instances).toHaveLength(2);
   });
 
   it("keeps conversation and logout cleanup attached to the current controller", () => {
