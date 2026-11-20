@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from typing import Any
 from uuid import UUID, uuid5
 
 from sqlalchemy import select
@@ -125,6 +126,75 @@ def normalize_paper_symbols(symbols: Sequence[str]) -> tuple[str, ...]:
         seen.add(token)
         ordered.append(token)
     return tuple(ordered)
+
+
+@dataclass(frozen=True, slots=True)
+class WatchlistTargetLoad:
+    """One watchlist-mode target load: targets plus assignment bookkeeping."""
+
+    targets: tuple[PaperScanTarget, ...]
+    assignment_configured: bool = False
+    assignment_managed_symbols: frozenset[str] = frozenset()
+    assignment_observations: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+
+
+def load_watchlist_scan_targets(
+    session: Session,
+    *,
+    symbols: Sequence[str],
+    organization_id: UUID | None,
+    limit: int,
+    project_timeframes: Sequence[str] = (),
+) -> WatchlistTargetLoad:
+    """The current watchlist target set: explicit assignments, then inferred scopes.
+
+    Shared by the paper worker (what it scans) and monitoring (which scopes are
+    current), so both agree on the same set at the same watchlist revision.
+    """
+
+    from app.repositories.watcher_watchlist import WatcherWatchlistRepository
+    from app.services.watcher_assignment_service import (
+        assignment_configuration_exists,
+        assignment_scan_targets,
+        managed_assignment_coverage,
+    )
+
+    observations: dict[str, list[dict[str, Any]]] = {}
+    configured = False
+    managed_symbols: frozenset[str] = frozenset()
+    explicit: tuple[PaperScanTarget, ...] = ()
+    managed: set[tuple[UUID, UUID, str]] = set()
+    revision: int | None = None
+    if organization_id is not None:
+        config = WatcherWatchlistRepository(session).load(organization_id)
+        revision = config.revision
+        symbols = tuple(symbol for symbol in symbols if symbol in config.enabled_symbols())
+    if organization_id is not None and assignment_configuration_exists(session, organization_id):
+        configured = True
+        explicit, observations = assignment_scan_targets(
+            session,
+            organization_id=organization_id,
+            symbols=tuple(symbols),
+            limit=limit,
+        )
+        managed = managed_assignment_coverage(session, organization_id)
+        managed_symbols = frozenset(symbol for _, _, symbol in managed)
+    inferred = list_watchlist_scan_targets(
+        session,
+        symbols=symbols,
+        organization_id=organization_id,
+        limit=limit - len(explicit),
+        excluded_coverage=managed,
+        project_timeframes=project_timeframes,
+    )
+    if revision is not None:
+        inferred = tuple(replace(target, configuration_revision=revision) for target in inferred)
+    return WatchlistTargetLoad(
+        targets=explicit + inferred,
+        assignment_configured=configured,
+        assignment_managed_symbols=managed_symbols,
+        assignment_observations=observations,
+    )
 
 
 def list_paper_scan_targets(

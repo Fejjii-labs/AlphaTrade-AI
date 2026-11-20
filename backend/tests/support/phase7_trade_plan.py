@@ -72,6 +72,23 @@ def make_world() -> CanonicalPlanWorld:
     )
 
 
+def single_target_exits(candidate: Candidate) -> dict[str, Any]:
+    """The fixture exits reduced to TP1 at full size with no runner.
+
+    Governed demo dispatch attaches one full-size TP and refuses a ladder.
+    """
+
+    risk = plan_terms(candidate).risk_and_exits.model_dump(mode="json")
+    risk["targets"] = [{**risk["targets"][0], "quantity_fraction": "1"}]
+    risk["runner"] = {
+        **risk["runner"],
+        "enabled": False,
+        "activation_target_order": None,
+        "remaining_quantity_fraction": "0",
+    }
+    return risk
+
+
 def plan_terms(
     candidate: Candidate, *, account_id: UUID = ACCOUNT_ID, **updates: Any
 ) -> TradePlanRevisionCreate:

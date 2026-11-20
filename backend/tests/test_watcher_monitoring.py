@@ -512,3 +512,72 @@ def test_monitoring_does_not_enable_watcher_flags(monitoring_db: sessionmaker[Se
     assert health["telegram_alerts_enabled"] is False
     with monitoring_db() as session:
         assert session.scalar(select(WatcherHeartbeatRow)) is None
+
+
+def _seed_expired_scope(session: Session, scope: str) -> None:
+    earlier = NOW - timedelta(hours=2)
+    session.add(
+        WatcherWorkerLeaseRow(
+            id=uuid.uuid4(),
+            organization_id=ORG_ID,
+            scan_scope=scope,
+            owner_id="worker-1",
+            lease_epoch=1,
+            fencing_token=1,
+            acquired_at=earlier,
+            renewed_at=earlier,
+            expires_at=earlier + timedelta(seconds=30),
+        )
+    )
+    session.add(
+        WatcherHeartbeatRow(
+            id=uuid.uuid4(),
+            organization_id=ORG_ID,
+            scan_scope=scope,
+            owner_id="worker-1",
+            lease_epoch=1,
+            fencing_token=1,
+            last_beat_at=earlier,
+            detail=None,
+        )
+    )
+    session.commit()
+
+
+@pytest.mark.parametrize(
+    ("targets", "expected"),
+    [
+        # The abandoned scope left the current target set: it cannot make the card Stale.
+        (frozenset({"paper-monitor"}), "RUNNING"),
+        # A current target that stopped renewing is genuinely stale.
+        (frozenset({"paper-monitor", "removed-strategy:15m"}), "STALE"),
+        # Unknown target set: every scope still counts (fail closed).
+        (None, "STALE"),
+    ],
+)
+def test_worst_of_staleness_only_counts_current_target_scopes(
+    monitoring_db: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    targets: frozenset[str] | None,
+    expected: str,
+) -> None:
+    with monitoring_db() as session:
+        _seed_live_lease(session)
+        _seed_expired_scope(session, "removed-strategy:15m")
+    monkeypatch.setattr(
+        WatcherMonitoringService,
+        "_current_target_scopes",
+        lambda self, organization_id: targets,
+        raising=False,
+    )
+    snapshot = _snapshot(
+        monitoring_db,
+        settings_overrides={"watcher_orchestration_enabled": True},
+        now=NOW,
+    )
+    assert snapshot.watcher_status.value == expected
+    # The abandoned scope is still listed for operators.
+    assert {lease.scan_scope for lease in snapshot.leases} == {
+        "paper-monitor",
+        "removed-strategy:15m",
+    }

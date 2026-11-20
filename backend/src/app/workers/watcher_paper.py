@@ -81,7 +81,7 @@ from app.workers.watcher_paper_targets import (
     FIRST_SLICE_SYMBOL,
     PaperScanTarget,
     list_paper_scan_targets,
-    list_watchlist_scan_targets,
+    load_watchlist_scan_targets,
     normalize_paper_symbols,
 )
 from app.workers.watcher_watchlist import (
@@ -1091,55 +1091,22 @@ class WatcherPaperRuntime:
         if session is None:
             return ()
         if self._watchlist_mode:
-            from app.services.watcher_assignment_service import (
-                assignment_configuration_exists,
-                assignment_scan_targets,
-                managed_assignment_coverage,
-            )
-
-            self._assignment_observations = {}
-            self._assignment_configured = False
-            self._assignment_managed_symbols = set()
-            explicit: tuple[PaperScanTarget, ...] = ()
-            managed: set[tuple[UUID, UUID, str]] = set()
-            revision: int | None = None
-            symbols = self._symbols
-            if self._organization_id is not None:
-                from app.repositories.watcher_watchlist import WatcherWatchlistRepository
-
-                config = WatcherWatchlistRepository(session).load(self._organization_id)
-                revision = config.revision
-                symbols = tuple(symbol for symbol in symbols if symbol in config.enabled_symbols())
-            if self._organization_id is not None and assignment_configuration_exists(
-                session, self._organization_id
-            ):
-                self._assignment_configured = True
-                explicit, self._assignment_observations = assignment_scan_targets(
-                    session,
-                    organization_id=self._organization_id,
-                    symbols=symbols,
-                    limit=self._max_scopes_per_cycle,
-                )
-                managed = managed_assignment_coverage(session, self._organization_id)
-                self._assignment_managed_symbols = {symbol for _, _, symbol in managed}
             settings = self._settings
-            inferred = list_watchlist_scan_targets(
+            loaded = load_watchlist_scan_targets(
                 session,
-                symbols=symbols,
+                symbols=self._symbols,
                 organization_id=self._organization_id,
-                limit=self._max_scopes_per_cycle - len(explicit),
-                excluded_coverage=managed,
+                limit=self._max_scopes_per_cycle,
                 project_timeframes=(
                     tuple(settings.watcher_scan_timeframes)
                     if settings is not None and settings.watcher_apply_strategies_to_watchlist
                     else ()
                 ),
             )
-            if revision is not None:
-                inferred = tuple(
-                    replace(target, configuration_revision=revision) for target in inferred
-                )
-            return explicit + inferred
+            self._assignment_observations = loaded.assignment_observations
+            self._assignment_configured = loaded.assignment_configured
+            self._assignment_managed_symbols = set(loaded.assignment_managed_symbols)
+            return loaded.targets
         return list_paper_scan_targets(
             session,
             symbols=self._symbols,

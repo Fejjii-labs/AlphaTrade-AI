@@ -62,11 +62,27 @@ def _plan(*, valid_for_ms: int) -> TradePlanRevision:
     terms = plan_terms(
         world.candidate, valid_until=EVALUATED_AT + timedelta(milliseconds=valid_for_ms)
     )
+    exits = terms.risk_and_exits
+    # Demo dispatch attaches one full-size TP; the shared fixture's ladder
+    # (TP1/TP2/runner) is refused at submit, so demo tests use its TP1 alone.
+    single = exits.model_copy(
+        update={
+            "targets": (exits.targets[0].model_copy(update={"quantity_fraction": Decimal("1")}),),
+            "runner": exits.runner.model_copy(
+                update={
+                    "enabled": False,
+                    "activation_target_order": None,
+                    "remaining_quantity_fraction": Decimal("0"),
+                }
+            ),
+        }
+    )
     terms = terms.model_copy(
         update={
             "instrument_rules": terms.instrument_rules.model_copy(
                 update={"contract_multiplier": Decimal("0.001")}
-            )
+            ),
+            "risk_and_exits": single,
         }
     )
     return world.plans.create(plan_command(world, terms=terms)).plan

@@ -100,6 +100,20 @@ describe("What the bot is doing", () => {
     expect(tiles().Bot).toEqual(["Stale", "warn"]);
   });
 
+  it("names every selected strategy, or the all-eligible mode", () => {
+    const options = [
+      { strategy_id: "s-1", name: "Nested long" },
+      { strategy_id: "s-2", name: "Nested short" },
+    ];
+    loaded(activity());
+    render(<BotActivityPanel view={{ ...view, strategy_options: options, strategy_ids: ["s-1", "s-2"] }} />);
+    expect(screen.getByTestId("bot-activity-target")).toHaveTextContent("Nested long, Nested short · BTCUSDT");
+    cleanup();
+    loaded(activity());
+    render(<BotActivityPanel view={{ ...view, strategy_scope: "all_eligible" }} />);
+    expect(screen.getByTestId("bot-activity-target")).toHaveTextContent("All eligible strategies");
+  });
+
   it("says when no strategy or coin is set and the count is unknown", () => {
     loaded(activity({ trades_today: null }));
     render(<BotActivityPanel view={{ ...view, strategy_id: null, symbol: null }} />);

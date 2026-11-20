@@ -103,6 +103,7 @@ from app.db.paper_evaluation import PaperEvaluationObservationRow  # noqa: F401
 from app.db.paper_evaluation import (
     register_paper_evaluation_immutability as _register_paper_evaluation_immutability,
 )
+from app.db.position_exit_events import PositionExitEventRow  # noqa: F401
 from app.db.public_market_observations import PublicMarketObservationRow  # noqa: F401
 from app.db.risk_policy import (  # noqa: F401
     RiskPolicyBreakerInterval,
@@ -135,6 +136,7 @@ from app.db.telegram_security import (  # noqa: F401
     TelegramOutboxRow,
     TelegramProtocolAuditEventRow,
 )
+from app.db.trade_candidate_summaries import TradeCandidateSummaryRow  # noqa: F401
 from app.db.voice_realtime import VoiceSessionReservation  # noqa: F401
 from app.db.watcher_assignments import (  # noqa: F401
     WatcherAssignmentReceiptRow,
@@ -2175,6 +2177,30 @@ class AccountSafetyEpoch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_reason_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 
+class BotRiskSettings(Base):
+    """Singleton settings for governed BloFin demo."""
+
+    __tablename__ = "bot_risk_settings"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_bot_risk_singleton"),
+        CheckConstraint(
+            "risk_per_trade_pct > 0 AND risk_per_trade_pct <= daily_stop_pct "
+            "AND daily_stop_pct <= 5",
+            name="ck_bot_risk_percentages",
+        ),
+        CheckConstraint("leverage BETWEEN 1 AND 10", name="ck_bot_risk_leverage"),
+        CheckConstraint("margin_mode = 'isolated'", name="ck_bot_risk_margin_mode"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    risk_per_trade_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    daily_stop_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    grade_risk_overrides: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
+    grades_gate_entries: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    leverage: Mapped[int] = mapped_column(Integer, nullable=False)
+    margin_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+
+
 class AccountRiskAccountingState(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Account-scoped serializable risk ledger locked after the safety epoch."""
 
@@ -2213,6 +2239,13 @@ class AccountRiskAccountingState(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     max_notional: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
     max_daily_loss: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
     max_trade_slots: Mapped[int] = mapped_column(Integer, nullable=False)
+    demo_reserved_daily_loss: Mapped[Decimal] = mapped_column(
+        _MONEY, nullable=False, default=Decimal("0")
+    )
+    demo_equity_baseline: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+    demo_equity_baseline_date: Mapped[date_type | None] = mapped_column(Date, nullable=True)
+    demo_equity_stop_tripped_on: Mapped[date_type | None] = mapped_column(Date, nullable=True)
+    demo_loss_utc_date: Mapped[date_type | None] = mapped_column(Date, nullable=True)
     # Local trading day the trade-slot counters were last aligned to.
     # NULL means the row predates daily alignment and still holds a lifetime count.
     trade_slot_business_date: Mapped[date_type | None] = mapped_column(Date, nullable=True)
@@ -3496,6 +3529,7 @@ class WebhookEvent(UUIDPrimaryKeyMixin, Base):
 
 class AuditLog(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "audit_logs"
+    __table_args__ = (Index("ix_audit_logs_event_at", "event_at"),)
 
     organization_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("organizations.id"), nullable=True

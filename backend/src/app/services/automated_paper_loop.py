@@ -190,7 +190,10 @@ class AutomatedPaperLoop:
         account = self._account(session, target)
         if account is None:
             return _proof(candidate, "skipped", "execution_account_missing")
-        from app.services.autonomous_trading_guard import autonomous_precheck_refusal
+        from app.services.autonomous_trading_guard import (
+            autonomous_precheck_refusal,
+            load_autonomous_strategy_status,
+        )
         from app.services.autonomous_trading_settings_service import (
             AutonomousTradingSettingsService,
         )
@@ -205,7 +208,18 @@ class AutomatedPaperLoop:
             organization_id=target.organization_id,
             user_id=target.user_id,
         )
-        autonomous_block = autonomous_precheck_refusal(autonomous_settings, target, snapshot)
+        autonomous_block = autonomous_precheck_refusal(
+            autonomous_settings,
+            target,
+            snapshot,
+            strategy_status=(
+                None
+                if autonomous_settings.using_defaults
+                else load_autonomous_strategy_status(session, target)
+            ),
+            # Only the governed BloFin demo loop skips the paper-eligibility gate.
+            require_paper_eligible=self._risk_policy_kind() != "demo",
+        )
         if autonomous_block is not None:
             return _proof(candidate, "blocked", autonomous_block)
         self._autonomous_settings = autonomous_settings
@@ -253,13 +267,11 @@ class AutomatedPaperLoop:
         evidence = _evidence_refusal(assembled, now=self._clock.now())
         if evidence is not None:
             return _proof(candidate, "skipped", evidence)
-        from app.schemas.nested_continuation import NestedContinuationSpec
-        from app.strategy_brain.sfp.contracts import SfpSpec
-
-        if candidate.direction is not TradeDirection.SHORT and not isinstance(
-            policy.authored_spec, (NestedContinuationSpec, SfpSpec)
-        ):
-            return _proof(candidate, "skipped", "direction_not_paper_executable")
+        refusal = paper_spec_refusal(
+            policy.authored_spec, policy.evaluation_params, candidate.direction
+        )
+        if refusal is not None:
+            return _proof(candidate, "skipped", refusal)
         return None
 
     def _fresh_sfp_fill_evidence(
@@ -339,6 +351,14 @@ class AutomatedPaperLoop:
                 account_id=account.id,
                 entry_occurred_at=assembled.trigger_bar.interval_end,
             )
+        # A new intent: one open position per coin across every strategy.
+        from app.services.autonomous_trading_guard import open_symbol_position_refusal
+
+        occupied = open_symbol_position_refusal(
+            session, target, candidate_id=candidate.candidate_id
+        )
+        if occupied is not None:
+            return _proof(candidate, "blocked", occupied)
         eligibility = self._eligibility_service().evaluate(
             self._eligibility_command(
                 session,
@@ -381,15 +401,22 @@ class AutomatedPaperLoop:
                 eligibility_state=state.value,
             )
         now = self._clock.now()
-        active = _load_active_profile(
-            session, target.organization_id, self._risk_policy_kind(), now
+        demo_v2 = self._uses_demo_risk_v2()
+        active = (
+            None
+            if demo_v2
+            else _load_active_profile(
+                session, target.organization_id, self._risk_policy_kind(), now
+            )
         )
         records: list[object] = []
         open_exposure = Decimal("0")
         open_risk_percent = Decimal("0")
         open_positions: int | None = None
         remaining_daily: Decimal | None = None
-        if active is None:
+        if demo_v2:
+            pass  # The claim evaluates the demo ledger under lock.
+        elif active is None:
             open_exposure = _open_exposure(session, target, now=now)
         else:
             funding_rate = self._verified_funding_rate()
@@ -439,7 +466,7 @@ class AutomatedPaperLoop:
             assembled=assembled,
             policy=policy,
             account_id=account.id,
-            equity=_equity(session, target, now=now),
+            equity=Decimal("0") if demo_v2 else _equity(session, target, now=now),
             now=now,
             eligibility_valid_until=eligibility.eligibility.valid_until,
             eligibility_id=eligibility.eligibility.eligibility_id,
@@ -796,6 +823,9 @@ class AutomatedPaperLoop:
     def _policy_version(self) -> str:
         return _POLICY_VERSION
 
+    def _uses_demo_risk_v2(self) -> bool:
+        return False
+
     def _risk_policy_kind(self) -> str:
         return "internal_paper"
 
@@ -1144,6 +1174,8 @@ def _stored_plan_execution_refusal(
     now = _execution_moment(loop)
     if now is None or plan is None:
         return "stored_plan_limits_uncomputed"
+    if loop._uses_demo_risk_v2():
+        return None  # The governed loop revalidates against the venue and locked ledger.
     if _breaker_refusing(session, target.organization_id, now):
         return "breaker_active"
     active = _load_active_profile(session, target.organization_id, loop._risk_policy_kind(), now)
@@ -1357,15 +1389,42 @@ def _eligibility_command(
     assembled: AssembledCanonicalEvidence,
     account: ExecutionAccount,
     now: datetime,
+    demo_equity: Decimal | None = None,
 ) -> ActionEligibilityCommand:
     quote = assembled.current_price
     if quote is None:
         raise ValueError("Paper loop eligibility requires a current price.")
-    accounting = DailyRiskAccounting(session, _risk_settings(session), clock=lambda: now)
-    snapshot = accounting.sync_from_portfolio(
-        organization_id=target.organization_id,
-        user_id=target.user_id,
-    )
+    if demo_equity is None:
+        accounting = DailyRiskAccounting(session, _risk_settings(session), clock=lambda: now)
+        snapshot = accounting.sync_from_portfolio(
+            organization_id=target.organization_id,
+            user_id=target.user_id,
+        )
+        equity, exposure = snapshot.account_equity, snapshot.open_exposure_notional
+        risk_id = uuid5(
+            _NAMESPACE,
+            f"risk:{account.id}:{snapshot.day.isoformat()}:{snapshot.daily_locked}:"
+            f"{snapshot.realized_pnl}:{snapshot.trade_count}",
+        )
+        risk = RiskStateSnapshot(
+            risk_snapshot_id=risk_id,
+            organization_id=target.organization_id,
+            user_id=target.user_id,
+            account_id=account.id,
+            daily_locked=snapshot.daily_locked,
+            daily_loss_limit=snapshot.daily_loss_limit,
+            realized_pnl_today=snapshot.realized_pnl,
+            trades_today=snapshot.trade_count,
+        )
+    else:
+        # The locked demo ledger evaluates capacity at the claim.
+        equity, exposure = demo_equity, Decimal("0")
+        risk = RiskStateSnapshot(
+            risk_snapshot_id=uuid5(_NAMESPACE, f"demo-risk:{account.id}:{now.isoformat()}"),
+            organization_id=target.organization_id,
+            user_id=target.user_id,
+            account_id=account.id,
+        )
     epoch_row = session.scalar(
         select(AccountSafetyEpoch).where(
             AccountSafetyEpoch.organization_id == target.organization_id,
@@ -1373,11 +1432,6 @@ def _eligibility_command(
         )
     )
     epoch = 1 if epoch_row is None else int(epoch_row.epoch)
-    risk_id = uuid5(
-        _NAMESPACE,
-        f"risk:{account.id}:{snapshot.day.isoformat()}:{snapshot.daily_locked}:"
-        f"{snapshot.realized_pnl}:{snapshot.trade_count}",
-    )
     venue_state_id = uuid5(
         _NAMESPACE,
         f"venue:{window.content_hash}:{quote.price}:{quote.source_time.isoformat()}",
@@ -1395,19 +1449,10 @@ def _eligibility_command(
         portfolio=PortfolioState(
             organization_id=target.organization_id,
             account_id=account.id,
-            account_equity=snapshot.account_equity,
-            open_exposure_notional=snapshot.open_exposure_notional,
+            account_equity=equity,
+            open_exposure_notional=exposure,
         ),
-        risk=RiskStateSnapshot(
-            risk_snapshot_id=risk_id,
-            organization_id=target.organization_id,
-            user_id=target.user_id,
-            account_id=account.id,
-            daily_locked=snapshot.daily_locked,
-            daily_loss_limit=snapshot.daily_loss_limit,
-            realized_pnl_today=snapshot.realized_pnl,
-            trades_today=snapshot.trade_count,
-        ),
+        risk=risk,
         safety=SafetyStateSnapshot(
             organization_id=target.organization_id,
             account_id=account.id,
@@ -1502,6 +1547,38 @@ def _sfp_quote_refusal(
     return None
 
 
+def paper_spec_refusal(
+    spec: object,
+    evaluation_params: object,
+    direction: TradeDirection | None,
+) -> str | None:
+    """Refuse every family the paper and demo plan builders do not know.
+
+    Nested and SFP run in both directions. First-slice runs shorts only, with
+    its own evaluation params. Anything else, in either direction, is
+    ``spec_not_paper_executable``: it is never coerced into first-slice and
+    never reduced to a single-target plan. ``direction=None`` checks the
+    family only.
+    """
+
+    from app.schemas.nested_continuation import NestedContinuationSpec
+    from app.schemas.strategy_pattern_spec import FirstSliceAuthoredPatternSpec
+    from app.signal_fusion.first_slice_adapter import FirstSliceEvaluationParams
+    from app.strategy_brain.sfp.contracts import SfpSpec
+
+    if isinstance(spec, (NestedContinuationSpec, SfpSpec)):
+        return None
+    if not isinstance(spec, FirstSliceAuthoredPatternSpec):
+        return "spec_not_paper_executable"
+    if direction is None:
+        return None
+    if direction is not TradeDirection.SHORT:
+        return "direction_not_paper_executable"
+    if not isinstance(evaluation_params, FirstSliceEvaluationParams):
+        return "execution_policy_unsupported"
+    return None
+
+
 def _plan_terms(
     *,
     candidate: Candidate,
@@ -1522,6 +1599,7 @@ def _plan_terms(
     accept_unprofiled_minimum: bool = False,
     fixed_risk_percent: Decimal | None = None,
     internal_paper_sfp: bool = False,
+    governed_demo_sfp: bool = False,
     side_aware_fill: bool = False,
     spread_haircut: Decimal = Decimal("0"),
     min_stop_atr_floor: Decimal = Decimal("0"),
@@ -1532,10 +1610,12 @@ def _plan_terms(
     from app.strategy_brain.sfp.contracts import SfpSpec
 
     spec = policy.authored_spec
-    # BloFin demo and every other caller keep this refusal. Only the internal
-    # paper loop opts in, and it still cannot route the plan to a live venue.
-    if isinstance(spec, SfpSpec) and not internal_paper_sfp:
+    # Only the two explicitly authorized paper/demo callers opt in.
+    if isinstance(spec, SfpSpec) and not (internal_paper_sfp or governed_demo_sfp):
         return "sfp_execution_plan_not_authorized"
+    if paper_spec_refusal(spec, None, None) is not None:
+        # Unknown families are refused here too, never coerced to first-slice.
+        return "spec_not_paper_executable"
     quote = assembled.current_price
     if quote is None:
         return "evidence_unavailable"
@@ -1589,7 +1669,7 @@ def _plan_terms(
         if is_long
         else _ceil_to_tick(stop, assembled.bundle.tick_size)
     )
-    if sfp:
+    if sfp and not governed_demo_sfp:
         if sfp_target is None:
             return "sfp_trade_plan_invalid"
         refusal = _sfp_quote_refusal(

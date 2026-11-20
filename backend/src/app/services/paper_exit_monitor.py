@@ -29,7 +29,24 @@ from app.db.models import JournalTrade, TradePlanRevision
 from app.guardrails.redaction import redact_text
 from app.market_contracts.identity import interval_timedelta
 from app.schemas.common import JournalTradeStatus, Timeframe, TradeDirection
-from app.schemas.execution_protocol import ClosePaperPlanRequest
+from app.schemas.execution_protocol import ClosePaperExitFill, ClosePaperPlanRequest
+from app.services.paper_close_economics import allocate_by_quantity
+from app.services.partial_exits.ladder import LadderRefusal
+from app.services.partial_exits.paper_terms import (
+    PartialExitTerms,
+    is_ladder_payload,
+    parse_partial_exit_terms,
+)
+from app.services.partial_exits.position import (
+    ExitFill,
+    PositionExitState,
+    StopMove,
+    apply_fill,
+    apply_stop_move,
+    plan_breakeven_move,
+    rebuild_position_state,
+)
+from app.services.partial_exits.runner import trail_runner_stop
 
 logger = structlog.get_logger(__name__)
 
@@ -144,6 +161,10 @@ class OpenInternalPaperTrade:
     evidence_source_family: str | None = None
     evidence_is_live: bool | None = None
     evidence_is_mock: bool | None = None
+    # Set only for a multi-target or runner plan with the paper partial-exit
+    # flag on. ``stop`` is then the initial stop and ``target`` the last
+    # scheduled target; the ladder decides exits, never ``decide_exit``.
+    partial: PartialExitTerms | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +216,10 @@ class MonitorReport:
     # Open trades whose close is quarantined (identity conflict): they stay
     # OPEN, hold a max_open_positions slot and their stale mark (M5).
     quarantined: int = 0
+    # Partial-exit trades that recorded a reduction or stop move but stayed open.
+    reduced: int = 0
+    # Partial-exit trades held by the kill switch or a paused worker.
+    held: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -701,6 +726,8 @@ def open_internal_paper_statement() -> Select[
 
 def load_open_internal_paper_trades(
     session: Session,
+    *,
+    partial_exits_enabled: bool = False,
 ) -> tuple[tuple[OpenInternalPaperTrade, ...], int]:
     """Return parsed open trades and how many scoped rows were rejected."""
 
@@ -729,6 +756,8 @@ def load_open_internal_paper_trades(
             revision_id=plan.id,
             semantic_payload=plan.semantic_payload,
             evidence_identity=evidence_identity,
+            position_size=trade.size,
+            partial_exits_enabled=partial_exits_enabled,
         )
         if parsed is None:
             rejected += 1
@@ -763,11 +792,16 @@ def parse_open_trade(
     revision_id: UUID,
     semantic_payload: object,
     evidence_identity: object | None = None,
+    position_size: Decimal | None = None,
+    partial_exits_enabled: bool = False,
 ) -> OpenInternalPaperTrade | None:
     """Build one monitor trade, or return None when the row is out of scope.
 
-    Internal paper plans have one full-size target and a disabled runner.
-    Anything else, including a BloFin venue or policy, is left untouched.
+    A plan with one full-size target and a disabled runner takes the existing
+    path, whatever the flag. A plan with several targets or a runner is out of
+    scope unless ``partial_exits_enabled``; then its ladder must parse and
+    size exactly against the recorded position, or the row is refused. A
+    BloFin venue or policy is always left untouched.
     """
 
     if not is_internal_paper_plan(
@@ -799,8 +833,25 @@ def parse_open_trade(
     except ValueError:
         return None
     levels = _exit_levels(semantic_payload)
+    partial: PartialExitTerms | None = None
     if levels is None:
-        return None
+        partial = _partial_terms(
+            semantic_payload,
+            enabled=partial_exits_enabled,
+            direction=direction,
+            entry_price=entry_price,
+            position_size=position_size,
+            journal_trade_id=journal_trade_id,
+        )
+        if partial is None:
+            return None
+        levels = (
+            partial.initial_stop,
+            partial.final_target,
+            partial.fees,
+            partial.funding,
+            partial.slippage,
+        )
     stop, target, fees, funding, slippage = levels
     if direction is TradeDirection.LONG and not (stop < entry_price < target):
         return None
@@ -830,7 +881,43 @@ def parse_open_trade(
         evidence_source_family=family,
         evidence_is_live=is_live,
         evidence_is_mock=is_mock,
+        partial=partial,
     )
+
+
+def _partial_terms(
+    payload: dict[str, object],
+    *,
+    enabled: bool,
+    direction: TradeDirection,
+    entry_price: Decimal,
+    position_size: Decimal | None,
+    journal_trade_id: UUID,
+) -> PartialExitTerms | None:
+    risk = payload.get("risk_and_exits")
+    if not enabled or not isinstance(risk, dict) or not is_ladder_payload(risk):
+        return None
+    terms = parse_partial_exit_terms(
+        payload,
+        direction=direction,
+        entry_price=entry_price,
+        position_size=position_size,
+    )
+    if isinstance(terms, LadderRefusal):
+        logger.warning(
+            "paper_exit_monitor_ladder_refused",
+            journal_trade_id=str(journal_trade_id),
+            reason=terms.reason,
+            **terms.detail,
+        )
+        return None
+    if terms.ladder.merges:
+        logger.info(
+            "paper_exit_monitor_ladder_merged",
+            journal_trade_id=str(journal_trade_id),
+            merges=",".join(terms.ladder.merges),
+        )
+    return terms
 
 
 def evidence_flags(
@@ -950,6 +1037,267 @@ def close_request_for(decision: ExitDecision) -> ClosePaperPlanRequest:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class PartialExitStep:
+    """New reductions and stop moves from one pass, and the state after them.
+
+    ``evidence`` is keyed by fill id or stop-move key.
+    """
+
+    trade: OpenInternalPaperTrade
+    fills: tuple[ExitFill, ...]
+    stop_moves: tuple[StopMove, ...]
+    state: PositionExitState
+    evidence: dict[str, dict[str, str]]
+
+
+class PartialExitRecorder:
+    """Durable partial-exit records. The production adapter writes PostgreSQL.
+
+    ``load`` returns the recorded fills and stop moves. ``record`` persists a
+    step idempotently and, when the step closes the position, records the
+    close through the paper close service with every fill attached.
+    """
+
+    def load(
+        self, trade: OpenInternalPaperTrade
+    ) -> tuple[tuple[ExitFill, ...], tuple[StopMove, ...]]:
+        raise NotImplementedError
+
+    def record(self, trade: OpenInternalPaperTrade, step: PartialExitStep) -> object:
+        raise NotImplementedError
+
+
+def partial_fill_id(command_id: UUID, suffix: str) -> str:
+    return f"paper-partial-exit:{command_id}:{suffix}"
+
+
+def _state_as_of(state: PositionExitState) -> datetime | None:
+    moments = [fill.occurred_at for fill in state.fills]
+    moments.extend(move.effective_at for move in state.stop_moves)
+    return max(moments) if moments else None
+
+
+def _reaches(direction: TradeDirection, price: Decimal, bar: ExitBar) -> bool:
+    if direction is TradeDirection.LONG:
+        return bar.high >= price
+    return bar.low <= price
+
+
+def decide_partial_exits(
+    trade: OpenInternalPaperTrade,
+    state: PositionExitState,
+    bars: Sequence[ExitBar],
+    *,
+    source_name: str,
+    evaluated_at: datetime,
+    candle_venue: str = "",
+) -> PartialExitStep:
+    """Walk closed bars after the last recorded event and reduce the ladder.
+
+    Per bar, conservatively: a bar that opens through the current stop exits
+    the rest at the open; a stop touch exits the rest at the stop, even when a
+    target was also touched (``stop_first``). Otherwise every pending target
+    the bar reached fills in order. After TP1 is complete the breakeven move
+    is recorded at that bar's end, so it protects from the next bar only.
+    Once no target is pending the runner trails the closed bars up to this
+    one; that move also applies from the next bar. Forming bars are ignored.
+    """
+
+    terms = trade.partial
+    if terms is None:
+        raise ValueError("decide_partial_exits requires a ladder trade")
+    eligible_from = entry_eligibility_time(trade.entry_time, trade.timeframe)
+    closed = sorted(
+        (
+            bar
+            for bar in bars
+            if bar.interval_start.tzinfo is not None
+            and bar.interval_end.tzinfo is not None
+            and bar.interval_end <= evaluated_at
+            and bar.interval_start >= eligible_from
+        ),
+        key=lambda bar: bar.interval_start,
+    )
+    as_of = _state_as_of(state)
+    direction = trade.direction
+    fills: list[ExitFill] = []
+    moves: list[StopMove] = []
+    evidence: dict[str, dict[str, str]] = {}
+
+    def note(key: str, bar: ExitBar, level: str, assumption: str) -> None:
+        row = _evidence(trade, bar, source_name=source_name, level=level, assumption=assumption)
+        origin = classify_exit_origin(bar.interval_end, evaluated_at)
+        row["exit_origin"] = origin
+        row["calibration_sample"] = (
+            CALIBRATION_EXCLUDED if origin == EXIT_ORIGIN_BACKFILL else CALIBRATION_ELIGIBLE
+        )
+        if candle_venue:
+            row["candle_venue"] = candle_venue
+        evidence[key] = row
+
+    def take(fill: ExitFill) -> None:
+        nonlocal state
+        outcome = apply_fill(state, fill)
+        if outcome.status != "applied":
+            raise ValueError(f"partial exit fill not applied: {outcome.reason or outcome.status}")
+        state = outcome.state
+        fills.append(fill)
+
+    def move_stop(move: StopMove) -> None:
+        nonlocal state
+        outcome = apply_stop_move(state, move)
+        if outcome.status != "applied":
+            raise ValueError(f"stop move not applied: {outcome.reason or outcome.status}")
+        state = outcome.state
+        moves.append(move)
+
+    for index, bar in enumerate(closed):
+        if state.is_closed:
+            break
+        if as_of is not None and bar.interval_start < as_of:
+            continue
+        stop = state.current_stop
+        runner_phase = not state.pending_target_legs()
+        if direction is TradeDirection.LONG:
+            gapped = bar.open <= stop
+            stop_hit = bar.low <= stop
+        else:
+            gapped = bar.open >= stop
+            stop_hit = bar.high >= stop
+        if gapped or stop_hit:
+            target_touched = any(
+                _reaches(direction, leg.price, bar)
+                for leg in state.ladder.target_legs
+                if leg.price is not None and leg.order in state.pending_target_legs()
+            )
+            assumption = (
+                GAP_THROUGH_OPEN
+                if gapped
+                else SAME_BAR_ASSUMPTION
+                if target_touched
+                else SAME_BAR_NONE
+            )
+            fill = ExitFill(
+                fill_id=partial_fill_id(trade.command_id, "stop"),
+                kind="runner_stop" if runner_phase else "stop",
+                leg_order=None,
+                quantity=state.remaining_quantity,
+                price=bar.open if gapped else stop,
+                occurred_at=bar.interval_end,
+            )
+            take(fill)
+            note(fill.fill_id, bar, "stop", assumption)
+            break
+        for order in state.pending_target_legs():
+            leg = state.ladder.leg(order)
+            if leg is None or leg.price is None or not _reaches(direction, leg.price, bar):
+                break
+            fill = ExitFill(
+                fill_id=partial_fill_id(trade.command_id, f"leg:{order}"),
+                kind="target",
+                leg_order=order,
+                quantity=leg.quantity - state.leg_filled(order),
+                price=leg.price,
+                occurred_at=bar.interval_end,
+            )
+            take(fill)
+            note(fill.fill_id, bar, f"target:{order}", SAME_BAR_NONE)
+        breakeven = plan_breakeven_move(state)
+        if breakeven is not None:
+            move_stop(breakeven)
+            note(breakeven.key, bar, "breakeven", SAME_BAR_NONE)
+        if state.is_closed or terms.runner_rule is None or state.pending_target_legs():
+            continue
+        trailed = trail_runner_stop(
+            rule=terms.runner_rule,
+            direction=direction,
+            current_stop=state.current_stop,
+            bars=closed[: index + 1],
+            evaluated_at=evaluated_at,
+        )
+        if trailed != state.current_stop:
+            trail = StopMove(
+                key=f"trail:{bar.interval_end.isoformat()}",
+                reason="trail",
+                previous_stop=state.current_stop,
+                new_stop=trailed,
+                effective_at=bar.interval_end,
+                tightened=True,
+            )
+            move_stop(trail)
+            note(trail.key, bar, "trail", SAME_BAR_NONE)
+    return PartialExitStep(
+        trade=trade,
+        fills=tuple(fills),
+        stop_moves=tuple(moves),
+        state=state,
+        evidence=evidence,
+    )
+
+
+_EXIT_PRICE_QUANT = Decimal("0.00000001")
+
+
+def partial_close_request_for(
+    trade: OpenInternalPaperTrade, step: PartialExitStep
+) -> ClosePaperPlanRequest:
+    """The final close for a fully reduced ladder, every fill attached.
+
+    Plan cost allowances are split by quantity (the last fill takes the
+    remainder), so per-fill costs sum to the totals exactly. The exit price
+    is the quantity-weighted average, for display; PnL is summed per fill.
+    """
+
+    state = step.state
+    terms = trade.partial
+    if terms is None or not state.is_closed:
+        raise ValueError("partial close requires a fully reduced ladder trade")
+    ordered = state.fills
+    quantities = [fill.quantity for fill in ordered]
+    fees = allocate_by_quantity(terms.fees, quantities)
+    funding = allocate_by_quantity(terms.funding, quantities)
+    slippage = allocate_by_quantity(terms.slippage, quantities)
+    exit_fills = tuple(
+        ClosePaperExitFill(
+            fill_id=fill.fill_id,
+            kind=fill.kind,
+            leg_order=fill.leg_order,
+            quantity=fill.quantity,
+            price=fill.price,
+            occurred_at=fill.occurred_at,
+            fees=fees[index],
+            funding=funding[index],
+            slippage=slippage[index],
+        )
+        for index, fill in enumerate(ordered)
+    )
+    size = sum(quantities, Decimal("0"))
+    weighted = sum((fill.price * fill.quantity for fill in ordered), Decimal("0"))
+    last = ordered[-1]
+    evidence = dict(step.evidence.get(last.fill_id, {}))
+    evidence["partial_exit_fills"] = str(len(ordered))
+    evidence["exit_price_basis"] = "quantity_weighted_average"
+    return ClosePaperPlanRequest(
+        organization_id=trade.organization_id,
+        user_id=trade.user_id,
+        account_id=trade.account_id,
+        revision_id=trade.revision_id,
+        command_id=trade.command_id,
+        exit_price=(weighted / size).quantize(_EXIT_PRICE_QUANT),
+        fees=terms.fees,
+        funding=terms.funding,
+        slippage=terms.slippage,
+        exit_reason=EXIT_REASON_TARGET if last.kind == "target" else EXIT_REASON_STOP,
+        occurred_at=last.occurred_at,
+        idempotency_key=exit_idempotency_key(trade.command_id),
+        exit_channel=EXIT_CHANNEL,
+        exit_actor=EXIT_ACTOR,
+        exit_evidence=evidence or None,
+        exit_fills=exit_fills,
+    )
+
+
 STATUS_SETTLING = "settling"
 # Consecutive settling deferrals one trade may take before the read is refused.
 MAX_SETTLING_DEFERRALS = 3
@@ -967,6 +1315,8 @@ def run_paper_exit_monitor(
     shutdown: Callable[[], bool] | None = None,
     settling_streaks: dict[UUID, int] | None = None,
     close_failures: dict[UUID, CloseFailureBackoff] | None = None,
+    partial: PartialExitRecorder | None = None,
+    partial_hold: Callable[[UUID], str | None] | None = None,
 ) -> MonitorReport:
     """Examine open trades once. Flag off does not load candles or close.
 
@@ -974,6 +1324,11 @@ def run_paper_exit_monitor(
     cycles. After ``MAX_SETTLING_DEFERRALS`` the read is refused instead.
     ``close_failures`` carries the per-trade backoff after a failed close. A
     trade inside its wait is not read or closed and keeps the pass degraded.
+
+    A ladder trade (``trade.partial``) needs ``partial`` or it is refused. It is
+    held, before any candle read, while ``partial_hold`` names a reason for its
+    organization (kill switch, paused worker); its bars are replayed from the
+    last durable record once released. Single-target trades never touch either.
     """
 
     if not enabled:
@@ -986,6 +1341,8 @@ def run_paper_exit_monitor(
     errors = 0
     settling = 0
     backed_off = 0
+    reduced = 0
+    held = 0
     error = ""
     alerts: list[ExitMonitorAlert] = []
     streaks = settling_streaks if settling_streaks is not None else {}
@@ -1001,6 +1358,23 @@ def run_paper_exit_monitor(
         if backoff is not None and evaluated_at < backoff.retry_at:
             backed_off += 1
             continue
+        if trade.partial is not None:
+            if partial is None:
+                refused += 1
+                logger.warning(
+                    "paper_exit_monitor_ladder_unmanaged",
+                    journal_trade_id=str(trade.journal_trade_id),
+                )
+                continue
+            hold = partial_hold(trade.organization_id) if partial_hold is not None else None
+            if hold is not None:
+                held += 1
+                logger.info(
+                    "paper_exit_monitor_ladder_held",
+                    journal_trade_id=str(trade.journal_trade_id),
+                    reason=hold,
+                )
+                continue
         try:
             fetched = candles(trade)
         except Exception as exc:
@@ -1048,6 +1422,77 @@ def run_paper_exit_monitor(
                 reason=block,
                 entry_time=trade.entry_time.isoformat(),
                 series_start=_series_start(fetched.bars),
+            )
+            continue
+        if trade.partial is not None and partial is not None:
+            try:
+                recorded, recorded_moves = partial.load(trade)
+                ladder_state = rebuild_position_state(
+                    trade.partial.open_state(), fills=recorded, stop_moves=recorded_moves
+                )
+                step = decide_partial_exits(
+                    trade,
+                    ladder_state,
+                    fetched.bars,
+                    source_name=fetched.source_name,
+                    evaluated_at=evaluated_at,
+                    candle_venue=fetched.candle_venue,
+                )
+            except Exception as exc:
+                errors += 1
+                error = error or "partial_state_failed"
+                logger.error(
+                    "paper_exit_monitor_partial_state_failed",
+                    journal_trade_id=str(trade.journal_trade_id),
+                    error=redact_text(str(exc))[:200],
+                )
+                continue
+            if not step.fills and not step.stop_moves:
+                continue
+            if dry_run:
+                would_close += 1
+                logger.info(
+                    "paper_exit_monitor_would_reduce",
+                    journal_trade_id=str(trade.journal_trade_id),
+                    fills=len(step.fills),
+                    stop_moves=len(step.stop_moves),
+                    remaining=format(step.state.remaining_quantity, "f"),
+                )
+                continue
+            try:
+                result = partial.record(trade, step)
+            except Exception as exc:
+                reason = _close_skip_reason(exc)
+                if reason is not None:
+                    failures.pop(trade.journal_trade_id, None)
+                    skipped += 1
+                    continue
+                errors += 1
+                error = error or "partial_record_failed"
+                previous = failures.get(trade.journal_trade_id)
+                failures[trade.journal_trade_id] = next_close_backoff(
+                    previous, failed_at=evaluated_at, reason=_close_failure_reason(exc)
+                )
+                logger.warning(
+                    "paper_exit_monitor_partial_record_failed",
+                    journal_trade_id=str(trade.journal_trade_id),
+                    error=redact_text(str(exc))[:200],
+                )
+                continue
+            failures.pop(trade.journal_trade_id, None)
+            if not step.state.is_closed:
+                reduced += 1
+            elif bool(getattr(result, "replayed", False)):
+                replayed += 1
+            else:
+                closed += 1
+            logger.info(
+                "paper_exit_monitor_reduced",
+                journal_trade_id=str(trade.journal_trade_id),
+                fills=len(step.fills),
+                stop_moves=len(step.stop_moves),
+                remaining=format(step.state.remaining_quantity, "f"),
+                closed=step.state.is_closed,
             )
             continue
         decision = decide_exit(
@@ -1137,10 +1582,12 @@ def run_paper_exit_monitor(
         error = "close_quarantined" if quarantined else "close_backoff"
     elif dry_run:
         status = "dry_run"
-    elif closed or replayed:
+    elif closed or replayed or reduced:
         status = "closed"
     elif settling:
         status = STATUS_SETTLING
+    elif held:
+        status = "held"
     else:
         status = "idle"
     return MonitorReport(
@@ -1158,6 +1605,8 @@ def run_paper_exit_monitor(
         backed_off=backed_off,
         quarantined=quarantined,
         alerts=tuple(alerts),
+        reduced=reduced,
+        held=held,
     )
 
 

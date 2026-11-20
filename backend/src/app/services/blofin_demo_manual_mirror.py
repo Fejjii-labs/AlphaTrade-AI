@@ -1,6 +1,6 @@
 """Read-only mirror of hand-traded BloFin demo positions into the journal.
 
-Official contracts, read 2026-10-18 from https://docs.blofin.com/index.html :
+Official contracts, rechecked 2026-11-16 from https://docs.blofin.com/index.html :
 
 * ``GET /api/v1/account/positions-history``
   (https://docs.blofin.com/index.html#get-positions-history).
@@ -36,12 +36,13 @@ non-negative positions-history fee is a cost. A negative fee is stored as a
 rebate so the same subtraction adds it. Journal funding is ``-fundingFee``
 (paid is positive, received is negative).
 
-A closed row is verified only when that price P&L equals ``realizedPnl``
-after quantizing to 1e-8, settlement is USDT, the fee is present, and
-funding for the slice sits inside the fetched window and is not shared with
-another position. The published BCH ``sell`` example does not match the
-short formula, so that row stays unverified. The dashboard publishes win
-rate only when every closed mirrored row is verified.
+Closed slices are grouped by positionId. Sum of realizedPnl is gross and is
+checked against price movement and closing-order pnl within 0.01 USDT per
+position. Both opening and closing fees must be present and their combined
+cost must reconcile to positions history. Funding paid is positive; received
+is negative. Duplicate venue ids never add a second cost or journal trade.
+Unreconciled rows keep a short closure reason. Headlines use only the
+reconciled subset and disclose incomplete reads.
 """
 
 from __future__ import annotations
@@ -77,8 +78,9 @@ from app.services.risk.mirror_economics import MIRROR_REF_PREFIX, RECONCILED_TAG
 
 logger = structlog.get_logger("services.blofin_demo_manual_mirror")
 
-METHOD = "positions-history-price-pnl-fee-funding/v1"
+METHOD = "positions-history-orders-fee-funding/v2"
 _Q = Decimal("0.00000001")
+_TOLERANCE = Decimal("0.01")
 _RATE = Decimal("0.0001")
 _WINDOW = timedelta(days=7) - timedelta(seconds=1)
 _MAX_PAGES = 40
@@ -111,6 +113,7 @@ _ROW_FIELDS = (
     "createTime",
     "fee",
     "fillPnl",
+    "filledSize",
     "fundingFee",
     "fundingTime",
     "historyId",
@@ -122,6 +125,7 @@ _ROW_FIELDS = (
     "positionId",
     "positionSide",
     "positions",
+    "pnl",
     "realizedPnl",
     "reduceOnly",
     "settleCurrency",
@@ -134,6 +138,7 @@ _ROW_FIELDS = (
 )
 _LOGGED_SKIPS = 20
 _VERIFIED = "pnl-verified"
+_ORDER_COST_PROOF = "blofin-economics:position-orders-v2"
 _UNVERIFIED = "pnl-unverified"
 _MIRROR_SOURCES = (
     JournalTradeSource.BLOFIN_DEMO_MANUAL,
@@ -146,9 +151,9 @@ _DISABLED = (
     "fillPnl is not documented as gross or net of fees or funding."
 )
 _READY = (
-    "Closed BloFin demo manual journal entries. Realized P&L is the "
-    "positions-history price movement times size, minus the trading fee, "
-    "minus funding paid. fillPnl is not used."
+    "Reconciled BloFin demo journal positions. Net P&L is positions-history "
+    "realizedPnl minus opening and closing order fees, minus funding paid. "
+    "Only verified positions in the recorded window are included."
 )
 
 
@@ -533,7 +538,7 @@ def _parse_slices_detailed(
     slices: list[_Slice] = []
     skipped_rows: list[SkippedRow] = []
     incomplete = False
-    seen: set[str] = set()
+    seen: dict[str, dict[str, Any]] = {}
     for row in history:
         history_id = row.get("historyId")
         position_id = row.get("positionId")
@@ -554,7 +559,9 @@ def _parse_slices_detailed(
             incomplete = True
             continue
         if history_id in seen:
-            _skip("duplicate_history_id")
+            conflict = seen[history_id] != row
+            _skip("conflicting_history_id" if conflict else "duplicate_history_id")
+            incomplete = incomplete or conflict
             continue
         contracts = _decimal(row.get("closePositions"))
         max_contracts = _decimal(row.get("maxPositions"))
@@ -593,7 +600,7 @@ def _parse_slices_detailed(
         leverage = _decimal(row.get("leverage"))
         if leverage is not None and leverage <= 0:
             leverage = None
-        seen.add(str(history_id))
+        seen[str(history_id)] = row
         slices.append(
             _Slice(
                 history_id=history_id,
@@ -658,7 +665,15 @@ def _assign_funding(
     parsed: list[tuple[str, datetime, Decimal]] = []
     unparsed_instruments: set[str] = set()
     unparsed_unknown = False
+    seen_bills: dict[str, dict[str, Any]] = {}
     for row in bills:
+        bill_id = row.get("billId")
+        if isinstance(bill_id, str) and bill_id in seen_bills:
+            if seen_bills[bill_id] != row:
+                unparsed_unknown = True
+            continue
+        if isinstance(bill_id, str):
+            seen_bills[bill_id] = row
         inst_id = row.get("instId")
         amount = _decimal(row.get("fundingFee"))
         when = _time(row.get("fundingTime"))
@@ -676,7 +691,10 @@ def _assign_funding(
     for group in by_inst.values():
         for index, left in enumerate(group):
             for right in group[index + 1 :]:
-                same_position = left.position_id == right.position_id
+                same_position = (left.position_id, left.opened_at) == (
+                    right.position_id,
+                    right.opened_at,
+                )
                 shared_close = same_position and left.closed_at == right.closed_at
                 shared_window = not same_position and _overlaps(left, right)
                 if shared_close or shared_window:
@@ -693,6 +711,7 @@ def _assign_funding(
             other.closed_at
             for other in slices
             if other.position_id == sliver.position_id
+            and other.opened_at == sliver.opened_at
             and other.history_id != sliver.history_id
             and other.closed_at <= sliver.closed_at
         ]
@@ -781,7 +800,7 @@ def _attach_orders(
                 continue
             if isinstance(order_id, str) and order_id and order_id not in order_ids:
                 order_ids.append(order_id)
-        sliver.order_ids = tuple(order_ids[:8])
+        sliver.order_ids = tuple(order_ids)
         stops, targets = _order_levels(sliver, orders, order_ids or None)
         if not stops and not targets:
             stops, targets = _order_levels(sliver, orders, None)
@@ -802,7 +821,7 @@ def _draft_from_slice(sliver: _Slice) -> MirrorDraft:
     price_matches = (
         price is not None
         and sliver.realized is not None
-        and price == _money(sliver.realized)
+        and abs(price - sliver.realized) <= _TOLERANCE
         and not sliver.side_conflict
         and sliver.settle == "USDT"
     )
@@ -815,7 +834,7 @@ def _draft_from_slice(sliver: _Slice) -> MirrorDraft:
         if sliver.contract_value is not None
         else None
     )
-    gross = price if price_matches else None
+    gross = _money(sliver.realized) if price_matches and sliver.realized is not None else None
     funding = sliver.funding if sliver.funding_ok else None
     net = None
     if verified and gross is not None and fee is not None and funding is not None:
@@ -864,6 +883,182 @@ def _draft_from_slice(sliver: _Slice) -> MirrorDraft:
         order_ids=sliver.order_ids,
         open_tracker=False,
     )
+
+
+def _position_draft(
+    group: list[_Slice],
+    all_slices: list[_Slice],
+    orders: list[dict[str, Any]],
+    conflicting_order_ids: set[str],
+    positions: list[dict[str, Any]],
+    window_begin: datetime,
+) -> MirrorDraft:
+    """One position, many closes; venue P&L anchored and costs independently checked."""
+    group.sort(key=lambda item: (item.closed_at, item.history_id))
+    first, last = group[0], group[-1]
+    drafts = [_draft_from_slice(item) for item in group]
+    quantity = sum((item.contracts for item in group), Decimal(0))
+    entry = sum((item.open_price * item.contracts for item in group), Decimal(0)) / quantity
+    exit_price = sum((item.close_price * item.contracts for item in group), Decimal(0)) / quantity
+    gross = sum((item.realized or Decimal(0) for item in group), Decimal(0))
+    funding = sum((item.funding or Decimal(0) for item in group), Decimal(0))
+    reason = None
+    if any((item.inst_id, item.direction) != (first.inst_id, first.direction) for item in group):
+        reason = "position_identity_conflict"
+    elif (
+        any(not draft.price_matches for draft in drafts)
+        or abs(sum((_price_pnl(item) or Decimal(0) for item in group), Decimal(0)) - gross)
+        > _TOLERANCE
+    ):
+        reason = "pnl_mismatch"
+    elif min(item.opened_at for item in group) < window_begin:
+        reason = "entry_before_lookback"
+    elif any(not item.funding_ok for item in group):
+        reason = "funding_incomplete"
+    fees, order_ids, cost_reason = _position_costs(
+        group, all_slices, orders, conflicting_order_ids, positions
+    )
+    reason = reason or cost_reason
+    if reason is None and (
+        any(item.fee is None for item in group)
+        or fees is None
+        or abs(sum((item.fee or Decimal(0) for item in group), Decimal(0)) - fees) > _TOLERANCE
+    ):
+        reason = "fee_mismatch"
+    net = _money(gross - fees - funding) if reason is None and fees is not None else None
+    result = (
+        TradeResult.OPEN
+        if net is None
+        else (
+            TradeResult.WIN if net > 0 else TradeResult.LOSS if net < 0 else TradeResult.BREAKEVEN
+        )
+    )
+    size = _money(quantity * first.contract_value) if first.contract_value is not None else None
+    return replace(
+        drafts[0],
+        history_ids=tuple(item.history_id for item in group),
+        entry_price=entry,
+        exit_price=exit_price,
+        entry_time=min(i.opened_at for i in group),
+        exit_time=last.closed_at,
+        size=size,
+        fees=_money(fees) if net is not None and fees is not None else None,
+        funding=_money(funding) if net is not None else None,
+        gross_pnl=_money(gross) if net is not None else None,
+        net_pnl=net,
+        result=result,
+        verified=net is not None,
+        order_ids=order_ids,
+        exit_reason=f"unverified:{reason}"
+        if reason
+        else ("closed" if quantity == first.max_contracts else "partially_closed"),
+    )
+
+
+def _position_costs(
+    group: list[_Slice],
+    all_slices: list[_Slice],
+    orders: list[dict[str, Any]],
+    conflicting_order_ids: set[str],
+    positions: list[dict[str, Any]],
+) -> tuple[Decimal | None, tuple[str, ...], str | None]:
+    """Prove both order sides and their fee sign/total against positions history.
+
+    Without an explicit positionId, only an exclusive instrument/time window
+    permits attribution. Never add order P&L to the positions-history P&L.
+    """
+    first = group[0]
+    start, end = first.opened_at, max(i.closed_at for i in group)
+    other_lifetimes: dict[datetime, datetime] = {}
+    for other in all_slices:
+        if (
+            other.position_id == first.position_id
+            and other.opened_at != start
+            and other.inst_id == first.inst_id
+        ):
+            other_lifetimes[other.opened_at] = max(
+                other_lifetimes.get(other.opened_at, other.closed_at), other.closed_at
+            )
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in orders:
+        if row.get("instId") != first.inst_id:
+            continue
+        pid = row.get("positionId")
+        if pid:
+            if pid != first.position_id:
+                continue
+            if other_lifetimes:
+                # The venue can reuse a position ID. Require a unique lifetime
+                # when the ID alone cannot establish ownership.
+                when = _time(row.get("updateTime")) or _time(row.get("createTime"))
+                if when is None or not start <= when <= end:
+                    continue
+                if any(opened <= when <= closed for opened, closed in other_lifetimes.items()):
+                    return None, (), "ambiguous_order_position"
+        else:
+            when = _time(row.get("createTime"))
+            if when is None or not start <= when <= end:
+                continue
+            if any(
+                (other.position_id, other.opened_at) != (first.position_id, start)
+                and other.inst_id == first.inst_id
+                and other.opened_at <= end
+                and start <= other.closed_at
+                for other in all_slices
+            ):
+                return None, (), "ambiguous_order_position"
+        oid = row.get("orderId")
+        if not isinstance(oid, str) or not oid:
+            return None, (), "missing_order_id"
+        if oid in conflicting_order_ids:
+            return None, (), "conflicting_order_id"
+        by_id[oid] = row
+    entry_qty = close_qty = entry_fee = close_fee = closing_pnl = Decimal(0)
+    entry_seen = close_seen = False
+    for row in by_id.values():
+        qty = _decimal(row.get("filledSize"))
+        if qty == 0:
+            continue
+        is_entry = row.get("side") == first.side
+        fee = _decimal(row.get("fee"))
+        if fee is None:
+            return None, tuple(by_id), "missing_entry_fee" if is_entry else "missing_close_fee"
+        if qty is None or qty < 0 or row.get("side") not in {"buy", "sell"}:
+            return None, tuple(by_id), "missing_order_quantity"
+        pnl = _decimal(row.get("pnl"))
+        if is_entry:
+            entry_seen = True
+            entry_qty += qty
+            entry_fee += fee
+            if pnl != 0:
+                return None, tuple(by_id), "ambiguous_entry_order"
+        else:
+            close_seen = True
+            close_qty += qty
+            close_fee += fee
+            if pnl is None:
+                return None, tuple(by_id), "missing_close_pnl"
+            closing_pnl += pnl
+    if not entry_seen:
+        return None, tuple(by_id), "missing_entry_fee"
+    if not close_seen:
+        return None, tuple(by_id), "missing_close_fee"
+    quantity = sum((item.contracts for item in group), Decimal(0))
+    remaining = sum(
+        (
+            abs(_decimal(p.get("positions")) or Decimal(0))
+            for p in positions
+            if p.get("positionId") == first.position_id
+        ),
+        Decimal(0),
+    )
+    if close_qty != quantity or entry_qty != quantity + remaining:
+        return None, tuple(by_id), "incomplete_position_history"
+    realized = sum((item.realized or Decimal(0) for item in group), Decimal(0))
+    if abs(closing_pnl - realized) > _TOLERANCE:
+        return None, tuple(by_id), "closing_pnl_mismatch"
+    # A still-open position allocates entry costs to its realized quantity only.
+    return entry_fee * quantity / entry_qty + close_fee, tuple(by_id), None
 
 
 def _open_direction(row: dict[str, Any], quantity: Decimal) -> TradeDirection | None:
@@ -966,8 +1161,30 @@ def drafts_from_raw(
     funding_incomplete = _assign_funding(slices, funding, window_begin=window_begin)
     _attach_orders(slices, fills, orders)
     opens, open_skipped, positions_complete = _open_drafts(positions, meta)
+    for sliver in slices:
+        if any(
+            tracker.position_id != sliver.position_id
+            and tracker.symbol == _symbol(sliver.inst_id)
+            and (tracker.entry_time is None or tracker.entry_time <= sliver.closed_at)
+            for tracker in opens
+        ):
+            # Funding bills have no position id. An open hedge can own the bill.
+            sliver.funding_ok = False
+            sliver.funding = None
+    groups: dict[tuple[str, datetime], list[_Slice]] = {}
+    for sliver in slices:
+        groups.setdefault((sliver.position_id, sliver.opened_at), []).append(sliver)
+    orders_by_id: dict[str, dict[str, Any]] = {}
+    conflicting_order_ids: set[str] = set()
+    for row in orders:
+        oid = row.get("orderId")
+        if isinstance(oid, str) and oid and orders_by_id.setdefault(oid, row) != row:
+            conflicting_order_ids.add(oid)
     return BuildResult(
-        closed=tuple(_draft_from_slice(sliver) for sliver in slices),
+        closed=tuple(
+            _position_draft(group, slices, orders, conflicting_order_ids, positions, window_begin)
+            for group in groups.values()
+        ),
         opens=tuple(opens),
         skipped=len(skipped_rows) + open_skipped,
         history_incomplete=history_incomplete,
@@ -1107,8 +1324,15 @@ def _tags(draft: MirrorDraft, existing: list[str], *, reconciled: bool) -> list[
         and tag not in {_VERIFIED, _UNVERIFIED}
     ]
     mirror = [f"blofin-history:{item}" for item in draft.history_ids]
+    mirror.append(
+        f"blofin-position:{draft.position_id}:{_ms(draft.entry_time)}"
+        if draft.entry_time
+        else f"blofin-position:{draft.position_id}"
+    )
     mirror.extend(f"blofin-order:{item}" for item in draft.order_ids)
     mirror.append(_VERIFIED if draft.verified else _UNVERIFIED)
+    if draft.verified:
+        mirror.append(_ORDER_COST_PROOF)
     if draft.open_tracker:
         mirror = [tag for tag in mirror if tag != _UNVERIFIED]
     if reconciled:
@@ -1333,9 +1557,7 @@ class BloFinDemoManualMirror:
             # their whole window. Re-reading them here would see a shorter one.
             built = replace(
                 built,
-                closed=tuple(
-                    draft for draft in built.closed if set(draft.history_ids) <= delta_ids
-                ),
+                closed=tuple(draft for draft in built.closed if set(draft.history_ids) & delta_ids),
             )
         if positions_dropped:
             built = replace(built, positions_complete=False)
@@ -1357,7 +1579,12 @@ class BloFinDemoManualMirror:
             or built.instruments_incomplete
             or instruments_dropped
         )
-        if incomplete:
+        if (
+            page_capped
+            or built.history_incomplete
+            or not built.positions_complete
+            or instruments_dropped
+        ):
             built = _without_verified_economics(built)
         lock_journal_mirror(session, organization_id)
         report = self._persist(session, built, organization_id=organization_id, user_id=user_id)
@@ -1478,6 +1705,22 @@ class BloFinDemoManualMirror:
         for draft in built.closed:
             claimed = [row for row in rows if _claim_manual(row, draft, user_id=user_id)]
             target = by_ref.get(draft.external_ref)
+            siblings = [
+                row
+                for row in rows
+                if row.source is JournalTradeSource.BLOFIN_DEMO_MANUAL
+                and (row.external_ref or "").startswith("blofin-demo-history:")
+                and (
+                    _history_ids(row) & set(draft.history_ids)
+                    or (
+                        draft.entry_time is not None
+                        and f"blofin-position:{draft.position_id}:{_ms(draft.entry_time)}"
+                        in (row.tags or [])
+                    )
+                )
+            ]
+            if target is None and siblings:
+                target = min(siblings, key=lambda row: row.external_ref or "")
             if target is not None and target.user_id != user_id:
                 target = None
             if target is None and len(claimed) == 1:
@@ -1511,6 +1754,16 @@ class BloFinDemoManualMirror:
                     continue
                 _apply_venue(target, draft, fresh=False)
                 by_ref[draft.external_ref] = target
+                updated += 1
+            for sibling in siblings:
+                if sibling is target:
+                    continue
+                # Retain old URLs and annotations, but never count a legacy leg twice.
+                sibling.status = JournalTradeStatus.CANCELLED
+                sibling.exit_reason = "consolidated_position"
+                sibling.gross_pnl = sibling.fees = sibling.funding = sibling.net_pnl = None
+                sibling.result = TradeResult.OPEN
+                sibling.tags = [tag for tag in sibling.tags or [] if tag != _VERIFIED]
                 updated += 1
         open_refs = {draft.external_ref for draft in built.opens}
         opens_written = 0
@@ -1591,7 +1844,7 @@ def _without_verified_economics(built: BuildResult) -> BuildResult:
             gross_pnl=None,
             net_pnl=None,
             result=TradeResult.OPEN,
-            exit_reason="unverified",
+            exit_reason="unverified:history_read_incomplete",
             verified=False,
             planned_risk=None,
         )
@@ -1731,9 +1984,9 @@ def _formula_net(row: JournalTrade) -> Decimal | None:
     if row.direction is TradeDirection.SHORT:
         delta = -delta
     gross = _money(delta * row.size)
-    if gross != _money(row.gross_pnl):
+    if abs(gross - row.gross_pnl) > _TOLERANCE:
         return None
-    return _money(gross - row.fees - row.funding)
+    return _money(row.gross_pnl - row.fees - row.funding)
 
 
 def without_annotation_grade(tags: Iterable[object] | None) -> list[str]:
@@ -1760,10 +2013,11 @@ def _verified_row(row: JournalTrade) -> bool:
         expected = TradeResult.BREAKEVEN
     return (
         row.status is JournalTradeStatus.CLOSED
-        and row.source is JournalTradeSource.BLOFIN_DEMO_MANUAL
+        and row.source in _MIRROR_SOURCES
         and ref.startswith("blofin-demo-history:")
         and ref != _CYCLE_REF
         and _VERIFIED in tags
+        and _ORDER_COST_PROOF in tags
         and _UNVERIFIED not in tags
         and row.result is expected
     )
@@ -1776,7 +2030,7 @@ def publish_mirror_performance(
     tenant: TenantContext,
     settings: Settings,
 ) -> None:
-    """Fill headline numbers only when every closed mirrored row is verified."""
+    """Publish the reconciled subset, with explicit exclusions and read coverage."""
     performance = account.performance
     if not settings.blofin_demo_manual_mirror_enabled:
         performance.manual_mirror_status = "disabled"
@@ -1795,13 +2049,18 @@ def publish_mirror_performance(
             select(JournalTrade).where(
                 JournalTrade.organization_id == tenant.organization_id,
                 JournalTrade.user_id == tenant.user_id,
-                JournalTrade.source == JournalTradeSource.BLOFIN_DEMO_MANUAL,
+                JournalTrade.source.in_(_MIRROR_SOURCES),
+                exact_prefix(JournalTrade.external_ref, "blofin-demo-history:"),
                 JournalTrade.status == JournalTradeStatus.CLOSED,
             )
         ).all()
     )
     rows = [row for row in rows if row.external_ref != _CYCLE_REF]
-    if not cycle_marker_ok(cycle):
+    verified = [row for row in rows if _verified_row(row)]
+    unverified_count = len(rows) - len(verified)
+    performance.unresolved_round_trips = unverified_count
+    performance.mirror_trade_coverage = f"{len(verified)} of {len(rows)} trades verified"
+    if not cycle_marker_ok(cycle) and not verified:
         performance.manual_mirror_status = "withheld"
         performance.manual_mirror_reason = (
             "Win rate and realized P&L stay withheld. The latest hand-trade "
@@ -1815,14 +2074,11 @@ def publish_mirror_performance(
         performance.losses = None
         performance.realized_pnl = None
         return
-    unverified = [row for row in rows if not _verified_row(row)]
-    if unverified:
+    if unverified_count and not verified:
         performance.manual_mirror_status = "withheld"
         performance.manual_mirror_reason = (
-            "Win rate and realized P&L stay withheld. "
-            f"{len(unverified)} closed mirrored trades do not match the "
-            "positions-history price formula, or fee or funding coverage is "
-            "incomplete. fillPnl remains undocumented as gross or net."
+            f"{unverified_count} positions unreconciled: price, order fees or funding "
+            "do not reconcile. See each journal entry's closure reason."
         )
         performance.average_r = None
         performance.win_rate = None
@@ -1831,6 +2087,7 @@ def publish_mirror_performance(
         performance.losses = None
         performance.realized_pnl = None
         return
+    rows = verified
     wins = sum(1 for row in rows if row.result is TradeResult.WIN)
     losses = sum(1 for row in rows if row.result is TradeResult.LOSS)
     decided = wins + losses
@@ -1855,6 +2112,12 @@ def publish_mirror_performance(
         if rows
         else ("Manual mirror is on. No closed mirrored trades yet. fillPnl is not used.")
     )
+    if unverified_count:
+        performance.manual_mirror_reason += f" {unverified_count} unreconciled trades excluded."
+    if not cycle_marker_ok(cycle):
+        performance.manual_mirror_reason += (
+            " Latest mirror read incomplete; showing saved reconciled trades."
+        )
     performance.pnl_method = METHOD
     performance.trade_count = len(rows)
     performance.wins = wins

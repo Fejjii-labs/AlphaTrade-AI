@@ -72,11 +72,13 @@ function CurveTooltip({ active, payload }: TooltipProps<number, string>) {
 export function CumulativePnlChart({
   points,
   maxDrawdown = null,
+  tradeCoverage,
   loading = false,
 }: {
   points: JournalDashboardCurvePoint[];
   /** Peak-to-trough drop (positive magnitude) from the response's risk block. */
   maxDrawdown?: string | null;
+  tradeCoverage?: string;
   loading?: boolean;
 }) {
   const gradientId = useId().replace(/:/g, "");
@@ -103,6 +105,9 @@ export function CumulativePnlChart({
           >
             {last ? formatMonetary(last.cumulative_net_pnl) : "—"}
           </span>
+          {last && tradeCoverage && !loading ? (
+            <span className="block text-xs text-text-secondary">{tradeCoverage}</span>
+          ) : null}
           {toNumber(maxDrawdown) !== null && !loading ? (
             <span className="block text-[11px] text-text-muted" data-testid="cumulative-drawdown">
               Max drawdown <span className="font-data text-danger">−{Math.abs(toNumber(maxDrawdown) ?? 0).toFixed(2)}</span>

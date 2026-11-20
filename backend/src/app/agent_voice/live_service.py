@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from openai.types.live.client_event_param import ClientEventParam
-from pydantic import Field, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter
 
 from app.agent_voice.config import VoiceUnavailableError
 from app.agent_voice.contracts import VoiceAudio, VoiceEnd, VoiceStart
@@ -32,6 +32,10 @@ def safe_code(value: object) -> str | None:
 
 
 class TranscriptFragment(StrictModel):
+    # Provider deltas carry their word boundaries (" you"); stripping them runs
+    # words together in captions and in the request sent to the Agent.
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
     event_id: str = Field(min_length=1, max_length=128)
     delta: str = Field(max_length=8000)
     start_ms: int = Field(ge=0, le=3600000)
@@ -65,6 +69,8 @@ class LiveSession:
         self.provider_id: str | None = None
         self.output_muted = False
         self.interruption = 0
+        # Start of the assistant reply currently playing; None once user speech cleared it.
+        self.reply_start_ms: int | None = None
         self.fragments: list[dict[str, Any]] = []
         self.fragment_ids: set[str] = set()
         self.consumed: set[str] = set()
@@ -209,7 +215,13 @@ class LiveSession:
                 self.fragments.append(fragment)
                 self.transcript_changed.set()
                 self.interruption += 1
-                await self.send({"type": "playback.clear", "muted": False})
+                # Only genuine new speech that began after the reply started stops
+                # it; a late fragment of the request itself must not cut it off.
+                if self.reply_start_ms is not None and fragment["start_ms"] >= self.reply_start_ms:
+                    self.reply_start_ms = None
+                    await self.send({"type": "playback.clear", "muted": False})
+            elif self.reply_start_ms is None:
+                self.reply_start_ms = fragment["start_ms"]
             if not self.closing:
                 await self.send(
                     {

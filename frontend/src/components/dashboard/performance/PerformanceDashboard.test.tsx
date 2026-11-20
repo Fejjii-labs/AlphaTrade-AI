@@ -111,11 +111,23 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("PerformanceDashboard", () => {
+  it("shows the closed-trade P&L coverage alongside demo headline totals", async () => {
+    const data = response();
+    data.summary.pnl_sample_count = 4;
+    data.summary.pnl_trade_coverage = "4 of 5 trades verified";
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(data);
+    render(<PerformanceDashboard now={NOW} scope="demo" />);
+    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
+    for (const id of ["kpi-net-pnl", "kpi-win-rate", "calendar-month-total", "cumulative-pnl"]) {
+      expect(screen.getByTestId(id)).toHaveTextContent("4 of 5 trades verified");
+    }
+  });
+
   it("renders real numbers from the endpoint", async () => {
     vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
     render(<PerformanceDashboard now={NOW} />);
     await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
-    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("5 closed trades");
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("5 of 5 trades verified");
     expect(screen.getByTestId("kpi-profit-factor")).toHaveTextContent("1.50");
     expect(screen.getByTestId("kpi-expectancy")).toHaveTextContent("+20.00");
     expect(screen.getByTestId("kpi-expectancy")).toHaveTextContent("Net P&L per closed trade");

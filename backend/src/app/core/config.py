@@ -276,6 +276,7 @@ class Settings(BaseSettings):
     # is pinned to one tenant/user/account; defaults never construct a client.
     manual_blofin_demo_enabled: bool = False
     governed_blofin_demo_enabled: bool = False
+    governed_demo_sfp_enabled: bool = False
     # Per-trade stop-loss band as a percent of total portfolio equity. A demo
     # plan is sized so its stop-distance loss lands inside [min, max]; a plan
     # that cannot fit is refused. Adjustable, not a fixed rule.
@@ -286,8 +287,9 @@ class Settings(BaseSettings):
     governed_demo_plan_valid_seconds: int = 60
     # Upper bound for governed_demo_plan_valid_seconds; larger values clamp.
     governed_demo_plan_valid_max_seconds: int = 300
+    risk_model_v2_enabled: bool = False
     # Ceiling on the demo account's existing leverage; above it a plan is refused.
-    governed_demo_max_leverage: Decimal = Decimal("20")
+    governed_demo_max_leverage: Decimal = Decimal("10")
     governed_blofin_demo_organization_id: str = ""
     governed_blofin_demo_user_id: str = ""
     governed_blofin_demo_account_id: str = ""
@@ -309,25 +311,53 @@ class Settings(BaseSettings):
     # both keys with sync: false and sets no value (Fable audit I5).
     paper_exit_monitor_enabled: bool = False
     paper_exit_monitor_dry_run: bool = True
-    # Retention for append-only runtime logs (H5): watcher observability
-    # events, watcher scan attempts, scan-stage paper evaluation rows, paper
-    # Telegram notification rows and BloFin demo snapshots (newest per org
-    # always kept). Trades, orders, journal, plans, candidates, audit and
-    # strategy rows are never pruned.
+    # Partial exits (TP1..TPn plus an optional trailing runner), one switch per
+    # venue, both off. Off keeps the single full-size target path; a plan with
+    # several targets or a runner stays out of the monitor and the demo loop.
+    # Only an explicit true/false parses; anything else refuses to load. Never
+    # enables a real-money venue (services/partial_exits/flags.py).
+    paper_partial_exits_enabled: bool = False
+    # BloFin DEMO only (EXCHANGE_MODE=paper_exchange_demo, real trading off):
+    # a ladder is entered without attached TP/SL and every exit is a
+    # bot-managed market reduceOnly close (services/partial_exits/demo.py).
+    governed_demo_partial_exits_enabled: bool = False
+    # Retention (H5 + the approved data policy). Kept forever: strategies,
+    # conversations, journal, trades/orders/fills/plans, paper_decision and
+    # paper_trade_* setup events, knowledge, accounts and settings. Candidates
+    # and Telegram setup notifications go after 7 days (a summary row in
+    # trade_candidate_summaries is written first and kept); audit logs after
+    # 90 days; scan-stage noise after 24 hours; BloFin demo snapshots thin to
+    # the newest per org plus one per UTC day for 30 days.
     # Off by default and dry-run by default: enabling deletion is an explicit
     # operator decision (RETENTION_ENABLED=true and RETENTION_DRY_RUN=false).
-    # Windows are in hours with a 24-hour floor (one year ceiling).
+    # Hour windows have a 24-hour floor (one year ceiling).
     retention_enabled: bool = False
     retention_dry_run: bool = True
+    # The paper worker runs one pass per UTC day, at or after this hour.
+    retention_schedule_hour_utc: int = Field(default=2, ge=0, le=23)
+    # Legacy key, still accepted; the worker now schedules by UTC day.
     retention_interval_seconds: int = Field(default=3600, ge=300, le=86400)
     retention_batch_size: int = Field(default=5000, ge=100, le=50000)
     retention_max_batches_per_table: int = Field(default=50, ge=1, le=1000)
     retention_watcher_events_hours: int = Field(default=24, ge=24, le=8760)
-    retention_watcher_error_events_hours: int = Field(default=72, ge=24, le=8760)
+    retention_watcher_error_events_hours: int = Field(default=24, ge=24, le=8760)
     retention_watcher_attempts_hours: int = Field(default=24, ge=24, le=8760)
+    # Terminal lineages and their scheduled-scan keys. Scheduled-scan keys are
+    # bucketed by the closed bar, so a key can recur for one bar interval (up
+    # to 1w); the default stays above that so a replay never re-runs a scan.
+    retention_watcher_lineage_hours: int = Field(default=192, ge=192, le=8760)
     retention_paper_evaluation_hours: int = Field(default=24, ge=24, le=8760)
-    retention_telegram_notifications_hours: int = Field(default=24, ge=24, le=8760)
-    retention_demo_snapshot_days: int = Field(default=30, ge=7, le=365)
+    retention_telegram_notifications_hours: int = Field(default=168, ge=24, le=8760)
+    retention_candidate_days: int = Field(default=7, ge=7, le=365)
+    retention_audit_log_days: int = Field(default=90, ge=30, le=3650)
+    retention_brain_observation_hours: int = Field(default=24, ge=24, le=8760)
+    retention_public_market_hours: int = Field(default=24, ge=24, le=8760)
+    # BloFin demo snapshots: the newest row per UTC day is kept forever by
+    # default (0 or unset) for the daily P&L calendar. A positive value (>= 7)
+    # also drops daily rows older than that many days.
+    retention_demo_snapshot_days: int = Field(default=0, ge=0, le=3650)
+    # Run VACUUM (ANALYZE) on each table the pass deleted rows from.
+    retention_vacuum_analyze: bool = False
     # Repeated degraded or refused exit-monitor cycles raise a structured
     # alert after this many seconds. Default 15 minutes, capped at 1 hour,
     # so the wait stays well under the 24-hour backfill horizon. At least
@@ -775,12 +805,37 @@ class Settings(BaseSettings):
     billing_checkout_cancel_url: str = "http://localhost:3000/billing?checkout=cancel"
     billing_portal_return_url: str = "http://localhost:3000/billing"
 
+    @field_validator("governed_demo_sfp_enabled", mode="before")
+    @classmethod
+    def _governed_demo_sfp_flag(cls, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            token = value.strip().lower()
+            if token in {"", "false"}:
+                return False
+            if token == "true":
+                return True
+        raise ValueError("GOVERNED_DEMO_SFP_ENABLED must be true or false.")
+
     @field_validator("email_provider", mode="before")
     @classmethod
     def _normalize_email_provider(cls, value: object) -> object:
         if isinstance(value, str):
             return value.strip().lower()
         return value
+
+    @field_validator(
+        "paper_partial_exits_enabled", "governed_demo_partial_exits_enabled", mode="before"
+    )
+    @classmethod
+    def _strict_partial_exit_flag(cls, value: object) -> object:
+        """Fail closed: only a boolean or the words true/false are accepted."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+            return value.strip().lower() == "true"
+        raise ValueError("Partial-exit flags accept only true or false.")
 
     @field_validator("auth_cookie_samesite", mode="before")
     @classmethod
@@ -1022,6 +1077,13 @@ class Settings(BaseSettings):
             )
         return self
 
+    @field_validator("retention_demo_snapshot_days", mode="before")
+    @classmethod
+    def _demo_snapshot_days_unset_is_unlimited(cls, value: object) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return 0
+        return value
+
     @model_validator(mode="after")
     def _validate_retention_windows(self) -> Settings:
         """Error watcher events must outlive normal noise, never the reverse (C-B4)."""
@@ -1031,6 +1093,18 @@ class Settings(BaseSettings):
                 f"({self.retention_watcher_error_events_hours}) must be >= "
                 f"RETENTION_WATCHER_EVENTS_HOURS ({self.retention_watcher_events_hours}); "
                 "error events would otherwise be pruned before normal events."
+            )
+        if 0 < self.retention_demo_snapshot_days < 7:
+            raise ValueError(
+                f"RETENTION_DEMO_SNAPSHOT_DAYS ({self.retention_demo_snapshot_days}) must be "
+                "0 (keep one snapshot per UTC day forever) or at least 7."
+            )
+        if self.retention_telegram_notifications_hours < self.retention_candidate_days * 24:
+            raise ValueError(
+                "RETENTION_TELEGRAM_NOTIFICATIONS_HOURS "
+                f"({self.retention_telegram_notifications_hours}) must be >= "
+                f"RETENTION_CANDIDATE_DAYS * 24 ({self.retention_candidate_days * 24}); "
+                "candidate summaries read the notification rows to record what was alerted."
             )
         return self
 

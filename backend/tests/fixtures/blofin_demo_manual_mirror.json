@@ -1,5 +1,5 @@
 {
-  "comment": "Recorded-shape BloFin demo payloads. Amounts are strings, as the venue returns them. fillPnl is present and must be ignored.",
+  "comment": "Synthetic BloFin demo-shaped payloads, not captured account evidence. Independent opening/closing order fees reconcile with positions-history. fillPnl is ignored.",
   "instruments": [
     {"instId": "BTC-USDT", "contractValue": "0.01", "settleCurrency": "USDT"},
     {"instId": "ETH-USDT", "contractValue": "1", "settleCurrency": "USDT"},
@@ -50,7 +50,21 @@
         "reduceOnly": "false",
         "createTime": "1792195205000",
         "slTriggerPrice": "90",
-        "tpTriggerPrice": "120"
+        "tpTriggerPrice": "120",
+        "positionId": "p-long",
+        "filledSize": "2",
+        "pnl": "0",
+        "fee": "0.004"
+      },
+      {
+        "orderId": "o-long-close-0",
+        "instId": "BTC-USDT",
+        "side": "sell",
+        "positionId": "p-long",
+        "createTime": "1792238400000",
+        "filledSize": "2",
+        "pnl": "0.2",
+        "fee": "0.006"
       }
     ]
   },
@@ -99,7 +113,21 @@
         "reduceOnly": "false",
         "createTime": "1792195205000",
         "slTriggerPrice": "110",
-        "tpTriggerPrice": "80"
+        "tpTriggerPrice": "80",
+        "positionId": "p-short",
+        "filledSize": "2",
+        "pnl": "0",
+        "fee": "-0.001"
+      },
+      {
+        "orderId": "o-short-close-0",
+        "instId": "BTC-USDT",
+        "side": "buy",
+        "positionId": "p-short",
+        "createTime": "1792238400000",
+        "filledSize": "2",
+        "pnl": "0.2",
+        "fee": "-0.002"
       }
     ]
   },
@@ -135,7 +163,28 @@
     ],
     "fills": [],
     "funding": [],
-    "orders": []
+    "orders": [
+      {
+        "orderId": "o-partial_open-entry",
+        "createTime": "1792195200000",
+        "instId": "BTC-USDT",
+        "side": "buy",
+        "positionId": "p-part",
+        "filledSize": "2",
+        "pnl": "0",
+        "fee": "0.001"
+      },
+      {
+        "orderId": "o-partial_open-close-0",
+        "instId": "BTC-USDT",
+        "side": "sell",
+        "positionId": "p-part",
+        "createTime": "1792216800000",
+        "filledSize": "1",
+        "pnl": "0.05",
+        "fee": "0.0005"
+      }
+    ]
   },
   "partial_flat": {
     "positions": [],
@@ -182,7 +231,38 @@
         "fundingTime": "1792224000000"
       }
     ],
-    "orders": []
+    "orders": [
+      {
+        "orderId": "o-partial_flat-entry",
+        "createTime": "1792195200000",
+        "instId": "BTC-USDT",
+        "side": "buy",
+        "positionId": "p-part",
+        "filledSize": "2",
+        "pnl": "0",
+        "fee": "0.001"
+      },
+      {
+        "orderId": "o-partial_flat-close-0",
+        "instId": "BTC-USDT",
+        "side": "sell",
+        "positionId": "p-part",
+        "createTime": "1792216800000",
+        "filledSize": "1",
+        "pnl": "0.05",
+        "fee": "0.0005"
+      },
+      {
+        "orderId": "o-partial_flat-close-1",
+        "instId": "BTC-USDT",
+        "side": "sell",
+        "positionId": "p-part",
+        "createTime": "1792238400000",
+        "filledSize": "1",
+        "pnl": "0.1",
+        "fee": "0.0015"
+      }
+    ]
   },
   "eth_doc": {
     "history": [

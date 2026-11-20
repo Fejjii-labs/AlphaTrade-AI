@@ -263,9 +263,11 @@ export function PerformanceKpiCards({
   summary,
   risk = null,
   loading = false,
+  tradeCoverage,
 }: {
   summary: JournalDashboardSummary | null;
   risk?: JournalDashboardRisk | null;
+  tradeCoverage?: string;
   loading?: boolean;
 }) {
   if (loading) return <KpiSkeletons />;
@@ -280,7 +282,7 @@ export function PerformanceKpiCards({
         icon={Wallet}
         value={formatMonetary(s?.net_pnl)}
         tone={moneyTone(s?.net_pnl)}
-        detail={s ? `${formatCount(s.trade_count)} closed trades` : "No data"}
+        detail={tradeCoverage ?? (s ? `${formatCount(s.trade_count)} closed trades` : "No data")}
       />
       <KpiCard
         testId="kpi-expectancy"
@@ -288,7 +290,7 @@ export function PerformanceKpiCards({
         icon={Sigma}
         value={formatMonetary(s?.expectancy)}
         tone={moneyTone(s?.expectancy)}
-        detail="Net P&L per closed trade"
+        detail={["Net P&L per closed trade", tradeCoverage].filter(Boolean).join(" · ")}
       />
       <KpiCard
         testId="kpi-profit-factor"
@@ -318,7 +320,7 @@ export function PerformanceKpiCards({
         icon={Percent}
         value={formatPercent(winRate, 1)}
         tone={winRate === null ? "none" : "neutral"}
-        detail="Wins ÷ (wins + losses) · excludes breakevens"
+        detail={["Wins ÷ (wins + losses) · excludes breakevens", tradeCoverage].filter(Boolean).join(" · ")}
         visual={
           <WinRateGauge
             wins={s?.wins ?? 0}

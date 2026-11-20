@@ -20,7 +20,11 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.prompt_registry import load_prompt_record
 from app.guardrails.citations import CITATION_NOT_IN_RETRIEVED_SET
-from app.interactive_agent.contracts import REMOVED_MARKERS_PREFIX, UNCITED_SOURCES_NOTE
+from app.interactive_agent.contracts import (
+    RECORDED_EVIDENCE_LIMIT,
+    REMOVED_MARKERS_PREFIX,
+    UNCITED_SOURCES_NOTE,
+)
 from app.interactive_agent.presentation import readable_number
 from app.providers.factory import resolve_providers
 from app.providers.llm import LLMMessage, LLMProvider, OpenAILLMProvider
@@ -50,8 +54,6 @@ _CITATION = r"\[[^\]\n]*\](?:\((?:[^()\n]|\([^()\n]*\))*\))?|【[^】\n]*】"
 _PROSE_BOUNDARY = re.compile(rf"(?:{_CITATION})|[.!?][\"\u201d\u2019')]*(?=\s|$)")
 _SOURCE_MARKER = re.compile(_CITATION)
 _ABBREVIATIONS = frozenset({"e.g.", "i.e.", "etc.", "vs.", "mr.", "mrs.", "dr.", "fig."})
-# Facts beyond this bound are not sent to the model (see compose()).
-_FACT_LIMIT = 16000
 _KNOWLEDGE_MARKER = re.compile(r"([ \t]*)\[(K\d+(?:\s*,\s*K\d+)*)\]")
 
 _SYSTEM_PROMPT = load_prompt_record("interactive_agent_system")
@@ -146,7 +148,7 @@ class ModelConversationalResponder:
                             f"User message:\n{message.strip()}\n\n"
                             "Stored facts. Repeat unavailable or stale exactly. "
                             "Do not invent prices. Do not claim a record was confirmed.\n"
-                            f"{factual_context[:_FACT_LIMIT]}"
+                            f"{factual_context[:RECORDED_EVIDENCE_LIMIT]}"
                         ),
                     ),
                 ],
@@ -207,7 +209,7 @@ def verify_source_markers(
     are stripped and flagged (``citation_not_in_retrieved_set``). Prose that cites
     nothing while passages were supplied gets a limitation note, not a failure.
     """
-    sent = factual_context[:_FACT_LIMIT]
+    sent = factual_context[:RECORDED_EVIDENCE_LIMIT]
     supplied = {
         label: chunk_id
         for label, chunk_id in references.items()

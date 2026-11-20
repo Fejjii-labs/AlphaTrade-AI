@@ -19,6 +19,17 @@ class BloFinSyncRepository:
         self._session.flush()
         return row
 
+    def latest_for_org_user(
+        self, organization_id: uuid.UUID, user_id: uuid.UUID | None
+    ) -> SnapshotModel | None:
+        stmt = select(SnapshotModel).where(SnapshotModel.organization_id == organization_id)
+        stmt = stmt.where(
+            SnapshotModel.user_id.is_(None) if user_id is None else SnapshotModel.user_id == user_id
+        )
+        return self._session.scalars(
+            stmt.order_by(SnapshotModel.synced_at.desc(), SnapshotModel.id.desc()).limit(1)
+        ).first()
+
     def verified_uid_for_binding(self, organization_id: uuid.UUID, binding: str) -> str | None:
         return self._session.scalar(
             select(SnapshotModel.provenance["native_account_uid"].as_string())

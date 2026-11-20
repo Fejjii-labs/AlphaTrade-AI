@@ -112,6 +112,7 @@ export function PnlCalendar({
   month,
   days,
   summary,
+  tradeCoverage,
   loading = false,
   error = false,
   todayIso = null,
@@ -123,6 +124,7 @@ export function PnlCalendar({
   month: MonthRef;
   days: JournalDashboardDay[];
   summary: JournalDashboardSummary | null;
+  tradeCoverage?: string;
   loading?: boolean;
   error?: boolean;
   /** Local ISO date to outline; null hides the marker. */
@@ -184,6 +186,7 @@ export function PnlCalendar({
               {" "}
               · <span className="font-data">{formatCount(days.length)}</span> trading day
               {days.length === 1 ? "" : "s"}
+              {tradeCoverage ? ` · ${tradeCoverage}` : ""}
             </>
           )}
         </p>

@@ -4284,9 +4284,19 @@
       "AutonomousStrategyOption": {
         "additionalProperties": false,
         "properties": {
+          "approved": {
+            "default": false,
+            "title": "Approved",
+            "type": "boolean"
+          },
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "paper_eligible": {
+            "default": false,
+            "title": "Paper Eligible",
+            "type": "boolean"
           },
           "strategy_id": {
             "format": "uuid",
@@ -4465,6 +4475,37 @@
             ],
             "title": "Strategy Id"
           },
+          "strategy_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Ids"
+          },
+          "strategy_scope": {
+            "anyOf": [
+              {
+                "enum": [
+                  "selected",
+                  "all_eligible"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Scope"
+          },
           "symbol": {
             "anyOf": [
               {
@@ -4557,7 +4598,7 @@
             "type": "string"
           },
           "max_demo_leverage_ceiling": {
-            "default": 20,
+            "default": 10,
             "title": "Max Demo Leverage Ceiling",
             "type": "integer"
           },
@@ -4600,12 +4641,29 @@
             ],
             "title": "Strategy Id"
           },
+          "strategy_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Strategy Ids",
+            "type": "array"
+          },
           "strategy_options": {
             "items": {
               "$ref": "#/components/schemas/AutonomousStrategyOption"
             },
             "title": "Strategy Options",
             "type": "array"
+          },
+          "strategy_scope": {
+            "default": "selected",
+            "enum": [
+              "selected",
+              "all_eligible"
+            ],
+            "title": "Strategy Scope",
+            "type": "string"
           },
           "symbol": {
             "anyOf": [
@@ -10749,6 +10807,18 @@
             ],
             "title": "Gross Pnl"
           },
+          "linked_trade_coverage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "readOnly": true,
+            "title": "Linked Trade Coverage"
+          },
           "losses": {
             "anyOf": [
               {
@@ -10779,6 +10849,17 @@
             "default": 0,
             "title": "Manual Test Trades",
             "type": "integer"
+          },
+          "mirror_trade_coverage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mirror Trade Coverage"
           },
           "net_pnl": {
             "anyOf": [
@@ -10909,6 +10990,9 @@
             "title": "Wins"
           }
         },
+        "required": [
+          "linked_trade_coverage"
+        ],
         "title": "DemoAccountPerformance",
         "type": "object"
       },
@@ -11023,13 +11107,138 @@
         "title": "DemoAccountPosition",
         "type": "object"
       },
+      "DemoBotRiskSettings-Input": {
+        "additionalProperties": false,
+        "properties": {
+          "daily_stop_pct": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 5.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,3}|(?=[\\d.]{1,6}0*$)\\d{0,3}\\.\\d{0,2}0*$)",
+                "type": "string"
+              }
+            ],
+            "title": "Daily Stop Pct"
+          },
+          "grade_risk_overrides": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                  "type": "string"
+                }
+              ]
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/Grade"
+            },
+            "title": "Grade Risk Overrides",
+            "type": "object"
+          },
+          "grades_gate_entries": {
+            "default": false,
+            "title": "Grades Gate Entries",
+            "type": "boolean"
+          },
+          "leverage": {
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Leverage",
+            "type": "integer"
+          },
+          "margin_mode": {
+            "const": "isolated",
+            "title": "Margin Mode",
+            "type": "string"
+          },
+          "risk_per_trade_pct": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 5.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,3}|(?=[\\d.]{1,6}0*$)\\d{0,3}\\.\\d{0,2}0*$)",
+                "type": "string"
+              }
+            ],
+            "title": "Risk Per Trade Pct"
+          }
+        },
+        "required": [
+          "risk_per_trade_pct",
+          "daily_stop_pct",
+          "leverage",
+          "margin_mode"
+        ],
+        "title": "DemoBotRiskSettings",
+        "type": "object"
+      },
+      "DemoBotRiskSettings-Output": {
+        "additionalProperties": false,
+        "properties": {
+          "daily_stop_pct": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,3}|(?=[\\d.]{1,6}0*$)\\d{0,3}\\.\\d{0,2}0*$)",
+            "title": "Daily Stop Pct",
+            "type": "string"
+          },
+          "grade_risk_overrides": {
+            "additionalProperties": {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/Grade"
+            },
+            "title": "Grade Risk Overrides",
+            "type": "object"
+          },
+          "grades_gate_entries": {
+            "default": false,
+            "title": "Grades Gate Entries",
+            "type": "boolean"
+          },
+          "leverage": {
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Leverage",
+            "type": "integer"
+          },
+          "margin_mode": {
+            "const": "isolated",
+            "title": "Margin Mode",
+            "type": "string"
+          },
+          "risk_per_trade_pct": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,3}|(?=[\\d.]{1,6}0*$)\\d{0,3}\\.\\d{0,2}0*$)",
+            "title": "Risk Per Trade Pct",
+            "type": "string"
+          }
+        },
+        "required": [
+          "risk_per_trade_pct",
+          "daily_stop_pct",
+          "leverage",
+          "margin_mode"
+        ],
+        "title": "DemoBotRiskSettings",
+        "type": "object"
+      },
       "DemoLeverageOverride": {
         "additionalProperties": false,
         "properties": {
           "leverage": {
             "anyOf": [
               {
-                "maximum": 20.0,
+                "maximum": 10.0,
                 "minimum": 1.0,
                 "type": "integer"
               },
@@ -17413,6 +17622,18 @@
         "title": "GovernedProposalCreate",
         "type": "object"
       },
+      "Grade": {
+        "description": "Setup grade. C and a missing grade are not tradable.",
+        "enum": [
+          "A+",
+          "A",
+          "B+",
+          "B",
+          "C"
+        ],
+        "title": "Grade",
+        "type": "string"
+      },
       "GroupBreakdownSchema": {
         "properties": {
           "key": {
@@ -19856,6 +20077,17 @@
             "default": 0,
             "title": "Pnl Sample Count",
             "type": "integer"
+          },
+          "pnl_trade_coverage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl Trade Coverage"
           },
           "profit_factor": {
             "anyOf": [
@@ -76812,6 +77044,78 @@
         "summary": "Evaluate loss acceptance gate",
         "tags": [
           "risk"
+        ]
+      }
+    },
+    "/risk/policy/demo-bot-settings": {
+      "get": {
+        "operationId": "read_demo_bot_settings_risk_policy_demo_bot_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoBotRiskSettings-Output"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Demo Bot Settings",
+        "tags": [
+          "risk",
+          "risk-policy"
+        ]
+      },
+      "put": {
+        "operationId": "update_demo_bot_settings_risk_policy_demo_bot_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DemoBotRiskSettings-Input"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoBotRiskSettings-Output"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Demo Bot Settings",
+        "tags": [
+          "risk",
+          "risk-policy"
         ]
       }
     },

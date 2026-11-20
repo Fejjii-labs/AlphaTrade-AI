@@ -15,6 +15,7 @@ export interface DashboardDemoAccount {
     manual_test_trades: number;
     strategy_closed_trades: number | null;
     coverage: string;
+    linked_trade_coverage?: string | null;
     activity_sync_status?: "disabled" | "unavailable" | "partial" | "ready";
     pnl_method?: string;
     win_rate?: string | null;
@@ -28,6 +29,7 @@ export interface DashboardDemoAccount {
     activity_coverage?: string;
     manual_mirror_status?: "disabled" | "withheld" | "ready";
     manual_mirror_reason?: string;
+    mirror_trade_coverage?: string | null;
     average_r?: string | null;
   };
   read_only: true;

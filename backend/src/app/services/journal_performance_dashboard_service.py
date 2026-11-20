@@ -23,10 +23,11 @@ Rules (documented so every number can be re-derived by hand):
   exchange recorded is never real. Backtest,
   imported and system trades are read only when their scope is selected.
 - Partial closes: only CLOSED rows count. BloFin demo partial closes are
-  journaled by the manual mirror as separate CLOSED slices (exit reason
-  ``partially_closed``) and are included. ``journal_trades`` records no
-  realised P&L for partial exits on an OPEN row (canonical paper closes are
-  whole-position), so that P&L is excluded until the trade closes; the
+  grouped by positionId into one CLOSED journal row for the realized
+  portion (exit reason ``partially_closed`` until flat) and are included.
+  ``journal_trades`` records no realised P&L for partial exits on an OPEN row
+  (canonical paper closes are whole-position), so that P&L is excluded until
+  the trade closes; the
   response counts those open trades and warns. Nothing is estimated.
 - Trades are bucketed by the local calendar date of their effective time
   (exit, else entry, else creation) in the requested IANA timezone.
@@ -611,6 +612,10 @@ def build_dashboard(
     now: datetime | None = None,
 ) -> JournalPerformanceDashboardResponse:
     summary = summarize(rows)
+    if filters.scope == JournalDashboardScope.DEMO:
+        summary.pnl_trade_coverage = (
+            f"{summary.pnl_sample_count} of {summary.trade_count} trades verified"
+        )
     days = bucket_days(rows, tz)
     risk = risk_metrics(rows, days, summary.net_pnl)
     confidence = _confidence(len(rows))

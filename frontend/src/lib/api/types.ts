@@ -1172,7 +1172,12 @@ export interface UserRiskSettingsUpdate {
 export interface AutonomousStrategyOption {
   strategy_id: string;
   name: string;
+  /** Current version is approved or active. */
+  approved?: boolean;
+  paper_eligible?: boolean;
 }
+
+export type AutonomousStrategyScope = "selected" | "all_eligible";
 
 export interface AutonomousTradingSettingsView {
   organization_id: string;
@@ -1180,7 +1185,10 @@ export interface AutonomousTradingSettingsView {
   daily_loss_limit_percent: string;
   max_trades_per_day: number;
   risk_per_trade_percent: string | null;
+  /** Deprecated: first entry of strategy_ids. */
   strategy_id: string | null;
+  strategy_ids?: string[];
+  strategy_scope?: AutonomousStrategyScope;
   symbol: string | null;
   using_defaults: boolean;
   account_max_trades_per_day: number;
@@ -4576,6 +4584,7 @@ export type JournalPerformanceDashboardParams = {
 export interface JournalDashboardSummary {
   trade_count: number;
   pnl_sample_count: number;
+  pnl_trade_coverage?: string | null;
   wins: number;
   losses: number;
   breakeven: number;

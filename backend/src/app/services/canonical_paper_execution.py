@@ -68,7 +68,12 @@ from app.services.canonical_execution_learning import (
 from app.services.canonical_trade_plan_errors import CanonicalTradePlanNotFoundError
 from app.services.execution_claim import ExecutionClaimHooks, PaperPlanClaimService
 from app.services.journal_lifecycle_projector import JournalLifecycleProjector
-from app.services.paper_close_economics import paper_close_pnl
+from app.services.paper_close_economics import (
+    ExitFillInput,
+    PaperCloseEconomics,
+    paper_close_pnl,
+    paper_close_pnl_from_fills,
+)
 from app.services.safety_epoch import SafetyEpochService
 from app.signal_fusion.enums import CandidateState
 
@@ -112,6 +117,7 @@ class CanonicalPaperExecutionService:
                 after_idempotency=claim_hooks.after_idempotency,
                 after_epoch_lock=claim_hooks.after_epoch_lock,
                 before_return=claim_hooks.before_return,
+                demo_v2_equity=claim_hooks.demo_v2_equity,
                 revalidate=self._revalidate_canonical_lineage,
             ),
         )
@@ -319,14 +325,11 @@ class CanonicalPaperExecutionService:
                     "Paper close requires a recorded entry price and size.",
                     details={"reason": "incomplete_fill"},
                 )
-            economics = paper_close_pnl(
+            economics, fill_payload = close_economics_payload(
+                request,
                 direction=trade.direction,
                 entry_price=trade.entry_price,
-                exit_price=request.exit_price,
                 size=trade.size,
-                fees=request.fees,
-                funding=request.funding,
-                slippage=request.slippage,
             )
             exit_reason = request.exit_reason.strip()
             if not exit_reason:
@@ -348,6 +351,7 @@ class CanonicalPaperExecutionService:
                     mode="json", exclude_none=True
                 ),
             }
+            payload.update(fill_payload)
             payload.update(paper_exit_audit_fields(request))
             payload.update(
                 _closed_risk_facts(
@@ -674,6 +678,83 @@ class CanonicalPaperExecutionService:
 
 def is_canonical_plan_authority(plan_authority: str | None) -> bool:
     return plan_authority == PLAN_AUTHORITY_CANONICAL
+
+
+def close_economics_payload(
+    request: ClosePaperPlanRequest,
+    *,
+    direction: TradeDirection,
+    entry_price: Decimal,
+    size: Decimal,
+) -> tuple[PaperCloseEconomics, dict[str, object]]:
+    """Close PnL, plus the per-fill breakdown when the close carries fills.
+
+    Without ``exit_fills`` this is the single-price close, unchanged. With
+    them, fill quantities must sum to the recorded size and fill costs to the
+    request totals; gross and net PnL are then the exact sums of the fills.
+    """
+
+    if request.exit_fills is None:
+        return (
+            paper_close_pnl(
+                direction=direction,
+                entry_price=entry_price,
+                exit_price=request.exit_price,
+                size=size,
+                fees=request.fees,
+                funding=request.funding,
+                slippage=request.slippage,
+            ),
+            {},
+        )
+    fills = request.exit_fills
+    if len({fill.fill_id for fill in fills}) != len(fills):
+        raise ValidationAppError(
+            "Paper close fills must be distinct.",
+            details={"reason": "exit_fills_duplicate"},
+        )
+    for field, total in (
+        ("fees", request.fees),
+        ("funding", request.funding),
+        ("slippage", request.slippage),
+    ):
+        if sum((getattr(fill, field) for fill in fills), Decimal("0")) != total:
+            raise ValidationAppError(
+                "Paper close fill costs must add up to the close totals.",
+                details={"reason": "exit_fill_costs_do_not_match", "field": field},
+            )
+    economics, per_fill = paper_close_pnl_from_fills(
+        direction=direction,
+        entry_price=entry_price,
+        size=size,
+        fills=[
+            ExitFillInput(
+                quantity=fill.quantity,
+                price=fill.price,
+                fees=fill.fees,
+                funding=fill.funding,
+                slippage=fill.slippage,
+            )
+            for fill in fills
+        ],
+    )
+    rows: list[dict[str, object]] = [
+        {
+            "fill_id": fill.fill_id,
+            "kind": fill.kind,
+            "leg_order": fill.leg_order,
+            "quantity": str(fill.quantity),
+            "price": str(fill.price),
+            "occurred_at": fill.occurred_at.isoformat(),
+            "fees": str(fill.fees),
+            "funding": str(fill.funding),
+            "slippage": str(fill.slippage),
+            "gross_pnl": str(row.gross_pnl),
+            "net_pnl": str(row.net_pnl),
+        }
+        for fill, row in zip(fills, per_fill, strict=True)
+    ]
+    return economics, {"exit_fills": rows, "exit_price_basis": "quantity_weighted_average"}
 
 
 def paper_exit_audit_fields(request: ClosePaperPlanRequest) -> dict[str, object]:

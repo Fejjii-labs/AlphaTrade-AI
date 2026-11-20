@@ -24,6 +24,7 @@ class TelegramPaperNotificationRow(Base):
             "intent_id",
             name="uq_tg_paper_notify_org_intent",
         ),
+        Index("ix_tg_paper_notify_created_at", "created_at"),
     )
 
     intent_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)

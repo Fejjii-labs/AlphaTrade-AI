@@ -230,6 +230,378 @@ def _drafts(history: list[dict[str, object]], **extra: object) -> object:
     return drafts_from_raw(**payload)  # type: ignore[arg-type]
 
 
+def _five_closes() -> dict:
+    """Synthetic demo-shaped reconciliation cases, not captured account evidence."""
+    bundle = {key: [] for key in ("positions", "history", "fills", "funding", "orders")}
+    opened = int((NOW - timedelta(days=2)).timestamp() * 1000)
+    closed = opened + 86400000
+    for index, (direction, prices) in enumerate(
+        (
+            ("long", (110,)),
+            ("long", (90,)),
+            ("short", (90,)),
+            ("long", (105, 110)),
+            ("long", (110,)),
+        )
+    ):
+        inst = ("BTC", "ETH", "SOL", "XRP", "ADA")[index] + "-USDT"
+        entry_side = "sell" if direction == "short" else "buy"
+        close_side = "buy" if direction == "short" else "sell"
+        for leg, price in enumerate(prices):
+            gross = Decimal(price - 100) * (-1 if direction == "short" else 1)
+            bundle["history"].append(
+                {
+                    "historyId": f"five-h{index}-{leg}",
+                    "positionId": f"five-p{index}",
+                    "instId": inst,
+                    "positionSide": direction,
+                    "side": entry_side,
+                    "closePositions": "1",
+                    "maxPositions": str(len(prices)),
+                    "openAveragePrice": "100",
+                    "closeAveragePrice": str(price),
+                    "createTime": str(opened),
+                    "updateTime": str(closed + leg * 1000),
+                    "realizedPnl": str(gross),
+                    "fee": "0.2",
+                }
+            )
+            bundle["orders"].append(
+                {
+                    "orderId": f"five-close{index}-{leg}",
+                    "positionId": f"five-p{index}",
+                    "instId": inst,
+                    "side": close_side,
+                    "positionSide": direction,
+                    "createTime": str(closed + leg * 1000),
+                    "filledSize": "1",
+                    "averagePrice": str(price),
+                    "pnl": str(gross),
+                    "fee": "0.1",
+                }
+            )
+        bundle["orders"].append(
+            {
+                "orderId": f"five-open{index}",
+                "positionId": f"five-p{index}",
+                "instId": inst,
+                "side": entry_side,
+                "positionSide": direction,
+                "createTime": str(opened),
+                "filledSize": str(len(prices)),
+                "averagePrice": "100",
+                "pnl": "0",
+                "fee": str(Decimal("0.1") * len(prices)),
+            }
+        )
+    bundle["funding"].append(
+        {
+            "billId": "five-funding",
+            "instId": "ADA-USDT",
+            "fundingFee": "-0.5",
+            "fundingTime": str(opened + 1000),
+        }
+    )
+    return bundle
+
+
+def _apply_five(session: Session, bundle: dict) -> object:
+    paths = _paths(bundle)
+    paths["/api/v1/market/instruments"] = [
+        {"instId": inst + "-USDT", "contractValue": "1", "settleCurrency": "USDT"}
+        for inst in ("BTC", "ETH", "SOL", "XRP", "ADA")
+    ]
+    report = BloFinDemoManualMirror(_Client(paths), now=NOW).apply(
+        session, organization_id=ORG, user_id=USER, settings=_settings()
+    )
+    session.commit()
+    return report
+
+
+def test_five_position_closes_reconcile_costs_partial_legs_and_all_dashboard_kpis(session):
+    from app.services.journal_performance_dashboard_service import (
+        JournalPerformanceDashboardService,
+    )
+
+    bundle = _five_closes()
+    _apply_five(session, bundle)
+    rows = _rows(session)
+    assert len(rows) == 5  # two closing legs are one position/trade
+    assert sorted(row.net_pnl for row in rows) == list(
+        map(Decimal, ("-10.2", "9.3", "9.8", "9.8", "14.6"))
+    )
+    partial = next(row for row in rows if row.symbol == "XRPUSDT")
+    assert partial.gross_pnl == Decimal("15") and partial.fees == Decimal("0.4")
+    assert {tag for tag in partial.tags if tag.startswith("blofin-history:")} == {
+        "blofin-history:five-h3-0",
+        "blofin-history:five-h3-1",
+    }
+    again = _apply_five(session, bundle)
+    assert again.created == 0 and len(_rows(session)) == 5
+    dashboard = JournalPerformanceDashboardService(session, settings=_settings()).compute(
+        organization_id=ORG, user_id=USER, timezone="UTC"
+    )
+    summary = dashboard.summary
+    assert summary.net_pnl == Decimal("33.3") and summary.expectancy == Decimal("6.66")
+    assert summary.win_rate == pytest.approx(0.8)
+    assert summary.profit_factor == pytest.approx(43.5 / 10.2)
+    assert summary.win_loss_ratio == pytest.approx((43.5 / 4) / 10.2)
+    assert dashboard.risk.winning_days == 1 and dashboard.risk.losing_days == 0
+    assert dashboard.days[0].net_pnl == Decimal("33.3")
+    account = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(
+        account,
+        session=session,
+        tenant=TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER),
+        settings=_settings(),
+    )
+    assert account.performance.win_rate == Decimal("0.8")
+    assert account.performance.realized_pnl == Decimal("33.3")
+
+
+def test_resting_limit_entries_reconcile_by_position_id(session):
+    bundle = _five_closes()
+    for order in bundle["orders"]:
+        if order["pnl"] == "0":
+            order["createTime"] = str(int(order["createTime"]) - 60_000)
+    _apply_five(session, bundle)
+    rows = _rows(session)
+    assert [row.exit_reason for row in rows if row.net_pnl is None] == []
+    assert sorted(row.net_pnl for row in rows) == list(
+        map(Decimal, ("-10.2", "9.3", "9.8", "9.8", "14.6"))
+    )
+
+
+def test_conflicting_order_id_cannot_verify_two_positions(session):
+    bundle = _five_closes()
+    entries = [order for order in bundle["orders"] if order["pnl"] == "0"]
+    entries[1]["orderId"] = entries[0]["orderId"]
+    _apply_five(session, bundle)
+    rows = _rows(session)
+    assert len([row for row in rows if row.exit_reason == "unverified:conflicting_order_id"]) == 2
+    assert sum(row.net_pnl is not None for row in rows) == 3
+
+
+def test_only_unreconciled_position_is_withheld_with_a_short_reason(session):
+    bundle = _five_closes()
+    del bundle["orders"][-1]["fee"]  # missing opening fee for the funding position
+    _apply_five(session, bundle)
+    rows = _rows(session)
+    bad = next(row for row in rows if row.symbol == "ADAUSDT")
+    assert bad.net_pnl is None and bad.exit_reason == "unverified:missing_entry_fee"
+    assert sum(row.net_pnl is not None for row in rows) == 4
+    account = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(
+        account,
+        session=session,
+        tenant=TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER),
+        settings=_settings(),
+    )
+    assert account.performance.realized_pnl == Decimal("24")
+    assert account.performance.trade_count == 4 and account.performance.unresolved_round_trips == 1
+    assert account.performance.win_rate == Decimal("0.75")
+    assert account.model_dump(mode="json")["performance"]["mirror_trade_coverage"] == (
+        "4 of 5 trades verified"
+    )
+    from app.services.journal_performance_dashboard_service import (
+        JournalPerformanceDashboardService,
+    )
+
+    dashboard = JournalPerformanceDashboardService(session, settings=_settings()).compute(
+        organization_id=ORG, user_id=USER, timezone="UTC"
+    )
+    assert dashboard.model_dump(mode="json")["summary"]["pnl_trade_coverage"] == (
+        "4 of 5 trades verified"
+    )
+
+
+def test_positions_fee_cannot_stand_in_for_missing_entry_order_fee(session):
+    bundle = _five_closes()
+    bundle["orders"] = [row for row in bundle["orders"] if row["side"] == "sell"]
+    _apply_five(session, bundle)
+    assert all(row.net_pnl is None for row in _rows(session))
+
+
+def test_reconciliation_tolerance_is_per_position_not_per_partial_leg(session):
+    bundle = _five_closes()
+    for row in bundle["history"]:
+        if row["positionId"] == "five-p3":
+            row["realizedPnl"] = str(Decimal(row["realizedPnl"]) + Decimal("0.009"))
+    for row in bundle["orders"]:
+        if row["positionId"] == "five-p3" and row["side"] == "sell":
+            row["pnl"] = str(Decimal(row["pnl"]) + Decimal("0.009"))
+    _apply_five(session, bundle)
+    row = next(row for row in _rows(session) if row.symbol == "XRPUSDT")
+    assert row.net_pnl is None and row.exit_reason == "unverified:pnl_mismatch"
+
+
+def test_recorded_venue_gross_is_preserved_within_one_cent_rounding_tolerance(session):
+    bundle = _five_closes()
+    bundle["history"][0]["realizedPnl"] = bundle["orders"][0]["pnl"] = "10.005"
+    _apply_five(session, bundle)
+    row = next(row for row in _rows(session) if row.symbol == "BTCUSDT")
+    assert row.gross_pnl == Decimal("10.005") and row.net_pnl == Decimal("9.805")
+
+
+def test_legacy_price_only_verification_does_not_claim_new_order_cost_proof(session):
+    _apply(session, _FIXTURE["long"])
+    row = _rows(session)[0]
+    row.tags = ["blofin-history:h-long", "pnl-verified"]
+    session.commit()
+    account = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(
+        account,
+        session=session,
+        tenant=TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER),
+        settings=_settings(),
+    )
+    assert account.performance.realized_pnl is None
+
+
+def test_reused_position_id_in_a_later_lifetime_remains_a_separate_trade(session):
+    bundle = _five_closes()
+    opened = int(bundle["history"][0]["createTime"])
+    bundle["history"][0]["updateTime"] = bundle["orders"][0]["createTime"] = str(opened + 3600000)
+    history = {**bundle["history"][0], "historyId": "reused-history"}
+    offset = 7200000
+    history["createTime"] = str(int(history["createTime"]) + offset)
+    history["updateTime"] = str(int(history["updateTime"]) + offset)
+    bundle["history"].append(history)
+    for order in list(bundle["orders"]):
+        if order["positionId"] == "five-p0":
+            bundle["orders"].append(
+                {
+                    **order,
+                    "orderId": "reused-" + order["orderId"],
+                    "createTime": str(int(order["createTime"]) + offset),
+                }
+            )
+    _apply_five(session, bundle)
+    assert len(_rows(session)) == 6
+    assert (
+        sum(row.symbol == "BTCUSDT" and row.net_pnl == Decimal("9.8") for row in _rows(session))
+        == 2
+    )
+
+
+@pytest.mark.parametrize("source", [JournalTradeSource.MANUAL, JournalTradeSource.MANUAL_DEMO_TEST])
+def test_account_card_includes_a_verified_close_reconciled_into_an_existing_journal_row(
+    session, source
+):
+    original = JournalTrade(
+        organization_id=ORG,
+        user_id=USER,
+        source=source,
+        status=JournalTradeStatus.OPEN,
+        symbol="BTCUSDT",
+        timeframe="manual",
+        direction=TradeDirection.LONG,
+        entry_price=Decimal("100"),
+        size=Decimal("0.02"),
+        result=TradeResult.OPEN,
+    )
+    session.add(original)
+    session.commit()
+    _apply(session, _FIXTURE["long"])
+    assert _rows(session)[0].id == original.id and original.source is source
+    account = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(
+        account,
+        session=session,
+        tenant=TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER),
+        settings=_settings(),
+    )
+    assert account.performance.trade_count == 1
+    assert account.performance.win_rate == Decimal("1")
+    assert account.performance.realized_pnl == Decimal("0.186")
+
+
+def test_replayed_funding_bills_do_not_double_charge(session):
+    bundle = _five_closes()
+    bundle["funding"] *= 2
+    _apply_five(session, bundle)
+    row = next(row for row in _rows(session) if row.symbol == "ADAUSDT")
+    assert row.funding == Decimal("0.5") and row.net_pnl == Decimal("9.3")
+
+
+def test_funding_shared_with_an_open_position_is_not_assigned_to_the_closed_one(session):
+    bundle = _five_closes()
+    history = bundle["history"][-1]
+    bundle["positions"] = [
+        {
+            "positionId": "another-ada",
+            "instId": "ADA-USDT",
+            "positionSide": "short",
+            "positions": "1",
+            "createTime": history["createTime"],
+            "averagePrice": "100",
+        }
+    ]
+    _apply_five(session, bundle)
+    row = next(
+        row
+        for row in _rows(session)
+        if row.symbol == "ADAUSDT" and row.status is JournalTradeStatus.CLOSED
+    )
+    assert row.net_pnl is None and row.exit_reason == "unverified:funding_incomplete"
+
+
+def test_conflicting_duplicate_history_identity_cannot_verify_economics(session):
+    bundle = _five_closes()
+    duplicate = {**bundle["history"][0], "realizedPnl": "500"}
+    bundle["history"].append(duplicate)
+    _apply_five(session, bundle)
+    row = next(row for row in _rows(session) if row.symbol == "BTCUSDT")
+    assert row.net_pnl is None
+
+
+def test_old_partial_slice_rows_are_consolidated_without_deleting_annotations(session):
+    bundle = _five_closes()
+    _apply_five(session, bundle)
+    session.add(
+        JournalTrade(
+            organization_id=ORG,
+            user_id=USER,
+            source=JournalTradeSource.BLOFIN_DEMO_MANUAL,
+            status=JournalTradeStatus.CLOSED,
+            symbol="XRPUSDT",
+            timeframe="manual",
+            direction=TradeDirection.LONG,
+            external_ref="blofin-demo-history:five-h3-1",
+            net_pnl=Decimal("9.8"),
+            result=TradeResult.WIN,
+            notes="keep legacy annotation",
+            tags=["blofin-history:five-h3-1", "pnl-verified"],
+        )
+    )
+    session.commit()
+    _apply_five(session, bundle)
+    rows = _rows(session)
+    assert sum(row.status is JournalTradeStatus.CLOSED for row in rows) == 5
+    legacy = next(row for row in rows if row.notes == "keep legacy annotation")
+    assert legacy.status is JournalTradeStatus.CANCELLED and legacy.net_pnl is None
+
+
+@pytest.mark.parametrize(
+    "field,value,reason",
+    [
+        ("pnl", "500", "closing_pnl_mismatch"),
+        ("fee", "8", "fee_mismatch"),
+        ("filledSize", "2", "incomplete_position_history"),
+    ],
+)
+def test_only_the_position_with_conflicting_order_evidence_is_excluded(
+    session, field, value, reason
+):
+    bundle = _five_closes()
+    bundle["orders"][0][field] = value
+    _apply_five(session, bundle)
+    rows = _rows(session)
+    bad = next(row for row in rows if row.symbol == "BTCUSDT")
+    assert bad.net_pnl is None and bad.exit_reason == f"unverified:{reason}"
+    assert sum(row.net_pnl is not None for row in rows) == 4
+
+
 def test_long_matches_price_fee_and_paid_funding_and_ignores_fill_pnl(session: Session) -> None:
     report = _apply(session, _FIXTURE["long"])
     assert report.created == 1  # type: ignore[attr-defined]
@@ -267,7 +639,7 @@ def test_short_stores_a_fee_rebate_and_funding_received(session: Session) -> Non
     assert "pnl-verified" in row.tags
 
 
-def test_partial_close_keeps_one_row_per_slice_and_cancels_the_open_tracker(
+def test_partial_closes_update_one_position_row_and_cancel_the_open_tracker(
     session: Session,
 ) -> None:
     first = _apply(session, _FIXTURE["partial_open"])
@@ -280,20 +652,20 @@ def test_partial_close_keeps_one_row_per_slice_and_cancels_the_open_tracker(
     assert _money(closed.net_pnl) == Decimal("0.04900000")
 
     second = _apply(session, _FIXTURE["partial_flat"])
-    assert second.created == 1  # type: ignore[attr-defined]
+    assert second.created == 0  # type: ignore[attr-defined]
     rows = _rows(session)
-    assert len(rows) == 3
+    assert len(rows) == 2
     by_ref = {row.external_ref: row for row in rows}
     assert by_ref["blofin-demo-open:p-part:1792195200000"].status is JournalTradeStatus.CANCELLED
     assert by_ref["blofin-demo-open:p-part:1792195200000"].exit_reason == "flat_on_venue"
     assert by_ref["blofin-demo-open:p-part:1792195200000"].net_pnl is None
-    later = by_ref["blofin-demo-history:h-part-2"]
-    assert _money(later.gross_pnl) == Decimal("0.10000000")
+    later = by_ref["blofin-demo-history:h-part-1"]
+    assert _money(later.gross_pnl) == Decimal("0.15000000")
     assert _money(later.funding) == Decimal("0.00200000")
-    assert _money(later.net_pnl) == Decimal("0.09600000")
+    assert _money(later.net_pnl) == Decimal("0.14500000")
     again = _apply(session, _FIXTURE["partial_flat"])
     assert again.created == 0  # type: ignore[attr-defined]
-    assert len(_rows(session)) == 3
+    assert len(_rows(session)) == 2
 
 
 def test_rerun_is_idempotent_and_keeps_strategy_grade_and_notes(session: Session) -> None:
@@ -439,6 +811,7 @@ def test_reconciled_close_does_not_move_the_paper_daily_lock(session: Session) -
     bundle = copy.deepcopy(_FIXTURE["long"])
     bundle["history"][0]["closeAveragePrice"] = "90"
     bundle["history"][0]["realizedPnl"] = "-0.2"
+    bundle["orders"][-1]["pnl"] = "-0.2"
     bundle["history"][0]["updateTime"] = str(int(NOW.timestamp() * 1000))
     report = _apply(session, bundle)
     assert report.reconciled == 1 and report.created == 0  # type: ignore[attr-defined]
@@ -1073,7 +1446,7 @@ def test_annotation_allows_a_reconciled_manual_row(session: Session) -> None:
     assert blocked.value.details["reason"] == "annotation_source"
 
 
-def test_dashboard_publishes_only_when_every_closed_mirror_row_is_verified(
+def test_dashboard_publishes_verified_subset_with_unresolved_count(
     session: Session,
 ) -> None:
     tenant = TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER)
@@ -1100,6 +1473,7 @@ def test_dashboard_publishes_only_when_every_closed_mirror_row_is_verified(
     publish_mirror_performance(quiet, session=session, tenant=tenant, settings=_settings())
     assert quiet.performance.manual_mirror_status == "ready"
     assert quiet.performance.trade_count == 0
+    assert quiet.performance.mirror_trade_coverage == "0 of 0 trades verified"
     assert quiet.performance.realized_pnl == Decimal("0")
 
     _apply(session, _FIXTURE["long"])
@@ -1131,11 +1505,12 @@ def test_dashboard_publishes_only_when_every_closed_mirror_row_is_verified(
     session.commit()
     held = DashboardDemoAccount(status="ok", message="fixture")
     publish_mirror_performance(held, session=session, tenant=tenant, settings=_settings())
-    assert held.performance.manual_mirror_status == "withheld"
-    assert held.performance.win_rate is None
-    assert held.performance.realized_pnl is None
-    assert held.performance.trade_count is None
-    assert "fillPnl" in held.performance.manual_mirror_reason
+    assert held.performance.manual_mirror_status == "ready"
+    assert held.performance.win_rate == Decimal("1")
+    assert held.performance.realized_pnl == Decimal("0.186")
+    assert held.performance.trade_count == 1
+    assert held.performance.unresolved_round_trips == 1
+    assert "unreconciled trades excluded" in held.performance.manual_mirror_reason
 
 
 def test_create_and_generic_update_cannot_change_mirror_economics(session: Session) -> None:
@@ -1221,16 +1596,16 @@ def test_publish_ignores_a_hand_written_verified_net(session: Session) -> None:
     assert held.performance.win_rate is None
 
 
-def test_failed_cycle_withholds_even_when_older_rows_match(session: Session) -> None:
+def test_failed_cycle_preserves_saved_verified_subset(session: Session) -> None:
     _apply(session, _FIXTURE["long"])
     record_mirror_cycle(session, organization_id=ORG, user_id=USER, outcome="failed")
     session.commit()
     tenant = TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER)
     held = DashboardDemoAccount(status="ok", message="fixture")
     publish_mirror_performance(held, session=session, tenant=tenant, settings=_settings())
-    assert held.performance.manual_mirror_status == "withheld"
-    assert held.performance.trade_count is None
-    assert "page cap" in held.performance.manual_mirror_reason
+    assert held.performance.manual_mirror_status == "ready"
+    assert held.performance.trade_count == 1
+    assert "Latest mirror read incomplete" in held.performance.manual_mirror_reason
 
 
 def test_capped_fills_keep_positions_history_and_withhold(session: Session) -> None:
@@ -1306,8 +1681,9 @@ def test_cycle_marker_cannot_be_rewritten_or_deleted(session: Session) -> None:
     tenant = TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER)
     held = DashboardDemoAccount(status="ok", message="fixture")
     publish_mirror_performance(held, session=session, tenant=tenant, settings=_settings())
-    assert held.performance.manual_mirror_status == "withheld"
-    assert held.performance.realized_pnl is None
+    assert held.performance.manual_mirror_status == "ready"
+    assert held.performance.realized_pnl == Decimal("0.186")
+    assert "Latest mirror read incomplete" in held.performance.manual_mirror_reason
 
 
 def test_equal_close_times_leave_funding_unverified() -> None:
@@ -1319,7 +1695,7 @@ def test_equal_close_times_leave_funding_unverified() -> None:
     second["realizedPnl"] = "0.1"
     built = _drafts([base, second], funding=_FIXTURE["long"]["funding"])
     closed = built.closed  # type: ignore[attr-defined]
-    assert len(closed) == 2
+    assert len(closed) == 1
     assert all(draft.verified is False for draft in closed)
     assert all(draft.funding is None for draft in closed)
 
@@ -1820,6 +2196,29 @@ def test_new_close_reads_its_dependencies_from_its_open_and_keeps_older_rows(
 ) -> None:
     bundle = _paths(_FIXTURE["long"])
     bundle[_HISTORY_PATH] = [*bundle[_HISTORY_PATH], _OLD_ETH]
+    bundle["/api/v1/trade/orders-history"] = [
+        *bundle["/api/v1/trade/orders-history"],
+        {
+            "orderId": "eth-entry",
+            "positionId": "p-eth-old",
+            "instId": "ETH-USDT",
+            "createTime": _OLD_ETH["createTime"],
+            "side": "buy",
+            "filledSize": "1",
+            "fee": "0.004",
+            "pnl": "0",
+        },
+        {
+            "orderId": "eth-close",
+            "positionId": "p-eth-old",
+            "instId": "ETH-USDT",
+            "createTime": _OLD_ETH["updateTime"],
+            "side": "sell",
+            "filledSize": "1",
+            "fee": "0.006",
+            "pnl": "1",
+        },
+    ]
     client = _WindowClient(bundle)
     before_close = datetime(2026, 10, 17, 11, tzinfo=UTC)
     first = _mirror(session, client, before_close)

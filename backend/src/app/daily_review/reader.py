@@ -30,9 +30,9 @@ from app.db.models import (
 from app.db.paper_evaluation import PaperEvaluationObservationRow
 from app.paper_evaluation.contracts import (
     DataQualityClass,
-    PaperEvaluationObservation,
     PaperEvaluationStage,
 )
+from app.persistence.paper_evaluation_postgres import observation_from_row
 from app.schemas.common import JournalTradeSource, JournalTradeStatus
 from app.signal_fusion.enums import ActionEligibilityState, SetupAssessmentState
 
@@ -101,10 +101,7 @@ class DailyReviewService:
         for row in rows(
             PaperEvaluationObservationRow, PaperEvaluationObservationRow.occurred_at, private=False
         ):
-            body = dict(row.payload)
-            body["occurred_at"] = _utc(row.occurred_at)
-            body["narrative_explanation"] = None
-            fact = PaperEvaluationObservation.model_validate(body)
+            fact = observation_from_row(row).model_copy(update={"narrative_explanation": None})
             ref = ReviewSource(
                 record_type=row.__tablename__,
                 record_id=str(fact.observation_id),

@@ -29,6 +29,7 @@ from app.market_contracts.errors import (
 )
 from app.market_contracts.evidence_diagnostics import (
     diagnostic_from_exception,
+    exception_class_name,
     reason_for_exception,
 )
 from app.market_contracts.request_progress import notify_market_request_progress
@@ -284,7 +285,14 @@ class AssemblingWatcherScanEvidence:
                     reason_code=diagnostic.watcher_reason,
                     diagnostics=self._assembler.diagnostics,
                 ) from exc
-            return self._raise_undiagnosed(exc)
+            return self._raise_undiagnosed(
+                exc,
+                symbol=self._symbol,
+                timeframe=command.request.timeframe
+                or getattr(
+                    getattr(executable.authored_spec, "trigger_timeframe", None), "value", None
+                ),
+            )
         if assembled.organization_id != organization_id:
             raise WatcherTenantMismatchError(
                 "Assembled evidence belongs to a different organization."
@@ -311,12 +319,27 @@ class AssemblingWatcherScanEvidence:
         )
 
     @staticmethod
-    def _raise_undiagnosed(exc: Exception) -> NoReturn:
+    def _raise_undiagnosed(
+        exc: Exception, *, symbol: str | None = None, timeframe: str | None = None
+    ) -> NoReturn:
         # The wrapper retains its public reason codes. Log only the finite
         # diagnostic category, never exception text, provider payloads or URLs.
+        from app.schemas.common import Timeframe
+
+        context: dict[str, str] = {}
+        if symbol is not None and symbol.isascii() and symbol.isalnum() and len(symbol) <= 24:
+            context["symbol"] = symbol
+        if timeframe in {item.value for item in Timeframe}:
+            context["timeframe"] = timeframe
+        # Resolve only application/builtin classes, never an arbitrary provider
+        # class name or exception message. Direct callers retain the old log shape.
+        exception_class = exception_class_name(exc)
+        if context:
+            context["exception_class"] = exception_class
         logger.warning(
             "canonical_evidence_contract_rejected",
             failure_reason=reason_for_exception(exc).value,
+            **context,
         )
         if isinstance(exc, ContractUnavailableError):
             raise WatcherEvidenceUnavailableError(
@@ -337,14 +360,18 @@ class AssemblingWatcherScanEvidence:
                 "Canonical scan evidence is unavailable.",
                 reason_code="forming_candle",
             ) from exc
+        # The catch-all reason codes stay stable for exact-match consumers; the
+        # underlying class travels with them so they no longer hide the cause.
         if isinstance(exc, MarketContractError):
             raise WatcherEvidenceUnavailableError(
-                "Canonical scan evidence is unavailable.",
+                f"Canonical scan evidence is unavailable ({exception_class}).",
                 reason_code="canonical_contract_invalid_contract",
+                details={"exception_class": exception_class},
             ) from exc
         raise WatcherEvidenceUnavailableError(
-            "Canonical contract failed with an unexpected error.",
+            f"Canonical contract failed with an unexpected error ({exception_class}).",
             reason_code="canonical_contract_unexpected_error",
+            details={"exception_class": exception_class},
         ) from exc
 
     def _bind_market(

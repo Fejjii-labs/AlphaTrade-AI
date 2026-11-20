@@ -163,7 +163,7 @@ def test_refuses_live_host_before_any_request() -> None:
         BloFinClient(base_url=client.base_url, api_key="k", api_secret="s", api_passphrase="p")
 
 
-@pytest.mark.parametrize("leverage", [Decimal("21"), Decimal("0"), Decimal("2.5")])
+@pytest.mark.parametrize("leverage", [Decimal("11"), Decimal("0"), Decimal("2.5")])
 def test_out_of_range_request_never_writes(leverage: Decimal) -> None:
     venue = LeverageVenue(Decimal("100000"))
     with pytest.raises(ValueError) as exc:
@@ -512,17 +512,17 @@ def test_passing_plan_reads_kill_switch_commits_writes_then_enters(
 @pytest.mark.parametrize(
     ("venue_kwargs", "config", "reason"),
     [
-        # The fixture stop is ~0.145% away. 20x with a 4.9% maintenance tier puts
+        # The fixture stop is ~0.145% away. 10x with a 9.9% maintenance tier puts
         # liquidation 0.1% away, inside the stop: refused before any order.
         (
-            {"maintenance_rate": "0.049"},
-            DemoLeverageConfig(20, "isolated", "account"),
+            {"maintenance_rate": "0.099"},
+            DemoLeverageConfig(10, "isolated", "account"),
             "demo_liquidation_inside_stop",
         ),
-        # 4.8%: liquidation 0.2% away, beyond the stop but inside the 2x buffer.
+        # 9.8%: liquidation 0.2% away, beyond the stop but inside the 2x buffer.
         (
-            {"maintenance_rate": "0.048"},
-            DemoLeverageConfig(20, "isolated", "account"),
+            {"maintenance_rate": "0.098"},
+            DemoLeverageConfig(10, "isolated", "account"),
             "demo_liquidation_inside_stop_buffer",
         ),
     ],
@@ -1129,6 +1129,7 @@ def _write_loop(
     monkeypatch.setattr(demo_leverage_config, "load_demo_leverage_config", lambda *_a, **_k: config)
     # SimpleNamespace plans stand in for the schema in this unit check.
     monkeypatch.setattr("app.schemas.trade_plan.TradePlanRevision", SimpleNamespace)
+    monkeypatch.setattr("app.services.governed_blofin_demo.PlanSchema", SimpleNamespace)
     settings = Settings(
         _env_file=None, environment="local", governed_demo_auto_leverage_write_enabled=write_enabled
     )

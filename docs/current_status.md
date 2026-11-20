@@ -16,7 +16,7 @@ This list was read from git history on main `485c54d0`. It records what is **imp
 | #441 | Trades (`/journal`) lists recorded trades as a table. | Frontend only. |
 | #443 | Fable 5.1 audit remediation. | Smoke scripts now need `SMOKE_PASSWORD` and have no fallback. |
 | #444 to #448 | Login throttle per email, uvicorn log redaction, Telegram enrollment limiter and role check, org filters that fail closed, and cross-org 404s with validated correlation ids. See [security](security.md#hardening-november-2026). | — |
-| #449 | Runtime-log retention windows in hours (24 h minimum, error events 72 h). Off and dry-run by default. See [runbook](backup_restore_runbook.md#runtime-log-retention-h5). | The old `RETENTION_*_DAYS` keys are silently ignored. Remove them before enabling retention. |
+| #449 | Runtime-log retention windows in hours (24 h minimum, error events 72 h). Off and dry-run by default. See [runbook](backup_restore_runbook.md#runtime-log-retention-h5-and-the-data-policy). | The old `RETENTION_*_DAYS` keys are silently ignored. Remove them before enabling retention. |
 
 ## Status as of October 24, 2026
 

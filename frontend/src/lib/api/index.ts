@@ -789,6 +789,8 @@ export const api = {
     listChunks: generatedApi.knowledgeChunks,
     ingest: generatedApi.knowledgeIngest,
     retryIndexing: generatedApi.knowledgeRetryIndexing,
+    deleteDocument: (id: string) =>
+      apiFetch<void>(`/knowledge/documents/${encodeURIComponent(id)}`, { method: "DELETE" }),
     search: (body: {
       query: string;
       top_k?: number;

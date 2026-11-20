@@ -6,9 +6,10 @@ import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.agent_voice.config import VoiceUnavailableError
@@ -16,18 +17,27 @@ from app.agent_voice.contracts import VoiceStart
 from app.agent_voice.live_accounting import LiveLedger
 from app.agent_voice.live_config import CLEANUP_SECONDS, CLOSE_SECONDS, LiveLimits, load_live_limits
 from app.agent_voice.live_protocol import context_parts
-from app.agent_voice.live_service import LiveSession
+from app.agent_voice.live_service import LiveSession, TranscriptFragment
 from app.agent_voice.service import shared_turn
 from app.api.routes.agent_voice import voice_config
 from app.core.config import Settings
-from app.db.models import ConversationMessage, Membership, OrganizationQuota, UsageEvent, User
+from app.db.models import (
+    AgentSavedEntry,
+    ConversationMessage,
+    Membership,
+    OrganizationQuota,
+    UsageEvent,
+    User,
+)
 from app.db.voice_realtime import VoiceSessionReservation
+from app.interactive_agent.contracts import PAYLOAD_KEY, RECORDED_EVIDENCE_LIMIT
 from app.providers.base import ProviderKind
 from app.providers.llm import LLMCompletionResult
 from app.schemas.common import MembershipRole
 from app.schemas.conversation import ConversationCreate
 from app.security.tokens import create_access_token
 from app.services.conversation_service import ConversationService
+from app.services.turn_coordinator import RESERVATION
 from tests.test_workflows import ORG_ID, USER_ID
 
 
@@ -854,3 +864,163 @@ async def test_live_socket_closes_before_accept_when_disabled(monkeypatch):
     browser = Browser()
     await live_socket.live_voice(browser)
     assert browser.accepted is False and browser.code == 1008
+
+
+async def caption(session, kind, identifier, text, start_ms, end_ms):
+    await session.provider(
+        {
+            "type": f"session.{kind}_transcript.delta",
+            "event_id": identifier,
+            "delta": text,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+        }
+    )
+
+
+def test_transcript_fragment_keeps_word_boundary_whitespace():
+    fragment = TranscriptFragment.model_validate(
+        {"event_id": "e1", "delta": " you ", "start_ms": 0, "end_ms": 10}
+    )
+    assert fragment.delta == " you "
+    with pytest.raises(ValidationError):
+        TranscriptFragment.model_validate(
+            {"event_id": "e1", "delta": "x", "start_ms": 0, "end_ms": 1, "extra": 1}
+        )
+
+
+@pytest.mark.asyncio
+async def test_spaced_transcript_deltas_reach_captions_and_the_agent_with_spaces(live_limits):
+    session, _ledger, sent, _upstream = live_session(live_limits)
+    await ready(session)
+    for number, text in enumerate(["What", " are", " my", " fees?"]):
+        await caption(session, "input", f"f{number}", text, 100 * number, 100 * number + 90)
+    await caption(session, "output", "a0", "Let", 1000, 1050)
+    await caption(session, "output", "a1", " me check.", 1050, 1100)
+    await delegate(session, sent, "d0", 400)
+    pending = next(e for e in sent if e["type"] == "turn.pending")
+    assert pending["body"]["message"] == "What are my fees?"
+    captions = "".join(e["text"] for e in sent if e["type"] == "input.delta")
+    assert captions == "What are my fees?"
+    assert "".join(e["text"] for e in sent if e["type"] == "reply.delta") == "Let me check."
+    await session.stop()
+
+
+@pytest.mark.asyncio
+async def test_user_fragments_do_not_clear_playback_unless_new_speech_follows_the_reply(
+    live_limits,
+):
+    session, _ledger, sent, _upstream = live_session(live_limits)
+    await ready(session)
+
+    def clears():
+        return [e for e in sent if e["type"] == "playback.clear"]
+
+    # The user's own request: no assistant reply is playing, nothing to clear.
+    await caption(session, "input", "u0", "What", 0, 200)
+    await caption(session, "input", "u1", " are my fees?", 200, 900)
+    assert clears() == []
+    # The assistant reply starts at 1500 ms.
+    await caption(session, "output", "a0", "Your fees", 1500, 1800)
+    # A late fragment of the earlier utterance must not cut the reply off.
+    await caption(session, "input", "u2", " today", 800, 950)
+    assert clears() == []
+    # Genuine new user speech after the reply began interrupts it once.
+    await caption(session, "input", "u3", "Stop", 2000, 2200)
+    assert clears() == [{"type": "playback.clear", "muted": False}]
+    await caption(session, "input", "u4", " please", 2200, 2400)
+    assert len(clears()) == 1
+    # A later reply can again be interrupted by speech after it began.
+    await caption(session, "output", "a1", "Okay", 3000, 3200)
+    await caption(session, "input", "u5", "Wait", 3500, 3600)
+    assert len(clears()) == 2
+    await session.stop()
+
+
+@pytest.mark.asyncio
+async def test_large_saved_note_lookup_reaches_playback(live_ledger, monkeypatch):
+    ledger = live_ledger
+    with ledger.sessions() as database:
+        database.add_all(
+            AgentSavedEntry(
+                organization_id=ORG_ID,
+                user_id=USER_ID,
+                conversation_id=ledger.conversation_id,
+                category="rules",
+                title=f"BTC risk rule {index}: "
+                + "Risk guidelines for volatile trading conditions. " * 3,
+                summary=("Keep BTC position size small when price is volatile. " * 32)[:1600],
+                original_text="BTC risk rule",
+            )
+            for index in range(8)
+        )
+        database.commit()
+
+    class SyntheticLLM:
+        name, kind = "synthetic", ProviderKind.LLM
+
+        def complete(self, request):
+            return LLMCompletionResult(
+                content=(
+                    json.dumps({"entries": [], "clarification": None})
+                    if request.response_format
+                    else "Your saved BTC rules say to keep position sizes small."
+                ),
+                model=request.model,
+                provider=self.name,
+                input_tokens=100,
+                output_tokens=50,
+                fallback_used=False,
+            )
+
+    monkeypatch.setattr(
+        "app.agent_voice.service.resolve_providers", lambda _: SimpleNamespace(llm=SyntheticLLM())
+    )
+    monkeypatch.setattr("app.agent_voice.service.voice_llm", lambda provider, _settings: provider)
+    session, _, sent, upstream = live_session(ledger.limits, shared_turn)
+    session.ledger = ledger
+    session.start = session.start.model_copy(update={"conversation_id": ledger.conversation_id})
+    # The fixture has already activated the ledger for this provider.
+    session.ready = True
+    session.provider_id = "live_fixture"
+    await caption(session, "input", "u1", "What are my saved BTC risk rules?", 0, 900)
+    await caption(session, "output", "a1", "Checking that now.", 1000, 1200)
+    await delegate(session, sent, "lookup", 950)
+    result = next(event["result"] for event in sent if event["type"] == "turn.result")
+    assert "saved BTC rules say" in result["reply"]
+    assert "native_blofin_fills" in result["recorded_evidence"]
+    assert not any(event["type"] == "turn.uncertain" for event in sent)
+    commentary = [event for event in upstream if event["type"] == "session.commentary.append"]
+    assert commentary and all(event["delegation_id"] == "lookup" for event in commentary)
+    assert "saved BTC rules say" in "".join(event["content"] for event in commentary)
+
+    audio = base64.b64encode(bytes(48)).decode()
+    await session.provider({"type": "session.output_audio.delta", "delta": audio})
+    assert sent[-1] == {"type": "audio.delta", "audio": audio, "item_id": "live_fixture"}
+
+    pending = next(event for event in sent if event["type"] == "turn.pending")
+    evidence = result["recorded_evidence"]
+    # Verify the evidence is bounded on disk and an old oversized receipt still replays.
+    with ledger.sessions() as database:
+        assistant = database.get(ConversationMessage, UUID(result["assistant_message_id"]))
+        assert assistant.payload[PAYLOAD_KEY]["recorded_evidence"].strip() == evidence
+        reservation = database.scalars(
+            select(ConversationMessage).where(
+                ConversationMessage.conversation_id == ledger.conversation_id,
+                ConversationMessage.intent == RESERVATION,
+            )
+        ).one()
+        receipt = reservation.payload[RESERVATION]
+        assert len(receipt["response"]["recorded_evidence"]) == RECORDED_EVIDENCE_LIMIT
+        reservation.payload = {
+            **reservation.payload,
+            RESERVATION: {
+                **receipt,
+                "response": {
+                    **receipt["response"],
+                    "recorded_evidence": receipt["response"]["recorded_evidence"] + " extra",
+                },
+            },
+        }
+        database.commit()
+    assert shared_turn(ledger, pending["request_key"], pending["body"]) == result

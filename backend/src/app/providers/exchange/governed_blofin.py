@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from app.core.exchange_safety import BLOFIN_PRODUCTION_HOSTS, is_allowlisted_demo_host
+from app.providers.exchange.base import ExchangeBalance
 from app.providers.exchange.blofin_account import BloFinAccountProvider
 from app.providers.exchange.blofin_client import BloFinClient
 from app.providers.exchange.demo_order_book import DemoOrderBook, parse_demo_book, venue_decimal
@@ -29,13 +30,14 @@ from app.schemas.trade_plan import EntrySide, TradePlanRevision
 
 if TYPE_CHECKING:
     from app.providers.exchange.governed_blofin_exit import VerifiedDemoExit
+    from app.providers.exchange.governed_blofin_partial_exits import BloFinDemoReduceOnlyVenue
 
 
 # Autonomous demo plans sized without a risk profile, at the owner-configured
 # leverage and margin mode. The app sets and reads them back after the plan
 # passes and before the entry (or, without the write, they already read back).
 CONFIGURED_DEMO_MARGIN_ASSUMPTION = "configured-demo-leverage"
-_DEMO_LEVERAGE_CEILING = Decimal("20")
+_DEMO_LEVERAGE_CEILING = Decimal("10")
 
 
 def demo_order_margin_mode(margin_assumption_id: str, plan_margin_mode: str | None = None) -> str:
@@ -55,6 +57,26 @@ def demo_order_margin_mode(margin_assumption_id: str, plan_margin_mode: str | No
             raise ValueError("Configured demo plan margin mode missing.")
         return mode
     return "cross"
+
+
+def demo_ladder_refusal(plan: TradePlanRevision) -> str | None:
+    """Why a ladder plan cannot be managed after entry, or None.
+
+    Sized at the plan's quantity and execution price, so a ladder that cannot
+    be split into lot-sized legs is refused before the entry, never after.
+    """
+
+    from app.schemas.common import TradeDirection
+    from app.services.partial_exits.ladder import LadderRefusal
+    from app.services.partial_exits.paper_terms import parse_partial_exit_terms
+
+    terms = parse_partial_exit_terms(
+        plan.model_dump(mode="json"),
+        direction=TradeDirection.LONG if plan.side is EntrySide.BUY else TradeDirection.SHORT,
+        entry_price=plan.basis_policy.execution_price.value,
+        position_size=plan.quantity.value,
+    )
+    return terms.reason if isinstance(terms, LadderRefusal) else None
 
 
 def demo_plan_leverage(plan: TradePlanRevision) -> tuple[Decimal | None, str]:
@@ -88,6 +110,7 @@ class DemoVenueSnapshot:
     maximum: Decimal
     book: DemoOrderBook
     account_observed_at: datetime
+    venue_equity: Decimal | None = None
     native_account_uid: str | None = None
     # Read from the margin-mode endpoint and leverage-info. Written only by
     # apply_configured_leverage, after the plan passes and before the entry.
@@ -199,9 +222,17 @@ class GovernedBloFinDemoProvider:
     """Uses an allowlisted demo client and verifies current permissions before send."""
 
     def __init__(
-        self, client: BloFinClient, *, clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+        self,
+        client: BloFinClient,
+        *,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        partial_exits: bool = False,
     ) -> None:
         self._client = client
+        # Set by the governed loop from the per-venue flag (default off). Only
+        # then is a ladder submitted, without attached TP/SL, for bot-managed
+        # reduce-only closes.
+        self.partial_exits_enabled = partial_exits is True
         self._account = BloFinAccountProvider(client)
         self._clock = clock
         self._expected_native_uid: str | None = None
@@ -211,6 +242,26 @@ class GovernedBloFinDemoProvider:
         if not native_uid or self._expected_native_uid not in {None, native_uid}:
             raise ValueError("Demo provider cannot change its expected native account.")
         self._expected_native_uid = native_uid
+
+    def _read_usdt_balance(self) -> ExchangeBalance:
+        with preflight_stage("balance", "GET /api/v1/account/balance"):
+            balances = self._account.get_balances()
+            balance = next((b for b in balances if b.asset == "USDT"), None)
+            if (
+                balance is None
+                or len([b for b in balances if b.asset == "USDT"]) != 1
+                or not balance.available.is_finite()
+                or not balance.total.is_finite()
+                or balance.available <= 0
+                or balance.total <= 0
+            ):
+                raise ValueError("Demo USDT equity unavailable.")
+        return balance
+
+    def read_demo_equity(self) -> Decimal | None:
+        """Read explicit venue equity, including unrealized P&L, even while open."""
+        self.verify_permissions()
+        return self._read_usdt_balance().equity
 
     def snapshot(
         self,
@@ -292,18 +343,7 @@ class GovernedBloFinDemoProvider:
             tier_sizes = _tier_sizes(tier_rows)
         account_observed_at = self._clock()
         self.verify_flat_account()
-        with preflight_stage("balance", "GET /api/v1/account/balance"):
-            balances = self._account.get_balances()
-            balance = next((b for b in balances if b.asset == "USDT"), None)
-            if (
-                balance is None
-                or len([b for b in balances if b.asset == "USDT"]) != 1
-                or not balance.available.is_finite()
-                or not balance.total.is_finite()
-                or balance.available <= 0
-                or balance.total <= 0
-            ):
-                raise ValueError("Demo USDT equity unavailable.")
+        balance = self._read_usdt_balance()
         with preflight_stage("quote", "GET /api/v1/market/books"):
             started = monotonic()
             data = self._client.request(
@@ -336,6 +376,7 @@ class GovernedBloFinDemoProvider:
             multiplier=multiplier,
             equity=balance.total,
             available=balance.available,
+            venue_equity=balance.equity,
             maximum=maximum,
             book=book,
             account_observed_at=account_observed_at,
@@ -561,6 +602,23 @@ class GovernedBloFinDemoProvider:
         self, *, plan: TradePlanRevision, client_order_id: str, before_post: Callable[[], None]
     ) -> str:
         """One POST, with stop and target attached to the entry order."""
+        exits = plan.risk_and_exits
+        ladder = (
+            len(exits.targets) != 1
+            or exits.targets[0].quantity_fraction != 1
+            or exits.runner.enabled
+        )
+        if ladder and (
+            not self.partial_exits_enabled or plan.schema_version == "ManualDemoTradePlanV1"
+        ):
+            # The attached TP closes the whole position at targets[0]. A ladder
+            # must never be coerced into that; without the demo partial-exit
+            # flag it is not dispatched at all.
+            raise ValueError("Demo entry supports one full-size target; ladder refused.")
+        if ladder:
+            refusal = demo_ladder_refusal(plan)
+            if refusal is not None:
+                raise ValueError(f"Demo ladder refused before entry: {refusal}.")
         # Read only: no leverage or margin-mode write here. A configured leverage
         # was set and read back just before the claim, so any drift refuses; other
         # plans trade at the account's existing leverage.
@@ -609,6 +667,12 @@ class GovernedBloFinDemoProvider:
             > plan.basis_policy.tolerance_bps
         ):
             raise ValueError("Demo cross-venue basis moved beyond the authorized bound.")
+        if exits.margin_assumption_version == "2":
+            from app.services.demo_risk_v2 import demo_v2_venue_refusal
+
+            refusal = demo_v2_venue_refusal(plan, snapshot, worst_price)
+            if refusal is not None:
+                raise ValueError(refusal)
         if plan.schema_version == "ManualDemoTradePlanV1":
             from app.services.manual_demo_policy import validate_manual_demo
 
@@ -623,11 +687,19 @@ class GovernedBloFinDemoProvider:
             "orderType": "market",
             "size": str(plan.quantity.value),
             "clientOrderId": client_order_id,
-            "slTriggerPrice": str(plan.risk_and_exits.stop.value),
-            "slOrderPrice": "-1",
-            "tpTriggerPrice": str(plan.risk_and_exits.targets[0].price.value),
-            "tpOrderPrice": "-1",
         }
+        if not ladder:
+            body.update(
+                {
+                    "slTriggerPrice": str(plan.risk_and_exits.stop.value),
+                    "slOrderPrice": "-1",
+                    "tpTriggerPrice": str(plan.risk_and_exits.targets[0].price.value),
+                    "tpOrderPrice": "-1",
+                }
+            )
+        # A ladder carries no attached TP/SL: BloFin does not document how an
+        # attached TP/SL is sized once the position is partly reduced, so every
+        # ladder exit is a bot-managed market reduceOnly close.
 
         def verify_deadline() -> None:
             now = self._clock()
@@ -655,6 +727,23 @@ class GovernedBloFinDemoProvider:
         if not order_id or row.get("clientOrderId", client_order_id) != client_order_id:
             raise ValueError("Ambiguous demo submit identity.")
         return order_id
+
+    def partial_exit_venue(self, plan: TradePlanRevision) -> BloFinDemoReduceOnlyVenue:
+        from app.providers.exchange.governed_blofin_partial_exits import (
+            BloFinDemoReduceOnlyVenue,
+        )
+
+        if not self.partial_exits_enabled:
+            raise ValueError("Demo partial exits are disabled.")
+        return BloFinDemoReduceOnlyVenue(
+            self._client, plan=plan, require_identity=self._require_close_identity
+        )
+
+    def _require_close_identity(self) -> None:
+        self.verify_permissions()
+        expected = self._expected_native_uid
+        if expected is not None and self._account.native_account_uid != expected:
+            raise ValueError("Demo account identity changed before a partial-exit close.")
 
     def cancel_entry(self, *, plan: TradePlanRevision, evidence: DemoOrderEvidence) -> None:
         """Cancel only an identity-verified live entry, never its protective TPSL."""

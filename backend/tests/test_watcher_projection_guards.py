@@ -33,6 +33,7 @@ from app.signal_fusion.errors import StrategyEvaluationPolicyError
 from app.strategy_brain.sfp_runtime.notifications import sfp_notification_summaries
 from app.strategy_brain.sfp_runtime.records import record_sfp_availability
 from app.workers import watcher_paper as watcher_paper_module
+from app.workers import watcher_paper_targets as watcher_paper_targets_module
 from app.workers.watcher_paper import WatcherPaperRuntime
 from app.workers.watcher_paper_targets import list_paper_scan_targets, list_watchlist_scan_targets
 from tests.support.phase6_evaluator import make_world
@@ -204,7 +205,7 @@ def test_runtime_passes_project_timeframes_only_when_the_flag_is_on(
         seen.append(tuple(kwargs["project_timeframes"]))
         return ()
 
-    monkeypatch.setattr(watcher_paper_module, "list_watchlist_scan_targets", capture)
+    monkeypatch.setattr(watcher_paper_targets_module, "list_watchlist_scan_targets", capture)
     runtime, _, _, _ = _runtime(session_factory)
     runtime._settings = _settings(
         watcher_apply_strategies_to_watchlist=flag, watcher_scan_timeframes="15m,4h"

@@ -73,6 +73,13 @@ function useDashboardRequest(
   return state;
 }
 
+function demoTradeCoverage(data: JournalPerformanceDashboardResponse | null) {
+  if (data?.filters.scope !== "demo") return undefined;
+  const summary = data.summary;
+  return summary.pnl_trade_coverage ??
+    `${summary.pnl_sample_count} of ${summary.trade_count} trades verified`;
+}
+
 export function PerformanceDashboard({
   now,
   refreshKey = 0,
@@ -392,6 +399,7 @@ export function PerformanceDashboard({
             <PerformanceKpiCards
               summary={rangeData?.summary ?? null}
               risk={rangeData?.risk ?? null}
+              tradeCoverage={sample ? undefined : demoTradeCoverage(rangeData)}
               loading={rangeLoading}
             />
           )}
@@ -400,6 +408,7 @@ export function PerformanceDashboard({
               month={month}
               days={monthData?.days ?? []}
               summary={monthData?.summary ?? null}
+              tradeCoverage={sample ? undefined : demoTradeCoverage(monthData)}
               loading={!sample && calendar.loading}
               error={!sample && calendar.error}
               onPrev={() => setMonth((current) => shiftMonth(current, -1))}
@@ -418,6 +427,7 @@ export function PerformanceDashboard({
               />
               <CumulativePnlChart
                 points={rangeData?.cumulative ?? []}
+                tradeCoverage={sample ? undefined : demoTradeCoverage(rangeData)}
                 maxDrawdown={rangeData?.risk.max_drawdown ?? null}
                 loading={rangeLoading}
               />

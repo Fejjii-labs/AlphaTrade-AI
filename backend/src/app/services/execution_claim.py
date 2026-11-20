@@ -117,6 +117,7 @@ class ExecutionClaimHooks:
     before_return: Callable[[], None] | None = None
     revalidate: ClaimRevalidator | None = None
     manual_demo_capacity: ClaimRevalidator | None = None
+    demo_v2_equity: Decimal | None = None
 
 
 def _now() -> datetime:
@@ -248,6 +249,18 @@ class PaperPlanClaimService:
             )
         ):
             blocked_reason = "demo_account_already_claimed"
+        demo_v2 = (
+            self._settings.risk_model_v2_enabled
+            and plan.execution_venue == "BLOFIN_DEMO"
+            and plan.schema_version != "ManualDemoTradePlanV1"
+        )
+        if (
+            blocked_reason is None
+            and plan.execution_venue == "BLOFIN_DEMO"
+            and plan.risk_and_exits.margin_assumption_version == "2"
+            and not demo_v2
+        ):
+            blocked_reason = "demo_risk_model_v2_disabled"
         intent = conservative_reservation(plan)
         accounting = self._epochs.lock_risk_accounting(
             organization_id=request.organization_id,
@@ -256,6 +269,7 @@ class PaperPlanClaimService:
             exposure_unit=intent.exposure_unit,
             now=now,
             roll_daily_trade_slots=paper_daily_trade_roll(plan.execution_venue),
+            roll_demo_daily_loss=plan.execution_venue == "BLOFIN_DEMO",
         )
         if blocked_reason is None and plan.execution_venue == "BLOFIN_DEMO":
             from app.experiments.execution_risk import experiment_reservation_refusal
@@ -274,6 +288,15 @@ class PaperPlanClaimService:
                 else:
                     blocked_reason = self._hooks.manual_demo_capacity(
                         plan=plan, authorization=authorization, request=request, at=now
+                    )
+            elif demo_v2:
+                from app.services.demo_risk_v2 import demo_v2_claim_refusal
+
+                if epoch.blocking or self._epochs.organization_kill_active(request.organization_id):
+                    blocked_reason = "safety_epoch_blocking"
+                else:
+                    blocked_reason = demo_v2_claim_refusal(
+                        self._session, accounting, plan, self._hooks.demo_v2_equity
                     )
             else:
                 if blocked_reason is None:
@@ -649,6 +672,8 @@ class PaperPlanClaimService:
                 details={"reason": "authorization_consume_conflict"},
             )
         charge_reservation(accounting, intent)
+        if plan.execution_venue == "BLOFIN_DEMO":
+            accounting.demo_reserved_daily_loss += intent.daily_loss
         reservation = RiskReservation(
             organization_id=request.organization_id,
             account_id=request.account_id,
@@ -834,7 +859,11 @@ class PaperPlanClaimService:
 
 
 def conservative_reservation(plan: TradePlanRevision) -> ReservationIntent:
-    """Conservative claim reservation using immutable plan instrument semantics."""
+    """Conservative claim reservation using immutable plan instrument semantics.
+
+    Demo risk v2 plans (margin assumption "2") reserve only their stop risk
+    against the daily loss; the plan, not the caller, decides.
+    """
 
     quantity = plan.quantity.value
     multiplier = plan.instrument_rules.contract_multiplier
@@ -864,7 +893,12 @@ def conservative_reservation(plan: TradePlanRevision) -> ReservationIntent:
     notional += plan.risk_and_exits.slippage_allowance.value
     return ReservationIntent(
         pending_notional=notional,
-        daily_loss=plan.risk_and_exits.maximum_loss.value,
+        daily_loss=(
+            plan.risk_and_exits.risk_budget.value
+            if plan.execution_venue == "BLOFIN_DEMO"
+            and plan.risk_and_exits.margin_assumption_version == "2"
+            else plan.risk_and_exits.maximum_loss.value
+        ),
         trade_slots=1,
         instrument=plan.execution_instrument,
         exposure_unit=unit,
