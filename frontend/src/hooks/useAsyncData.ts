@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { friendlyError } from "@/lib/api/client";
+
 /**
  * Shared async loader with honest failure semantics.
  *
@@ -28,7 +30,7 @@ export function useAsyncData<T>(loader: () => Promise<T>, deps: unknown[] = []) 
     } catch (err) {
       if (!canCommit(generation, generationRef.current)) return;
       setData(null);
-      setError(err instanceof Error ? err.message : "Request failed");
+      setError(friendlyError(err));
     } finally {
       if (canCommit(generation, generationRef.current)) {
         setLoading(false);

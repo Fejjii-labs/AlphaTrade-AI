@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { formatStrategyLabel } from "@/lib/format";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -56,7 +57,7 @@ function ScopedDraft({ scope, strategyId, name }: { scope: string; strategyId: s
   const [versionId, setVersionId] = useState("");
   const [mode, setMode] = useState<Configuration["mode"]>("exploration");
   const [fields, setFields] = useState<Record<string, string>>({ minimum: "30", maximum: "100", max_leverage: "1", max_open_positions: "1", max_trades_per_day: "1", max_trades_total: "100" });
-  const [title, setTitle] = useState(`${name.slice(0, 95)} research`);
+  const [title, setTitle] = useState(`${formatStrategyLabel(name).slice(0, 95)} research`);
   const [pending, setPending] = useState<Body | null>(() => saved(scope));
   const [created, setCreated] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

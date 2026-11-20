@@ -9,19 +9,14 @@ const SHOTS =
   process.env.SIMPLIFIED_UI_SHOTS ?? "/opt/cursor/artifacts/screenshots";
 const API_URL = process.env.PLAYWRIGHT_API_URL ?? "http://localhost:8000";
 const DESTINATIONS = [
-  { route: "/", heading: "Dashboard", file: "dashboard", more: false },
-  { route: "/autonomous", heading: "Autonomous Trading", link: "Autonomous", file: "autonomous", more: true },
-  { route: "/strategies", heading: "Strategies", file: "strategies", more: false },
-  { route: "/journal", heading: "Trades", file: "journal", more: false },
-  { route: "/agent", heading: "Agent", file: "agent", more: false },
-  { route: "/knowledge", heading: "Knowledge", file: "knowledge", more: true },
-  { route: "/settings", heading: "Settings", file: "settings", more: true },
+  { route: "/", heading: "Dashboard", file: "dashboard", more: false, gear: false },
+  { route: "/journal", heading: "Trades", file: "journal", more: false, gear: false },
+  { route: "/strategies", heading: "Strategies", file: "strategies", more: false, gear: false },
+  { route: "/autonomous", heading: "Autonomous Trading", link: "Bot", file: "autonomous", more: false, gear: false },
+  { route: "/agent", heading: "Agent", file: "agent", more: true, gear: false },
+  { route: "/settings", heading: "Account", link: "Settings", file: "settings", more: true, gear: true },
 ] as const;
-const RETAINED = [
-  "/strategy-lab",
-  "/lessons",
-  "/settings/advanced",
-];
+const RETAINED = ["/knowledge", "/settings/exchange", "/settings/alerts", "/settings/watcher"];
 async function noOverflow(page: Page) {
   expect(
     await page.evaluate(
@@ -64,8 +59,8 @@ test("desktop/mobile five destinations and preview→Send retains a source witho
         viewport.width >= 1024
           ? page.getByRole("navigation", { name: "Primary destinations" })
           : page.getByTestId("mobile-bottom-navigation");
-      // Seven sidebar links; four phone tabs plus More.
-      await expect(nav.getByRole("link")).toHaveCount(viewport.width >= 1024 ? 7 : 4);
+      // Five sidebar pages (Settings is a gear below them); four phone tabs plus More.
+      await expect(nav.getByRole("link")).toHaveCount(viewport.width >= 1024 ? 5 : 4);
       await page.screenshot({
         path: path.join(SHOTS, `${viewport.label}-${destination.file}.png`),
         fullPage: true,
@@ -83,7 +78,12 @@ test("desktop/mobile five destinations and preview→Send retains a source witho
     for (const destination of DESTINATIONS) {
       const phoneMore = viewport.width < 1024 && destination.more;
       if (phoneMore) await nav.getByRole("button", { name: "More" }).click();
-      await (phoneMore ? page.getByRole("dialog", { name: "More" }) : nav)
+      const desktopGear = viewport.width >= 1024 && destination.gear;
+      await (phoneMore
+        ? page.getByRole("dialog", { name: "More" })
+        : desktopGear
+          ? page.getByTestId("desktop-sidebar")
+          : nav)
         .getByRole("link", { name: "link" in destination ? destination.link : destination.heading, exact: true })
         .click();
       await expect(

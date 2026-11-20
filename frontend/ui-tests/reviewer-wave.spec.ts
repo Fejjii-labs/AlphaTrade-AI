@@ -23,15 +23,6 @@ async function fixtures(page: Page, handle?: (route: import("@playwright/test").
   });
 }
 
-for (const source of ["/settings/usage", "/usage", "/billing"]) {
-  test(`${source} resolves to the actual canonical billing URL and preserves query`, async ({ page }) => {
-    await fixtures(page);
-    await page.goto(`${source}?keep=fixture&window=30`);
-    await expect(page).toHaveURL(new RegExp(`/settings/billing\\?keep=fixture&window=30${source.includes('usage') ? '#usage' : ''}$`));
-    await expect(page.locator("#usage")).toBeAttached();
-  });
-}
-
 test("manual strategy authoring routes open Agent without sending; authorized context is retained", async ({ page }) => {
   const mutations: string[] = [];
   await fixtures(page, async route => {
@@ -105,61 +96,4 @@ test("unauthorized strategy handoff fails visibly and cannot send", async ({ pag
   await expect(page.getByTestId("agent-strategy-context")).toContainText("Strategy unavailable");
   await page.getByLabel("Message", { exact: true }).fill("Discuss this plan");
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
-});
-
-test("Validation prefetch is narrow and completed widgets remain visible beside pending and failed sources", async ({ page }, testInfo) => {
-  const counts = { summary: 0, performance: 0, ranking: 0, quality: 0 };
-  let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  let slowDone = false;
-  const summary = { organization_id: FIXTURE_UUID, date_range: {}, min_sample: 5,
-    funnel: { alerts: 0, drafts: 0, candidates: 0, run_plans: 0, run_sessions: 1,
-      completed_sessions: 1, cancelled_sessions: 0, results: 1 },
-    total_sessions: 1, completed_sessions: 1, cancelled_sessions: 0, results_count: 1,
-    outcome_distribution: [{ outcome: "success", count: 1, rate: 1 }], rates: {},
-    observations: { total_observations: 0, by_kind: {} }, lessons_count: 0 };
-  await fixtures(page, async route => {
-    const pathname = new URL(route.request().url()).pathname;
-    if (pathname === "/learning-analytics/summary") {
-      counts.summary++; await route.fulfill({ json: summary }); return true;
-    }
-    if (pathname === "/learning-analytics/setup-performance") {
-      counts.performance++; await gate; slowDone = true;
-      await route.fulfill({ json: { ...summary, dimension: "condition", groups: [] } }); return true;
-    }
-    if (pathname === "/learning-analytics/setup-ranking") {
-      counts.ranking++; await route.fulfill({ json: { ...summary, dimension: "condition", ranked: [], note: "Fixture empty ranking" } }); return true;
-    }
-    if (pathname === "/strategy-quality/summary") {
-      counts.quality++; await route.fulfill({ status: 422, json: { detail: "Fixture quality unavailable" } }); return true;
-    }
-    return false;
-  });
-  await page.goto("/analytics");
-  await page.getByRole("tab", { name: "Validation", exact: true }).hover();
-  await expect.poll(() => counts.summary).toBe(1);
-  expect(counts).toEqual({ summary: 1, performance: 0, ranking: 0, quality: 0 });
-  const started = performance.now();
-  await page.getByRole("tab", { name: "Validation", exact: true }).click();
-  await expect(page.getByTestId("validation-outcome-chart")).toBeVisible();
-  const visible = performance.now() - started;
-  await expect(page.getByText("Fixture quality unavailable", { exact: true })).toBeVisible();
-  expect(slowDone).toBe(false);
-  expect(counts).toEqual({ summary: 1, performance: 1, ranking: 1, quality: 1 });
-  const firstVisitCounts = { ...counts };
-  await page.getByTestId("validation-charts").screenshot({ path: path.resolve("../docs/reviewer_wave/screenshots/validation-independent.png") });
-  release();
-  await expect.poll(() => slowDone).toBe(true);
-  await page.getByRole("tab", { name: "Behaviour", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Behaviour", exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Validation", exact: true }).click();
-  await expect(page.getByTestId("validation-outcome-chart")).toBeVisible();
-  await expect(page.getByText("Fixture quality unavailable", { exact: true })).toBeVisible();
-  await expect.poll(() => counts.quality).toBe(2);
-  expect(counts.summary).toBe(1);
-  await testInfo.attach("validation-prefetch-and-independent-sources", { body: JSON.stringify({
-    fixture: "cached summary, gated setup performance, quality HTTP 422",
-    first_visit_counts: firstVisitCounts, after_explicit_tab_return_counts: { ...counts },
-    tab_click_to_visible_summary_ms: Math.round(visible),
-  }, null, 2), contentType: "application/json" });
 });

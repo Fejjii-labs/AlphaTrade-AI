@@ -13,7 +13,7 @@ import { createAgentVoiceTransport } from "./agent-voice-transport";
 import { ApiError } from "@/lib/api/client";
 import { agentTurnRequest, agentTurnResponse } from "@/lib/api/generated/validators";
 import { clearPendingTurns, pendingFor, persistPending, persistPendingDurably, pendingTurn, persistTypedDraft, typedDraftFor, recordTerminal, subscribeRecovery, recoveryDetails, removePending, type PendingTurn, type TurnBody } from "./turn-recovery";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { acknowledgedMessages, mergeProposals, proposalsFromMessages, reconcileMessages } from "./acknowledged-turn";
 import { AgentMessageContent } from "./AgentMessageContent";
@@ -25,7 +25,7 @@ import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Select, Textarea } from "@/components/ui/input";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, formatStrategyLabel } from "@/lib/format";
 import { api } from "@/lib/api";
 import type {
   AgentStructuredProposal,
@@ -62,7 +62,8 @@ function sourceDocumentFor(messages: ConversationMessageRecord[], messageId?: st
   return typeof payload?.source_document_id === "string" ? payload.source_document_id : undefined;
 }
 
-export function AgentWorkspace() {
+/** `tabs` renders under the page title (Chat / Documents). */
+export function AgentWorkspace({ tabs }: { tabs?: ReactNode } = {}) {
   const { user, organization } = useAuth();
   const [sessionLive, setSessionLive] = useState(true);
   const recoveryScope = user && organization ? `${organization.id}:${user.id}` : null;
@@ -666,8 +667,9 @@ export function AgentWorkspace() {
     >
       <PageHeader className="hidden lg:flex" title="Agent" />
       <PageHeader className="lg:hidden" compact title="Agent" />
+      {tabs}
       {strategyContext || strategyError || (strategyId && !conversationId) ? <div className="flex flex-wrap gap-3 text-sm" data-testid="agent-strategy-context">
-        {strategyContext ? <><span>Strategy: {strategyContext.name}</span>
+        {strategyContext ? <><span>Strategy: {formatStrategyLabel(strategyContext.name)}</span>
           <Link href={`/strategy-lab/${encodeURIComponent(strategyContext.id)}`} className="underline">Back to strategy</Link></> :
           strategyError ? <p role="alert">Strategy unavailable: {strategyError}</p> : <p role="status">Loading strategy context…</p>}
       </div> : null}

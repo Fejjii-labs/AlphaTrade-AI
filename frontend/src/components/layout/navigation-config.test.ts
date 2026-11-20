@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ALL_DESTINATIONS,
   getDestinationId,
   getSecondaryItems,
   isNavLinkActive,
@@ -11,6 +12,7 @@ import {
   PRIMARY_DESTINATIONS,
   resolvePageIdentity,
   resolveSecondaryActiveHref,
+  SETTINGS_DESTINATION,
 } from "@/components/layout/navigation-config";
 import {
   PHASE_B_CAPABILITY_PATHS,
@@ -18,33 +20,27 @@ import {
 } from "@/lib/navigation/phase-b-redirects";
 
 describe("Trader primary navigation", () => {
-  it("exposes the seven destinations in sidebar order", () => {
+  it("exposes the five pages in sidebar order, with Settings apart", () => {
     expect(PRIMARY_DESTINATIONS.map((d) => [d.id, d.label, d.href])).toEqual([
       ["dashboard", "Dashboard", "/"],
-      ["autonomous", "Autonomous", "/autonomous"],
-      ["strategies", "Strategies", "/strategies"],
       ["journal", "Trades", "/journal"],
+      ["strategies", "Strategies", "/strategies"],
+      ["autonomous", "Bot", "/autonomous"],
       ["agent", "Agent", "/agent"],
-      ["knowledge", "Knowledge", "/knowledge"],
-      ["settings", "Settings", "/settings"],
     ]);
-    expect(new Set(PRIMARY_DESTINATIONS.map((d) => d.href)).size).toBe(7);
+    expect(SETTINGS_DESTINATION).toMatchObject({ id: "settings", label: "Settings", href: "/settings" });
+    expect(ALL_DESTINATIONS.map((d) => d.id)).toEqual([
+      ...PRIMARY_DESTINATIONS.map((d) => d.id),
+      "settings",
+    ]);
   });
 
-  it("puts four destinations on the phone bar and the rest behind More", () => {
-    expect(MOBILE_BOTTOM_DESTINATION_IDS).toEqual(["dashboard", "journal", "strategies", "agent"]);
-    expect(MOBILE_MORE_DESTINATION_IDS).toEqual(["autonomous", "knowledge", "settings"]);
+  it("puts four destinations on the phone bar and Agent and Settings behind More", () => {
+    expect(MOBILE_BOTTOM_DESTINATION_IDS).toEqual(["dashboard", "journal", "strategies", "autonomous"]);
+    expect(MOBILE_MORE_DESTINATION_IDS).toEqual(["agent", "settings"]);
     expect(
       [...MOBILE_BOTTOM_DESTINATION_IDS, ...MOBILE_MORE_DESTINATION_IDS].sort(),
-    ).toEqual(PRIMARY_DESTINATIONS.map((d) => d.id).sort());
-  });
-
-  it("keeps specialized routes reachable but out of the primary list", () => {
-    const paths = PRIMARY_DESTINATIONS.map((destination) => destination.href);
-    for (const path of ["/watcher", "/strategy-lab", "/lessons", "/market"]) {
-      expect(paths).not.toContain(path);
-      expect(listReachableHrefs()).toContain(path);
-    }
+    ).toEqual(ALL_DESTINATIONS.map((d) => d.id).sort());
   });
 
   // Every primary route, sub-route, redirected (old) route and deep link lands
@@ -52,146 +48,107 @@ describe("Trader primary navigation", () => {
   it.each([
     ["/", "dashboard"],
     ["/autonomous", "autonomous"],
-    ["/risk", "autonomous"],
-    ["/risk/autonomous", "autonomous"],
     ["/strategies", "strategies"],
     ["/strategies/detections", "strategies"],
     ["/strategies/setups/setup-1", "strategies"],
-    ["/strategy-lab", "strategies"],
-    ["/strategy-lab/strategy-7", "strategies"],
     ["/journal", "journal"],
-    ["/journal/statistics", "journal"],
-    ["/journal/import", "journal"],
-    ["/journal/comparison", "journal"],
-    ["/learning-analytics", "journal"],
-    ["/coaching", "journal"],
     ["/agent", "agent"],
     ["/agent/history", "agent"],
-    ["/knowledge", "knowledge"],
-    ["/knowledge/documents/doc-1", "knowledge"],
-    ["/lessons", "knowledge"],
-    ["/lessons/lesson-42", "knowledge"],
+    ["/knowledge", "agent"],
+    ["/knowledge/documents/doc-1", "agent"],
     ["/settings", "settings"],
-    ["/settings/diagnostics", "settings"],
-    ["/settings/advanced", "settings"],
+    ["/settings/exchange", "settings"],
+    ["/settings/alerts", "settings"],
     ["/settings/watcher", "settings"],
-    ["/settings/billing", "settings"],
-    ["/watchlist", "settings"],
-    ["/audit", "settings"],
-    ["/exchange", "settings"],
-    ["/tradingview-signals", "settings"],
-    ["/paper-validation/candidates/cand-1", "settings"],
-    ["/backtests/bt-123", "settings"],
-    ["/decision/candidates/cand-1", "settings"],
     ["/execution/manual-demo/exact-command", "settings"],
-    ["/portfolio", "settings"],
-    ["/workspace", "settings"],
   ])("%s → %s", (path, id) => {
     expect(getDestinationId(path)).toBe(id);
     expect(
-      PRIMARY_DESTINATIONS.filter((d) => isPrimaryDestinationActive(path, d)).map((d) => d.id),
+      ALL_DESTINATIONS.filter((d) => isPrimaryDestinationActive(path, d)).map((d) => d.id),
     ).toEqual([id]);
   });
 
   it("respects path boundaries", () => {
     expect(getDestinationId("/knowledge-base")).toBeNull();
-    expect(getDestinationId("/lessons-learned")).toBeNull();
     expect(getDestinationId("/autonomous-old")).toBeNull();
     expect(getDestinationId("/riskier")).toBeNull();
   });
 
   it("matches nav links exactly where a parent must not light up for children", () => {
     expect(isNavLinkActive("/", "/")).toBe(true);
-    expect(isNavLinkActive("/workspace", "/")).toBe(false);
+    expect(isNavLinkActive("/agent", "/")).toBe(false);
     expect(isNavLinkActive("/journal", "/journal")).toBe(true);
-    expect(isNavLinkActive("/journal/import", "/journal")).toBe(false);
+    expect(isNavLinkActive("/journal/trade-1", "/journal")).toBe(false);
     expect(isNavLinkActive("/autonomous", "/autonomous")).toBe(true);
-    expect(isNavLinkActive("/knowledge", "/knowledge")).toBe(true);
     expect(isNavLinkActive("/settings", "/settings")).toBe(true);
-    expect(isNavLinkActive("/settings/billing", "/settings")).toBe(false);
-    expect(isNavLinkActive("/risk/autonomous", "/risk")).toBe(true);
+    expect(isNavLinkActive("/settings/alerts", "/settings")).toBe(false);
   });
 
-  it("keeps one Settings parent link for retained operational routes", () => {
+  it("keeps one Settings parent link for the manual demo detail page", () => {
     const settings = getSecondaryItems("settings");
     expect(settings.map((item) => item.href)).toEqual(["/settings"]);
     expect(getSecondaryItems("dashboard")).toEqual([]);
     expect(resolveSecondaryActiveHref("/settings", settings)).toBe("/settings");
-    expect(resolveSecondaryActiveHref("/tradingview-signals", settings)).toBeNull();
   });
 
   it("resolves trader titles and subtitles", () => {
     for (const [path, title] of [
       ["/", "Dashboard"],
-      ["/autonomous", "Autonomous"],
+      ["/autonomous", "Bot"],
       ["/strategies", "Strategies"],
       ["/journal", "Trades"],
       ["/agent", "Agent"],
-      ["/knowledge", "Knowledge"],
       ["/settings", "Settings"],
     ]) {
       expect(resolvePageIdentity(path!)).toMatchObject({ title, subtitle: null });
     }
-    expect(resolvePageIdentity("/settings/diagnostics")).toMatchObject({ title: "Settings", subtitle: "Diagnostics" });
-    expect(resolvePageIdentity("/journal/import")).toMatchObject({ title: "Trades", subtitle: "Journal import" });
-    expect(resolvePageIdentity("/lessons")).toMatchObject({ title: "Knowledge", subtitle: "Lessons" });
-    expect(resolvePageIdentity("/workspace")).toMatchObject({ title: "Settings", subtitle: "AI assist" });
+    expect(resolvePageIdentity("/settings/alerts")).toMatchObject({ title: "Settings", subtitle: "Alerts" });
+    expect(resolvePageIdentity("/settings/watcher")).toMatchObject({ title: "Settings", subtitle: "Markets" });
+    expect(resolvePageIdentity("/knowledge")).toMatchObject({ title: "Agent", subtitle: "Knowledge" });
   });
 
   it("keeps required capability routes reachable", () => {
     const reachable = new Set(listReachableHrefs());
-    for (const path of PHASE_B_CAPABILITY_PATHS) {
-      if (path.startsWith("/backtests/")) {
-        expect(getDestinationId(path)).toBe("settings");
-        continue;
-      }
-      expect(reachable.has(path), path).toBe(true);
-    }
-    for (const path of ["/settings/diagnostics", "/agent", "/strategies", "/strategy-lab", "/knowledge", "/autonomous", "/lessons", "/watcher", "/market"])
+    for (const path of PHASE_B_CAPABILITY_PATHS) expect(reachable.has(path), path).toBe(true);
+    for (const path of ["/agent", "/strategies", "/knowledge", "/autonomous", "/settings"])
       expect(reachable.has(path), path).toBe(true);
   });
 });
 
-describe("AT-040 Phase B redirects", () => {
-  it("defines Settings hub redirects without loops", () => {
+describe("Removed-route redirects", () => {
+  it("defines redirects without loops", () => {
     expect(PHASE_B_REDIRECTS.length).toBeGreaterThan(0);
-    const sources = new Set(PHASE_B_REDIRECTS.map((rule) => rule.source));
-    const destinations = new Set(
-      PHASE_B_REDIRECTS.map((rule) => rule.destination),
-    );
+    // A query-matched rule (`/journal?tab=knowledge`) leaves its path a real page.
+    const sources = new Set(PHASE_B_REDIRECTS.filter((rule) => !rule.has).map((rule) => rule.source));
     for (const rule of PHASE_B_REDIRECTS) {
       expect(rule.source).not.toBe(rule.destination);
-      const home = rule.source.startsWith("/strategy-lab/") ? "/agent?" : rule.source.startsWith("/risk") ? "/autonomous#" : rule.source.startsWith("/strategies/") ? "/strategies" : rule.source === "/journal" ? "/knowledge" : "/settings/";
-      expect(rule.destination.startsWith(home), rule.source).toBe(true);
-      expect(destinations.has(rule.source)).toBe(false);
+      expect(sources.has(rule.destination.split(/[?#]/)[0]!), rule.source).toBe(false);
     }
-    expect(sources.has("/billing")).toBe(true);
-    expect(sources.has("/usage")).toBe(true);
-    expect(sources.has("/settings/usage")).toBe(true);
-    expect(sources.has("/invitations")).toBe(true);
-    expect(sources.has("/audit")).toBe(true);
-    expect(sources.has("/exchange")).toBe(true);
-    expect(
-      PHASE_B_REDIRECTS.find((rule) => rule.source === "/billing")?.destination,
-    ).toBe("/settings/billing");
-    expect(
-      PHASE_B_REDIRECTS.find((rule) => rule.source === "/usage")?.destination,
-    ).toBe("/settings/billing#usage");
   });
 
-  it("does not redirect dynamic capability IDs or paper-validation paths", () => {
-    for (const rule of PHASE_B_REDIRECTS) {
-      expect(rule.source.includes("[")).toBe(false);
-      expect(rule.source.startsWith("/paper-validation")).toBe(false);
-      expect(rule.source.startsWith("/backtests")).toBe(false);
-      expect(rule.source === "/strategy-lab/:id").toBe(false);
-    }
+  it.each([
+    ["/billing", "/settings"],
+    ["/usage", "/settings"],
+    ["/settings/usage", "/settings"],
+    ["/settings/billing", "/settings"],
+    ["/invitations", "/settings"],
+    ["/settings/team", "/settings"],
+    ["/audit", "/settings"],
+    ["/settings/audit", "/settings"],
+    ["/settings/diagnostics", "/settings"],
+    ["/settings/advanced", "/settings"],
+    ["/settings/help", "/settings"],
+    ["/settings/notifications", "/settings/alerts"],
+    ["/exchange", "/settings/exchange"],
+  ])("sends removed Settings route %s to %s", (source, destination) => {
+    expect(PHASE_B_REDIRECTS.find((rule) => rule.source === source)?.destination).toBe(destination);
   });
 
   it("preserves query parameters by using path-only redirect sources", () => {
     for (const rule of PHASE_B_REDIRECTS) {
       expect(rule.source.includes("?")).toBe(false);
-      if (!rule.source.startsWith("/strategy-lab/")) expect(rule.destination.includes("?")).toBe(false);
+      if (!rule.source.startsWith("/strategy-lab/") && rule.source !== "/journal/statistics")
+        expect(rule.destination.includes("?")).toBe(false);
     }
   });
 });

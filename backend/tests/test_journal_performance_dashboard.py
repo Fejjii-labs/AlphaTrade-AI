@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -944,3 +945,113 @@ def test_calendar_endpoint_is_tenant_isolated(
     body = test_client.get("/journal/statistics/calendar", headers=headers).json()
     assert body["summary"]["trade_count"] == 0
     assert body["score"]["overall"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Unreconciled BloFin demo mirror rows: show the venue price P&L, flagged
+# --------------------------------------------------------------------------- #
+
+
+def _unverified(
+    when: datetime,
+    *,
+    entry: str,
+    exit_: str | None,
+    size: str | None,
+    direction: TradeDirection = TradeDirection.LONG,
+    reason: str = "unverified:funding_incomplete",
+) -> JournalTradeStatsRow:
+    return replace(
+        _row(None, when, source=JournalTradeSource.BLOFIN_DEMO_MANUAL),
+        direction=direction,
+        entry_price=Decimal(entry),
+        exit_price=Decimal(exit_) if exit_ is not None else None,
+        size=Decimal(size) if size is not None else None,
+        exit_reason=reason,
+    )
+
+
+def test_unreconciled_mirror_rows_show_venue_price_pnl_flagged_unverified() -> None:
+    rows = [
+        _unverified(datetime(2026, 11, 12, 10, tzinfo=UTC), entry="100", exit_="110", size="2"),
+        _unverified(
+            datetime(2026, 11, 19, 10, tzinfo=UTC),
+            entry="50",
+            exit_="52",
+            size="5",
+            direction=TradeDirection.SHORT,
+            reason="unverified",
+        ),
+    ]
+    result = _build(rows)
+    s = result.summary
+    assert s.trade_count == 2
+    assert s.pnl_sample_count == 2
+    assert s.unverified_pnl_count == 2
+    assert s.net_pnl == Decimal("10")
+    assert (s.wins, s.losses) == (1, 1)
+    assert s.pnl_trade_coverage == "0 of 2 trades verified"
+    assert [(d.date.isoformat(), d.net_pnl, d.unverified_count) for d in result.days] == [
+        ("2026-11-12", Decimal("20"), 1),
+        ("2026-11-19", Decimal("-10"), 1),
+    ]
+    assert result.cumulative[-1].cumulative_net_pnl == Decimal("10")
+
+
+def test_verified_rows_are_not_flagged_and_keep_recorded_net() -> None:
+    rows = [
+        _row(
+            "9.8", datetime(2026, 11, 12, tzinfo=UTC), source=JournalTradeSource.BLOFIN_DEMO_MANUAL
+        ),
+        _unverified(datetime(2026, 11, 13, tzinfo=UTC), entry="100", exit_="101", size="1"),
+    ]
+    result = _build(rows)
+    assert result.summary.net_pnl == Decimal("10.8")
+    assert result.summary.unverified_pnl_count == 1
+    assert result.summary.pnl_trade_coverage == "1 of 2 trades verified"
+    assert [d.unverified_count for d in result.days] == [0, 1]
+
+
+def test_unreconciled_rows_without_prices_or_marker_stay_without_pnl() -> None:
+    no_size = _unverified(datetime(2026, 11, 12, tzinfo=UTC), entry="100", exit_="110", size=None)
+    no_exit = _unverified(datetime(2026, 11, 12, tzinfo=UTC), entry="100", exit_=None, size="1")
+    plain = replace(
+        _row(None, datetime(2026, 11, 12, tzinfo=UTC)),
+        entry_price=Decimal("100"),
+        exit_price=Decimal("110"),
+        size=Decimal("1"),
+    )
+    s = _build([no_size, no_exit, plain]).summary
+    assert s.pnl_sample_count == 0
+    assert s.unverified_pnl_count == 0
+    assert s.net_pnl is None
+
+
+def test_calendar_endpoint_shows_unreconciled_blofin_rows_on_their_close_day(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    headers = _auth(test_client, "stats-a@test.example")
+    trade_id = _closed_trade(
+        factory,
+        source=JournalTradeSource.BLOFIN_DEMO_MANUAL,
+        exit_time=datetime(2026, 11, 19, 18, tzinfo=UTC),
+    )
+    _set_columns(
+        factory,
+        trade_id,
+        entry_price=Decimal("100"),
+        exit_price=Decimal("103"),
+        size=Decimal("2"),
+        exit_reason="unverified:missing_entry_fee",
+    )
+    body = test_client.get(
+        "/journal/statistics/calendar",
+        headers=headers,
+        params={"date_from": "2026-11-01", "date_to": "2026-11-30", "tz": "UTC"},
+    ).json()
+    assert Decimal(body["summary"]["net_pnl"]) == Decimal("6")
+    assert body["summary"]["unverified_pnl_count"] == 1
+    assert [(d["date"], Decimal(d["net_pnl"]), d["unverified_count"]) for d in body["days"]] == [
+        ("2026-11-19", Decimal("6"), 1)
+    ]

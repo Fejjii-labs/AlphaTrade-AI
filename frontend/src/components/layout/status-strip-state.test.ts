@@ -26,10 +26,10 @@ function killSwitch(partial: Partial<KillSwitchStatus>): KillSwitchStatus {
 }
 
 describe("AT-040 StatusStrip safety truth", () => {
-  it("paper + real disabled shows PAPER with paper tone", () => {
+  it("paper + real disabled shows Demo with paper tone", () => {
     const display = resolveExecutionDisplay("paper", false, true);
     expect(display.paperConfirmed).toBe(true);
-    expect(display.label).toBe("PAPER");
+    expect(display.label).toBe("Demo");
     expect(display.tone).toBe("paper");
   });
 
@@ -72,7 +72,7 @@ describe("AT-040 StatusStrip safety truth", () => {
     ];
     for (const [mode, real, known] of cases) {
       const display = resolveExecutionDisplay(mode, real, known);
-      expect(display.label).not.toBe("PAPER");
+      expect(display.label).not.toBe("Demo");
       expect(display.tone).not.toBe("paper");
     }
   });
@@ -201,7 +201,7 @@ describe("buildPostureAnnouncement (FP2-114)", () => {
 
   it("states verified paper posture, real-trading state and risk level", () => {
     expect(announce("paper", false, true, killSwitch({}))).toBe(
-      "Trading posture: execution PAPER, verified; real trading disabled; risk low.",
+      "Trading posture: execution Demo, verified; real trading disabled; risk low.",
     );
   });
 
@@ -216,13 +216,13 @@ describe("buildPostureAnnouncement (FP2-114)", () => {
     expect(text).toBe(
       "Trading posture: execution unverified; real trading unverified; risk unknown.",
     );
-    expect(text).not.toContain("PAPER");
+    expect(text).not.toContain("Demo");
   });
 
   it("surfaces a safety conflict rather than a paper claim", () => {
     const text = announce("paper", true, true, killSwitch({}));
     expect(text).toContain("safety conflict");
     expect(text).toContain("real trading enabled");
-    expect(text).not.toContain("PAPER");
+    expect(text).not.toContain("Demo");
   });
 });

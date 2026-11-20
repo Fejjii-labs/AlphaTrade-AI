@@ -51,7 +51,7 @@ _WRITE = Depends(
     summary="Get autonomous trading settings",
     dependencies=[_READ],
 )
-async def get_autonomous_trading_settings(
+def get_autonomous_trading_settings(
     tenant: ReaderDep,
     service: AutonomousTradingSettingsServiceDep,
 ) -> AutonomousTradingSettingsView:
@@ -64,7 +64,7 @@ async def get_autonomous_trading_settings(
     summary="Ceilings and configured bands the settings page renders (read-only)",
     dependencies=[_BOUNDS_READ],
 )
-async def get_autonomous_settings_bounds(
+def get_autonomous_settings_bounds(
     tenant: ReaderDep,
     settings: Settings = Depends(get_settings),
 ) -> AutonomousSettingsBoundsView:
@@ -78,7 +78,7 @@ async def get_autonomous_settings_bounds(
     summary="What the autonomous paper bot did today",
     dependencies=[_ACTIVITY_READ],
 )
-async def get_autonomous_activity(
+def get_autonomous_activity(
     tenant: ReaderDep,
     session: SessionDep,
 ) -> AutonomousActivityView:
@@ -93,7 +93,7 @@ async def get_autonomous_activity(
     summary="Update autonomous trading settings",
     dependencies=[_WRITE],
 )
-async def update_autonomous_trading_settings(
+def update_autonomous_trading_settings(
     payload: AutonomousTradingSettingsUpdate,
     tenant: OwnerDep,
     service: AutonomousTradingSettingsServiceDep,

@@ -158,7 +158,7 @@ test.describe("Browser happy path (local optional)", () => {
     "Set PLAYWRIGHT_BROWSER_E2E=1 to run full browser tour locally",
   );
 
-  test("register, dashboard, workspace, logout", async ({ page }) => {
+  test("register, dashboard, agent, logout", async ({ page }) => {
     const email = uniqueEmail();
     const password = freshE2EPassword();
 
@@ -169,14 +169,12 @@ test.describe("Browser happy path (local optional)", () => {
     await page.getByRole("button", { name: /create account/i }).click();
     await expect(page).toHaveURL("/");
 
-    await expect(page.getByRole("status", { name: "Execution status" }).getByText("PAPER", { exact: true })).toBeVisible();
-    await expect(page.getByText(/real off/i).first()).toBeVisible();
+    await expect(page.getByRole("status", { name: "Execution status" }).getByText("Demo", { exact: true })).toBeVisible();
 
-    await page.goto("/workspace");
-    await expect(page.getByRole("heading", { name: /ai trading workspace/i })).toBeVisible();
-    await expect(page.getByText(/real off/i).first()).toBeVisible();
+    await page.goto("/agent");
+    await expect(page).toHaveURL(/\/agent$/);
 
-    await page.getByRole("button", { name: "Status", exact: true }).click();
+    await page.getByRole("button", { name: "Account menu", exact: true }).click();
     await page.getByRole("button", { name: /log out/i }).click();
     await expect(page).toHaveURL(/login/);
     await page.goto("/journal");

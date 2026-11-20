@@ -13,7 +13,7 @@ router = APIRouter(prefix="/audit", tags=["audit"])
 
 
 @router.get("/events", response_model=PaginatedAuditRecords, summary="List audit events")
-async def list_audit_events(
+def list_audit_events(
     tenant: TenantDep,
     audit_service: AuditServiceDep,
     request_id: str | None = Query(default=None),

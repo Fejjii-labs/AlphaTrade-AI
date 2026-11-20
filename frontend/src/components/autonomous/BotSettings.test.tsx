@@ -1,290 +1,103 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { autonomousBounds } from "@/test/autonomous-bounds-fixtures";
+import { api } from "@/lib/api";
+import type { AutonomousTradingSettingsView } from "@/lib/api/types";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
-import { BotSettings } from "./BotSettings";
+import { BotSettings, botState } from "./BotSettings";
+
+const auth = { user: { id: "user" }, organization: { id: "org" }, membershipRole: "owner" as string | null };
+const appContext = { killSwitchStatus: null as { active: boolean } | null };
+vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => auth }));
+vi.mock("@/contexts/AppContext", () => ({ useAppContext: () => appContext }));
+vi.mock("@/components/autonomous/BotActivityPanel", () => ({ BotActivityPanel: () => <p>activity</p> }));
 
 const settings = {
-  organization_id: "org",
-  user_id: "user",
-  daily_loss_limit_percent: "3",
-  max_trades_per_day: 5,
-  risk_per_trade_percent: null,
-  strategy_id: "strategy-1",
-  symbol: "BTCUSDT",
-  using_defaults: true,
-  account_max_trades_per_day: 20,
-  effective_max_trades_per_day: 20,
-  strategy_options: [{ strategy_id: "strategy-1", name: "Nested BTC" }],
-  symbol_options: ["BTCUSDT", "ETHUSDT"],
-  max_daily_loss_percent_ceiling: "6",
-  max_risk_per_trade_percent_ceiling: "5",
-};
+  organization_id: "org", user_id: "user", daily_loss_limit_percent: "3", max_trades_per_day: 5,
+  risk_per_trade_percent: null, strategy_id: null, symbol: null, using_defaults: true,
+  account_max_trades_per_day: 20, effective_max_trades_per_day: 20, strategy_options: [], symbol_options: [],
+  max_daily_loss_percent_ceiling: "6", max_risk_per_trade_percent_ceiling: "5",
+  autonomy_mode: "blofin_demo", worker_runtime_health: "RUNNING", worker_flags_stale: false,
+  demo_leverage: 3, demo_margin_mode: "isolated", max_demo_leverage_ceiling: 10,
+} as AutonomousTradingSettingsView;
 
-const account = {
-  organization_id: "org",
-  user_id: "user",
-  daily_loss_limit: "50",
-  daily_target: null,
-  max_trades_per_day: 20,
-  max_risk_per_trade_percent: "1",
-  default_account_balance: "10000",
-  timezone: "UTC",
-  green_day_protection_enabled: true,
-  one_loss_stop_enabled: false,
-  overtrading_guard_enabled: true,
-  notes: null,
-  using_defaults: false,
-  timezone_fallback: false,
-};
+const strategy = (symbol: string, direction: string, enabled: boolean, kind = "operational_nested_continuation/v1") => ({
+  strategy_id: `s-${symbol}-${direction}`, version_id: `v-${symbol}-${direction}`, version: 1, name: "x", status: "approved",
+  enabled, execution_permission: "", spec: { kind, symbol, direction, trigger_timeframe: "15m", parameters: {} },
+});
 
-const auth = {
-  user: { id: "user", role: "trader" },
-  organization: { id: "org" },
-  membershipRole: "trader" as string | null,
-};
+beforeEach(() => {
+  auth.membershipRole = "owner";
+  appContext.killSwitchStatus = { active: false };
+  vi.spyOn(api.autonomous, "settings").mockResolvedValue(settings);
+  vi.spyOn(api.autonomous, "bounds");
+  vi.spyOn(api.riskPolicy, "profile");
+  vi.spyOn(api.strategyBrain, "overview").mockResolvedValue({
+    strategies: [
+      strategy("ETHUSDT", "short", false),
+      strategy("BTCUSDT", "long", true),
+      strategy("BTCUSDT", "short", true, "swing_failure_pattern/v1"),
+    ],
+    setups: [], watched_symbols: [], limitations: [], paper_only: true,
+  } as never);
+});
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-const appContext = {
-  killSwitchStatus: null as { execution_blocked: boolean; reason: string | null } | null,
-  killSwitchError: null as string | null,
-  loading: false,
-};
-
-const safetyPosture = {
-  executionMode: "paper" as string | null,
-  realTradingEnabled: false as boolean | null,
-  providerMode: "fallback",
-  postureKnown: true,
-};
-
-const useAsyncDataMock = vi.fn();
-
-const riskProfileProps = vi.fn();
-// Grade risk and leverage have their own load and tests (RiskProfileSections / LeverageSection).
-vi.mock("@/components/autonomous/RiskProfileSections", () => ({
-  RiskProfileSections: (props: Record<string, unknown>) => {
-    riskProfileProps(props);
-    return <section aria-label="Grade risk and leverage" />;
-  },
-}));
-
-// The activity panel has its own load and tests (BotActivityPanel.test.tsx).
-vi.mock("@/components/autonomous/BotActivityPanel", () => ({
-  BotActivityPanel: () => <section aria-label="What the bot is doing" />,
-}));
-
-vi.mock("@/contexts/AppContext", () => ({
-  useAppContext: () => appContext,
-  useSafetyPosture: () => safetyPosture,
-}));
-
-vi.mock("@/contexts/AuthContext", () => ({
-  useAuth: () => auth,
-}));
-
-vi.mock("@/hooks/useAsyncData", () => ({
-  useAsyncData: (...args: unknown[]) => useAsyncDataMock(...args),
-}));
-
-vi.mock("@/lib/api", () => ({
-  api: {
-    autonomous: {
-      settings: vi.fn(),
-      bounds: vi.fn(),
-      updateSettings: vi.fn(),
-    },
-    risk: {
-      settings: vi.fn(),
-      updateSettings: vi.fn(),
-      resetSettings: vi.fn(),
-    },
-  },
-  ApiError: class ApiError extends Error {
-    status: number;
-    body: unknown;
-    constructor(message: string, status: number, body: unknown = null) {
-      super(message);
-      this.status = status;
-      this.body = body;
+describe("BotSettings", () => {
+  it("shows state, venue and worker in words, the strategies it trades (long and short), and hides the caps", async () => {
+    render(<BotSettings />);
+    const root = await screen.findByTestId("bot-settings");
+    expect(root).toHaveTextContent("BotOn");
+    expect(root).toHaveTextContent("VenueBloFin demo");
+    expect(root).toHaveTextContent("WorkerFresh");
+    const list = await screen.findByTestId("bot-strategies");
+    expect([...list.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+      "Nested · BTCUSDT · Long · 15mOn",
+      "SFP · BTCUSDT · Short · 15mOn",
+      "Nested · ETHUSDT · Short · 15mOff",
+    ]);
+    for (const gone of [/Max open/, /notional/i, /Trades today/, /Grade/, /00000000/]) {
+      expect(root).not.toHaveTextContent(gone);
     }
-  },
-}));
-
-describe("Autonomous trading settings form", () => {
-  afterEach(() => {
-    cleanup();
-    useAsyncDataMock.mockClear();
+    expectNoIdentifiers();
   });
 
-  beforeEach(() => {
-    auth.user = { id: "user", role: "trader" };
-    auth.membershipRole = "trader";
-    appContext.killSwitchStatus = { execution_blocked: false, reason: null };
-    useAsyncDataMock.mockReturnValue({
-      data: [settings, account],
-      loading: false,
-      error: null,
-      reload: vi.fn(),
-    });
-  });
-
-  it("loads settings once and passes them and the bounds to the guardrails, grade risk and leverage", () => {
-    useAsyncDataMock.mockReturnValue({ data: [settings, account, autonomousBounds], loading: false, error: null, reload: vi.fn() });
+  it("binds leverage to demo_leverage, lists 2x/3x/5x/10x and saves on change with a Saved mark", async () => {
+    vi.spyOn(api.autonomous, "updateSettings").mockResolvedValue({ ...settings, demo_leverage: 10 });
     render(<BotSettings />);
-    expect(screen.getByTestId("guardrails-stop-loss-band")).toHaveTextContent("1%–5% of equity per trade");
-    expect(riskProfileProps).toHaveBeenLastCalledWith({ settings, bounds: autonomousBounds });
-    expect(screen.getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual([
-      "Grade risk and leverage",
-      "What the bot is doing",
-    ]);
+    const select = await screen.findByRole("combobox", { name: "Leverage" });
+    expect(select).toHaveValue("3");
+    expect([...select.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["2×", "3×", "5×", "10×"]);
+    expect(api.riskPolicy.profile).not.toHaveBeenCalled();
+    expect(api.autonomous.bounds).not.toHaveBeenCalled();
+    fireEvent.change(select, { target: { value: "10" } });
+    // No confirmation step: the pick is saved straight away.
+    await waitFor(() => expect(api.autonomous.updateSettings).toHaveBeenCalledWith({ demo_leverage: 10 }));
+    await waitFor(() => expect(select).toHaveValue("10"));
+    expect(await screen.findByTestId("leverage-status")).toHaveTextContent("Saved");
+    expect(screen.queryByTestId("leverage-raise-confirm")).not.toBeInTheDocument();
   });
 
-  it("still shows grade risk and leverage when the settings fail to load", () => {
-    useAsyncDataMock.mockReturnValue({ data: null, loading: false, error: "403", reload: vi.fn() });
+  it("shows a short error and keeps the saved value when saving fails", async () => {
+    vi.spyOn(api.autonomous, "updateSettings").mockRejectedValue(new TypeError("Failed to fetch"));
     render(<BotSettings />);
-    expect(screen.getByRole("region", { name: "Grade risk and leverage" })).toBeInTheDocument();
-    expect(riskProfileProps).toHaveBeenLastCalledWith({});
+    const select = await screen.findByRole("combobox", { name: "Leverage" });
+    fireEvent.change(select, { target: { value: "5" } });
+    expect(await screen.findByTestId("leverage-status")).toHaveTextContent("Not saved. Try again.");
+    expect(screen.getByTestId("leverage-status")).not.toHaveTextContent("Failed to fetch");
+    expect(select).toHaveValue("3");
   });
 
-  it("renders typed fields and selectors", () => {
-    render(<BotSettings />);
-    expect(screen.getByRole("region", { name: "What the bot is doing" })).toBeInTheDocument();
-    expect(screen.getByTestId("autonomous-daily-loss-percent")).toHaveValue("3");
-    expect(screen.getByTestId("autonomous-max-trades")).toHaveValue("5");
-    expect(screen.getByTestId("autonomous-risk-per-trade")).toHaveValue("");
-    expect(screen.getByTestId("autonomous-strategy-strategy-1")).toBeChecked();
-    expect(screen.getByTestId("autonomous-symbol")).toHaveValue("BTCUSDT");
-    expect(screen.getByTestId("autonomous-paper-switch-input")).toBeDisabled();
-    expect(screen.getByTestId("autonomous-paper-switch-note")).toHaveTextContent(
-      /stops new entries/i,
-    );
-    expect(screen.getByTestId("autonomous-paper-switch-note")).toHaveTextContent(
-      /does not close open positions/i,
-    );
-    expect(screen.getByTestId("autonomous-paper-switch-status")).toHaveTextContent(
-      "Not reported",
-    );
-    expect(screen.queryByText("Running")).not.toBeInTheDocument();
-  });
-
-  it("lets an owner persist the paper switch without changing limits", async () => {
-    // /auth/me reports user.role as admin/trader/viewer; ownership comes from the membership.
-    auth.user = { id: "user", role: "trader" };
-    auth.membershipRole = "owner";
-    const { api } = await import("@/lib/api");
-    vi.mocked(api.autonomous.updateSettings).mockResolvedValue({
-      ...settings,
-      internal_paper_enabled: true,
-      internal_paper_env_ceiling: true,
-      internal_paper_effective: false,
-      worker_runtime_health: "STALE",
-      worker_flags_stale: true,
-      autonomy_mode: "off",
-    });
-    render(<BotSettings />);
-    const toggle = screen.getByTestId("autonomous-paper-switch-input");
-    expect(toggle).toBeEnabled();
-    fireEvent.click(toggle);
-    // Arming asks first; nothing is sent until the dialog is confirmed.
-    expect(screen.getByTestId("autonomous-arm-confirm")).toHaveTextContent("cannot trade real money");
-    expect(api.autonomous.updateSettings).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("autonomous-arm-confirm-confirm"));
-    await waitFor(() => {
-      expect(api.autonomous.updateSettings).toHaveBeenCalledExactlyOnceWith({
-        internal_paper_enabled: true,
-      });
-    });
-    expect(screen.getByTestId("autonomous-paper-switch-input")).toBeChecked();
-    expect(screen.getByTestId("autonomous-paper-switch-status")).toHaveTextContent("Stale");
-    const tiles = screen.getAllByTestId("status-tile");
-    expect(tiles.map((tile) => [tile.textContent, tile.dataset.tone])).toEqual([
-      ["Environment ceilingOn", "ok"],
-      ["EffectiveOff", "unknown"],
-      ["WorkerStale", "warn"],
-      ["ModeOff", "unknown"],
-    ]);
-  });
-
-  it("cancelling the arm dialog sends nothing; disarming needs no dialog", async () => {
-    auth.membershipRole = "owner";
-    const { api } = await import("@/lib/api");
-    vi.mocked(api.autonomous.updateSettings).mockReset();
-    render(<BotSettings />);
-    fireEvent.click(screen.getByTestId("autonomous-paper-switch-input"));
-    const dialog = screen.getByRole("dialog", { name: "Arm the autonomous paper bot?" });
-    expect(dialog).toBeInTheDocument();
-    // Focus starts on Cancel, the safe default.
-    expect(screen.getByTestId("autonomous-arm-confirm-cancel")).toHaveFocus();
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(api.autonomous.updateSettings).not.toHaveBeenCalled();
-    expect(screen.getByTestId("autonomous-paper-switch-input")).not.toBeChecked();
-
-    cleanup();
-    useAsyncDataMock.mockReturnValue({
-      data: [{ ...settings, internal_paper_enabled: true }, account],
-      loading: false,
-      error: null,
-      reload: vi.fn(),
-    });
-    vi.mocked(api.autonomous.updateSettings).mockResolvedValue({ ...settings, internal_paper_enabled: false });
-    render(<BotSettings />);
-    fireEvent.click(screen.getByTestId("autonomous-paper-switch-input"));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    await waitFor(() =>
-      expect(api.autonomous.updateSettings).toHaveBeenCalledExactlyOnceWith({ internal_paper_enabled: false }),
-    );
-  });
-
-  it("keeps the paper switch disabled for a trader membership even if user.role says owner", () => {
-    auth.user = { id: "user", role: "owner" };
+  it("is read-only for non-owners", async () => {
     auth.membershipRole = "trader";
     render(<BotSettings />);
-    expect(screen.getByTestId("autonomous-paper-switch-input")).toBeDisabled();
+    expect(await screen.findByRole("combobox", { name: "Leverage" })).toBeDisabled();
   });
 
-  it("lets an owner edit bot limits with no owner-only reason", () => {
-    auth.membershipRole = "owner";
-    render(<BotSettings />);
-    expect(screen.getByTestId("autonomous-max-trades")).toBeEnabled();
-    expect(screen.queryByTestId("autonomous-save-owner-reason")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("autonomous-switch-owner-reason")).not.toBeInTheDocument();
-  });
-
-  it("locks bot limits for a trader, names their role, and keeps account limits editable", () => {
-    render(<BotSettings />);
-    expect(screen.getByTestId("autonomous-max-trades")).toBeDisabled();
-    expect(screen.getByTestId("autonomous-strategy-strategy-1")).toBeDisabled();
-    expect(screen.getByTestId("autonomous-strategy-scope-all")).toBeDisabled();
-    expect(screen.getByTestId("risk-max-trades")).toBeEnabled();
-    expect(screen.getByTestId("autonomous-save-owner-reason")).toHaveTextContent(
-      "Bot limits: Owner only (your role: Trader)",
-    );
-    expect(screen.getByTestId("autonomous-switch-owner-reason")).toHaveTextContent(
-      "Owner only (your role: Trader)",
-    );
-  });
-
-  it("shows an unknown role when the membership role is missing", () => {
-    auth.membershipRole = null;
-    render(<BotSettings />);
-    expect(screen.getByTestId("autonomous-max-trades")).toBeDisabled();
-    expect(screen.getByTestId("autonomous-paper-switch-input")).toBeDisabled();
-    expect(screen.getByTestId("autonomous-save-owner-reason")).toHaveTextContent(
-      "Owner only (your role: unknown)",
-    );
-  });
-
-  it("renders one limits form with account and bot values side by side", () => {
-    render(<BotSettings />);
-    const form = screen.getByTestId("trading-limits-card");
-    expect(form).toHaveAttribute("id", "limits");
-    expect(screen.getByTestId("risk-max-trades")).toHaveValue(20);
-    expect(screen.getByTestId("autonomous-max-trades")).toHaveValue("5");
-    expect(screen.getByText("Account: max trades/day (all trades)")).toBeInTheDocument();
-    expect(screen.getByText("Bot: max trades/day (≤ account)")).toBeInTheDocument();
-    expect(screen.queryByTestId("autonomous-settings-form-card")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("risk-settings-form-card")).not.toBeInTheDocument();
+  it("says Paused while the kill switch is on", () => {
+    expect(botState(settings, true).state).toBe("Paused");
+    expect(botState({ ...settings, autonomy_mode: "off" }, false).state).toBe("Off");
+    expect(botState({ ...settings, autonomy_mode: "" }, false).state).toBe("Not reported");
   });
 });

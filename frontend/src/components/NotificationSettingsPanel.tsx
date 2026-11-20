@@ -5,7 +5,7 @@ import { useCallback, useState } from "react";
 import { TelegramPolicyForm } from "@/components/settings/TelegramPolicyForm";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   SettingsReadout,
   SettingsUnavailable,
@@ -37,6 +37,14 @@ export function NotificationSettingsPanel({
   const telegram = delivery.data?.channel_statuses?.find(
     (channel) => channel.channel === "telegram",
   );
+
+  const worker = snapshot?.worker_effective;
+  const workerDeliveryEnabled = worker?.source === "worker" &&
+    worker.health_state === "RUNNING" && !worker.stale &&
+    (worker.automatic_telegram_delivery_enabled || worker.telegram_alerts_enabled ||
+      (worker.telegram_paper_activation_armed && worker.telegram_interaction_enabled));
+  const apiDeliveryDisabled = telegram?.status_label === "disabled" ||
+    (!telegram && delivery.data?.telegram_enabled === false);
 
   async function save(patch: Partial<NotificationPreferences>) {
     setBusy(true);
@@ -71,14 +79,6 @@ export function NotificationSettingsPanel({
 
   return (
     <Card data-testid="notification-settings-panel">
-      <CardHeader>
-        <p
-          className="text-sm text-text-muted"
-          data-testid="notifications-never-trade-copy"
-        >
-          Paper alerts keep you informed and never execute trades.
-        </p>
-      </CardHeader>
       <CardContent className="space-y-4 text-sm">
         <div
           className="flex flex-wrap items-center gap-2"
@@ -87,25 +87,26 @@ export function NotificationSettingsPanel({
           <span>Telegram delivery</span>
           <StatusBadge
             label={
-              delivery.loading
-                ? "Loading…"
-                : delivery.error || !delivery.data
-                  ? "Unavailable"
-                  : telegram
-                    ? formatReasonCode(telegram.status_label)
-                    : delivery.data.telegram_enabled === false
-                      ? "Disabled"
-                      : "State unavailable"
+              workerDeliveryEnabled
+                ? "Enabled on worker"
+                : delivery.loading
+                  ? "Loading…"
+                  : delivery.error || !delivery.data
+                    ? "Unavailable"
+                    : apiDeliveryDisabled
+                      ? "API delivery disabled"
+                      : telegram
+                        ? formatReasonCode(telegram.status_label)
+                        : "State unavailable"
             }
-            tone={telegram?.available ? "healthy" : "muted"}
+            tone={workerDeliveryEnabled || telegram?.available ? "healthy" : "muted"}
           />
         </div>
         <p className="text-xs text-text-muted">
           {telegram
-            ? `Telegram configuration: ${telegram.configured ? "configured" : "not configured"}. `
+            ? `API delivery configuration: ${telegram.configured ? "configured" : "not configured"}. `
             : ""}
-          Connection is not verified by this API. Network activation remains
-          separate and is unavailable here.
+          Delivery status reflects service configuration. Message delivery has not been verified here.
         </p>
         {delivery.error ? (
           <SettingsUnavailable
@@ -262,24 +263,8 @@ export function NotificationSettingsPanel({
                     "No markets reported"
                   : "Unavailable",
               ],
-              [
-                "Reported strategies",
-                snapshot
-                  ? [
-                      ...new Set(
-                        snapshot.approved_strategies.map(
-                          (strategy) => strategy.name,
-                        ),
-                      ),
-                    ].join(", ") || "No approved strategies reported"
-                  : "Unavailable",
-              ],
             ]}
           />
-          <p className="text-xs text-text-muted">
-            This is the reported monitoring context, not a notification filter.
-            Configure supported subscriptions in Telegram Policy V2 above.
-          </p>
         </div>
         {message ? (
           <p role="status" className="text-xs text-text-secondary">

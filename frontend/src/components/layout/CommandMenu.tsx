@@ -3,13 +3,9 @@
 import Link from "next/link";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
-import { ADVANCED_ROUTES, LABELED_ROUTES } from "@/components/layout/advanced-routes";
-import {
-  PRIMARY_DESTINATIONS,
-  SECONDARY_NAV,
-  type NavLink,
-} from "@/components/layout/navigation-config";
+import { PRIMARY_DESTINATIONS } from "@/components/layout/navigation-config";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
+import { SETTINGS_SECTIONS } from "@/lib/navigation/settings-sections";
 import { cn } from "@/lib/utils";
 
 type CommandMenuProps = {
@@ -23,36 +19,16 @@ type CommandEntry = {
   group: string;
 };
 
+/** The five pages and the four Settings tabs; nothing else. */
 function buildEntries(): CommandEntry[] {
-  const entries: CommandEntry[] = PRIMARY_DESTINATIONS.map((d) => ({
-    href: d.href,
-    label: d.label,
-    group: "Destinations",
-  }));
-  for (const group of SECONDARY_NAV) {
-    for (const item of group.items as readonly NavLink[]) {
-      if (entries.some((e) => e.href === item.href)) continue;
-      entries.push({
-        href: item.href,
-        label: item.label,
-        group: item.advanced ? "Advanced" : "Pages",
-      });
-    }
-  }
-  for (const route of LABELED_ROUTES) {
-    if (entries.some((entry) => entry.href === route.href)) continue;
-    if (ADVANCED_ROUTES.some((advanced) => advanced.href === route.href)) continue;
-    entries.push({ href: route.href, label: route.label, group: "Pages" });
-  }
-  for (const route of ADVANCED_ROUTES) {
-    if (entries.some((entry) => entry.href === route.href)) continue;
-    entries.push({
-      href: route.href,
-      label: route.label,
-      group: "Diagnostics",
-    });
-  }
-  return entries;
+  return [
+    ...PRIMARY_DESTINATIONS.map((d) => ({ href: d.href, label: d.label, group: "Pages" })),
+    ...SETTINGS_SECTIONS.map((section) => ({
+      href: section.href,
+      label: section.label,
+      group: "Settings",
+    })),
+  ];
 }
 
 export function CommandMenu({ open, onOpenChange }: CommandMenuProps) {

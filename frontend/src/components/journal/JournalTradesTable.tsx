@@ -1,13 +1,21 @@
 import Link from "next/link";
 
-import { Badge } from "@/components/ui/badge";
 import { DataNumber } from "@/components/ui/data-number";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
-import { SectionHeader } from "@/components/ui/section-header";
 import type { CanonicalJournalTradeListItem } from "@/lib/api/types";
-import { formatDateTime, formatMonetary, UNAVAILABLE } from "@/lib/format";
+import { formatDateTime, formatMonetary, formatPrice, formatStrategyLabel, UNAVAILABLE } from "@/lib/format";
 
 type Trade = CanonicalJournalTradeListItem;
+
+const SOURCE_NAMES: Partial<Record<NonNullable<Trade["source"]>, string>> = {
+  paper_execution: "Bot",
+  blofin_demo_manual: "Mine",
+  manual_demo_test: "App order",
+};
+
+export function tradeSourceName(source: Trade["source"]): string {
+  return (source && SOURCE_NAMES[source]) || "Other";
+}
 
 function sideLabel(direction: string): string {
   return direction ? direction.charAt(0).toUpperCase() + direction.slice(1).toLowerCase() : UNAVAILABLE;
@@ -22,45 +30,42 @@ function pnlTone(value: string | null | undefined): "positive" | "negative" | "d
 function columns(onOpen: () => void): Array<DataTableColumn<Trade>> {
   return [
     {
+      id: "date",
+      header: "Date",
+      className: "whitespace-nowrap",
+      cell: (t) => <span className="font-data">{formatDateTime(t.exit_time ?? t.entry_time)}</span>,
+    },
+    {
       id: "trade",
-      header: "Trade",
-      className: "min-w-36",
+      header: "Coin",
+      className: "min-w-28",
       cell: (t) => (
         <span className="flex flex-col">
           <span className="font-medium">{t.symbol}</span>
-          <span className="text-caption text-text-muted">
-            {[t.strategy_label ?? "No strategy", t.timeframe].filter(Boolean).join(" · ")}
-          </span>
+          <span className="text-caption text-text-muted">{t.strategy_label ? formatStrategyLabel(t.strategy_label) : "No strategy"}</span>
         </span>
       ),
     },
     { id: "side", header: "Side", cell: (t) => sideLabel(t.direction) },
-    {
-      id: "status",
-      header: "Status",
-      cell: (t) => <Badge variant={t.status === "closed" ? "muted" : "default"}>{t.status}</Badge>,
-    },
-    {
-      id: "source",
-      header: "Source",
-      cell: (t) =>
-        t.source === "manual_demo_test" ? (
-          <Badge variant="info" data-testid="connectivity-test-marker">Connectivity test</Badge>
-        ) : (
-          <span className="text-text-secondary">Execution</span>
-        ),
-    },
+    { id: "source", header: "By", cell: (t) => tradeSourceName(t.source) },
     {
       id: "entry",
       header: "Entry",
-      className: "whitespace-nowrap",
-      cell: (t) => <span className="font-data">{formatDateTime(t.entry_time)}</span>,
+      numeric: true,
+      cell: (t) => <DataNumber value={formatPrice(t.entry_price)} />,
     },
     {
       id: "exit",
       header: "Exit",
-      className: "whitespace-nowrap",
-      cell: (t) => <span className="font-data">{formatDateTime(t.exit_time)}</span>,
+      numeric: true,
+      cell: (t) =>
+        t.status === "closed" ? <DataNumber value={formatPrice(t.exit_price)} /> : <span className="text-text-muted">Open</span>,
+    },
+    {
+      id: "fees",
+      header: "Fees",
+      numeric: true,
+      cell: (t) => <DataNumber value={t.fees == null || t.fees === "" ? UNAVAILABLE : formatPrice(t.fees, { maximumFractionDigits: 2 })} tone="muted" data-testid="trade-fees" />,
     },
     {
       id: "pnl",
@@ -75,7 +80,7 @@ function columns(onOpen: () => void): Array<DataTableColumn<Trade>> {
     },
     {
       id: "open",
-      header: "Review",
+      header: "Journal",
       className: "w-px whitespace-nowrap",
       cell: (t) => (
         <Link
@@ -83,24 +88,23 @@ function columns(onOpen: () => void): Array<DataTableColumn<Trade>> {
           href={`/journal?trade_id=${encodeURIComponent(t.id)}`}
           className="inline-flex min-h-11 min-w-11 items-center rounded-control px-2 text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         >
-          Open{" "}<span className="sr-only">exact trade</span>
+          Journal<span className="sr-only"> {t.symbol} trade</span>
         </Link>
       ),
     },
   ];
 }
 
-/** Recorded BloFin demo trades as a dense table; each row opens the exact trade review. */
+/** BloFin demo trades (bot and mine); P&L and fees come from BloFin. Each row opens its journal page. */
 export function JournalTradesTable({ trades, onOpen }: { trades: Trade[]; onOpen: () => void }) {
   return (
-    <section aria-labelledby="journal-trades-heading" className="space-y-2" data-testid="journal-trades-table">
-      <SectionHeader headingId="journal-trades-heading" title="Recorded trades" />
+    <section aria-label="Trades" className="space-y-2" data-testid="journal-trades-table">
       <DataTable
         columns={columns(onOpen)}
         rows={trades}
         getRowId={(t) => t.id}
-        caption="Recorded trades; open a row to review the exact trade"
-        empty="No matching recorded trades."
+        caption="BloFin demo trades"
+        empty="No trades yet."
       />
     </section>
   );

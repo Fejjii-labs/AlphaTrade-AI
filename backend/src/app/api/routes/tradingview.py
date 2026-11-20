@@ -59,7 +59,7 @@ async def tradingview_webhook(
     summary="List TradingView signals for the current organization",
     dependencies=[_READ_LIMIT],
 )
-async def list_tradingview_signals(
+def list_tradingview_signals(
     tenant: ReaderDep,
     service: TradingViewSignalServiceDep,
     status: TradingViewSignalStatus | None = Query(default=None),
@@ -82,7 +82,7 @@ async def list_tradingview_signals(
     summary="TradingView signal detail",
     dependencies=[_READ_LIMIT],
 )
-async def get_tradingview_signal(
+def get_tradingview_signal(
     signal_id: uuid.UUID,
     tenant: ReaderDep,
     service: TradingViewSignalServiceDep,
@@ -96,7 +96,7 @@ async def get_tradingview_signal(
     summary="Create a paper-validation candidate from a validated TradingView signal",
     dependencies=[_WRITE_LIMIT],
 )
-async def create_tradingview_candidate(
+def create_tradingview_candidate(
     signal_id: uuid.UUID,
     payload: TradingViewSignalCreateCandidateRequest,
     tenant: TraderDep,

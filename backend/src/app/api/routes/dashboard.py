@@ -166,7 +166,7 @@ def attention_queue(tenant: ReaderDep, session: SessionDep, response: Response) 
     summary="Paper-only dashboard summary",
     dependencies=[_DASHBOARD_READ_LIMIT],
 )
-async def dashboard_summary(
+def dashboard_summary(
     tenant: ReaderDep,
     service: DashboardSummaryServiceDep,
 ) -> DashboardSummary:

@@ -1,15 +1,6 @@
 "use client";
 
-import {
-  PolarAngleAxis,
-  PolarGrid,
-  PolarRadiusAxis,
-  Radar,
-  RadarChart,
-  ResponsiveContainer,
-  Tooltip,
-} from "recharts";
-import type { TooltipProps } from "recharts";
+import dynamic from "next/dynamic";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JournalDashboardScoreComponent, SampleConfidence } from "@/lib/api/types";
@@ -29,25 +20,18 @@ export function scoreBand(score: number | null): ScoreBand | null {
 type RadarDatum = { axis: string; score: number | null; raw: string };
 type ScoredDatum = RadarDatum & { score: number };
 
+// Recharts loads only when there are enough scored axes to draw.
+const ScoreRadarPlot = dynamic(() => import("./ScoreRadarPlot"), {
+  ssr: false,
+  loading: () => <Skeleton className="mx-auto h-40 w-40 rounded-full" />,
+});
+
 function rawValue(component: JournalDashboardScoreComponent): string {
   if (component.value === null) return component.note ?? UNAVAILABLE;
   if (component.key === "win_rate" || component.key === "consistency" || component.key === "max_drawdown") {
     return `${(component.value * 100).toFixed(1)}%`;
   }
   return component.value.toFixed(2);
-}
-
-function RadarTooltip({ active, payload }: TooltipProps<number, string>) {
-  if (!active || !payload?.length) return null;
-  const datum = payload[0].payload as ScoredDatum;
-  return (
-    <div className="rounded-control border border-border-subtle bg-surface-2 px-3 py-2 text-xs text-text-primary shadow-elevation2">
-      <p className="font-medium text-text-secondary">{datum.axis}</p>
-      <p className="font-data">
-        Score {datum.score.toFixed(0)} · {datum.raw}
-      </p>
-    </div>
-  );
 }
 
 export function ScoreRadar({
@@ -87,23 +71,7 @@ export function ScoreRadar({
         </div>
       ) : scored.length >= 3 ? (
         <div className="h-56 w-full" aria-hidden="true" data-testid="score-radar-chart">
-          <ResponsiveContainer width="100%" height="100%">
-            <RadarChart data={scored} outerRadius="70%">
-              <PolarGrid stroke="var(--color-border-subtle)" />
-              <PolarAngleAxis dataKey="axis" tick={{ fill: "var(--color-text-secondary)", fontSize: 11 }} />
-              <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-              <Radar
-                dataKey="score"
-                stroke={polygon}
-                strokeWidth={2}
-                fill={polygon}
-                fillOpacity={0.25}
-                dot={{ r: 3, fill: polygon }}
-                isAnimationActive={false}
-              />
-              <Tooltip content={<RadarTooltip />} />
-            </RadarChart>
-          </ResponsiveContainer>
+          <ScoreRadarPlot scored={scored} polygon={polygon} />
         </div>
       ) : (
         <p className="my-8 text-center text-sm text-text-muted">

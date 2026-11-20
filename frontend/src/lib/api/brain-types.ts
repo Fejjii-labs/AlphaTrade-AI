@@ -80,12 +80,19 @@ export interface BrainSetup {
   targets: string[];
   history?: Array<{ record_id: string; kind: string; occurred_at: string; payload: Record<string, unknown> }>;
 }
+export interface BrainOutcomes {
+  confirmed: number;
+  traded: number;
+  won: number;
+}
 export interface BrainOverview {
   watched_symbols: string[];
   strategies: BrainStrategy[];
   setups: BrainSetup[];
   /** Total matching setups before the server's 20-row bound; absent on older APIs. */
   setup_count?: number;
+  /** Setups in the window that were confirmed, traded, and won; absent on older APIs. */
+  outcomes?: BrainOutcomes;
   limitations: string[];
   paper_only: boolean;
 }

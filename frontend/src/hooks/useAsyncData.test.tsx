@@ -1,6 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { ApiError } from "@/lib/api/client";
+
 import { useAsyncData } from "./useAsyncData";
 
 type Deferred<T> = {
@@ -138,7 +140,7 @@ describe("useAsyncData", () => {
     const { result, rerender } = renderHook(
       ({ dep }: { dep: string }) =>
         useAsyncData(async () => {
-          if (mode === "fail") throw new Error(`failed for ${dep}`);
+          if (mode === "fail") throw new ApiError(`failed for ${dep}`, 409, null);
           return `data for ${dep}`;
         }, [dep]),
       { initialProps: { dep: "a" } },
@@ -150,5 +152,20 @@ describe("useAsyncData", () => {
 
     await waitFor(() => expect(result.current.error).toBe("failed for b"));
     expect(result.current.data).toBeNull();
+  });
+
+  it("keeps a short 4xx message from the API but hides raw network text", async () => {
+    let failure: Error = new TypeError("Failed to fetch");
+    const { result } = renderHook(() =>
+      useAsyncData(async () => {
+        throw failure;
+      }, []),
+    );
+    await waitFor(() => expect(result.current.error).toBe("Couldn't load."));
+    failure = new ApiError("Strategy not found for this workspace.", 422, null);
+    await act(async () => {
+      await result.current.reload();
+    });
+    expect(result.current.error).toBe("Strategy not found for this workspace.");
   });
 });

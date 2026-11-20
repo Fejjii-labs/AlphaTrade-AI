@@ -40,7 +40,7 @@ def _proposals(session: SessionDep) -> StrategyProposalService:
 
 
 @router.get("", response_model=PaginatedConversations, summary="List conversations")
-async def list_conversations(
+def list_conversations(
     tenant: TraderDep,
     session: SessionDep,
     strategy_id: uuid.UUID | None = Query(default=None),
@@ -57,7 +57,7 @@ async def list_conversations(
 
 
 @router.post("", response_model=ConversationSummary, summary="Create conversation")
-async def create_conversation(
+def create_conversation(
     body: ConversationCreate,
     tenant: TraderDep,
     session: SessionDep,
@@ -74,7 +74,7 @@ async def create_conversation(
     response_model=ConversationSummary,
     summary="Get conversation",
 )
-async def get_conversation(
+def get_conversation(
     conversation_id: uuid.UUID,
     tenant: TraderDep,
     session: SessionDep,
@@ -91,7 +91,7 @@ async def get_conversation(
     response_model=PaginatedConversationMessages,
     summary="List conversation messages",
 )
-async def list_conversation_messages(
+def list_conversation_messages(
     conversation_id: uuid.UUID,
     tenant: TraderDep,
     session: SessionDep,
@@ -153,7 +153,7 @@ async def list_conversation_messages(
     response_model=PaginatedStrategyProposals,
     summary="List strategy proposals for a conversation",
 )
-async def list_conversation_proposals(
+def list_conversation_proposals(
     conversation_id: uuid.UUID,
     tenant: TraderDep,
     session: SessionDep,
@@ -181,7 +181,7 @@ async def list_conversation_proposals(
     response_model=StrategyProposalRecord,
     summary="Create a preview-only structured strategy proposal",
 )
-async def create_conversation_proposal(
+def create_conversation_proposal(
     conversation_id: uuid.UUID,
     body: StrategyProposalCreate,
     tenant: TraderDep,
@@ -223,7 +223,7 @@ async def create_conversation_proposal(
     response_model=StrategyProposalRecord,
     summary="Get a strategy proposal",
 )
-async def get_conversation_proposal(
+def get_conversation_proposal(
     conversation_id: uuid.UUID,
     proposal_id: uuid.UUID,
     tenant: TraderDep,
@@ -242,7 +242,7 @@ async def get_conversation_proposal(
     response_model=StrategyProposalRecord,
     summary="Confirm a proposal and fork a strategy version",
 )
-async def confirm_conversation_proposal(
+def confirm_conversation_proposal(
     conversation_id: uuid.UUID,
     proposal_id: uuid.UUID,
     body: StrategyProposalConfirm,
@@ -281,7 +281,7 @@ async def confirm_conversation_proposal(
     response_model=StrategyProposalRecord,
     summary="Reject a preview proposal without writing a version",
 )
-async def reject_conversation_proposal(
+def reject_conversation_proposal(
     conversation_id: uuid.UUID,
     proposal_id: uuid.UUID,
     body: StrategyProposalReject,

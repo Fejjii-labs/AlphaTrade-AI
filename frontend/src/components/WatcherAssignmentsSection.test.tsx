@@ -13,7 +13,7 @@ vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => auth }));
 vi.mock("@/lib/monitoring/assignments-api", () => ({ monitoringAssignments: { read: (...args: unknown[]) => read(...args), replace: (...args: unknown[]) => replace(...args), validateRequest: (...args: unknown[]) => validateRequest(...args) } }));
 
 function configuration(): AssignmentsConfiguration {
-  const options = [1, 2].map(number => ({ strategy_id: `strategy-${number}`, strategy_version_id: `version-${number}`, strategy_name: number === 1 ? "Nested" : "SFP", version: number, version_content_hash: "a".repeat(64), symbol: "BTCUSDT", timeframes: ["15m"], parameters: { symbol: "BTCUSDT", trigger_timeframe: "15m", parameters: { confirmation_window: number * 12 } } }));
+  const options = [1, 2].map(number => ({ strategy_id: `strategy-${number}`, strategy_version_id: `version-${number}`, strategy_name: number === 1 ? "Nested BTCUSDT long 15m 49ae657c4173" : "SFP", version: number, version_content_hash: "a".repeat(64), symbol: "BTCUSDT", timeframes: ["15m"], parameters: { symbol: "BTCUSDT", trigger_timeframe: "15m", parameters: { confirmation_window: number * 12 } } }));
   return { revision: 4, configured: true, symbols: ["BTCUSDT", "ETHUSDT"], max_assignments: 25, monitoring_only: true, available_versions: options,
     assignments: options.map((version, index) => ({ ...version, id: `assignment-${index}`, monitoring_enabled: true, eligible: index === 0, reason_code: index === 0 ? "ready" : "draft_not_executable", latest: null })) };
 }
@@ -28,8 +28,8 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-async function loaded() { render(<WatcherAssignmentsSection />); await screen.findByText("BTCUSDT · Nested"); }
-function toggleFirst() { fireEvent.click(screen.getByLabelText("Monitor BTCUSDT Nested")); }
+async function loaded() { render(<WatcherAssignmentsSection />); await screen.findAllByText("Nested · BTCUSDT · Long · 15m (v1)"); }
+function toggleFirst() { fireEvent.click(screen.getByLabelText("Monitor Nested · BTCUSDT · Long · 15m (v1)")); }
 
 it("renders compact saved versions and reasons, keeping parameter evidence in details without identifiers", async () => {
   await loaded();
@@ -71,14 +71,14 @@ it("adding a saved version uses its immutable snapshot and rejects duplicate coi
 it.each([new TypeError("Lost response"), new ApiError("Invalid monitoring response", 0, {})])("retains original body/key after ambiguous reply, reloads without a retry, and recovers only explicitly (%s)", async error => {
   replace.mockRejectedValueOnce(error);
   const first = render(<WatcherAssignmentsSection />);
-  await screen.findByText("BTCUSDT · Nested"); toggleFirst();
+  await screen.findAllByText("Nested · BTCUSDT · Long · 15m (v1)"); toggleFirst();
   fireEvent.click(screen.getByRole("button", { name: "Save monitoring" }));
   await screen.findByRole("button", { name: "Recover saved request" });
   await waitFor(() => expect(screen.getByRole("button", { name: "Recover saved request" })).not.toBeDisabled());
   const original = structuredClone(replace.mock.calls[0]![0]);
   first.unmount();
   render(<WatcherAssignmentsSection />);
-  await screen.findByText("BTCUSDT · Nested");
+  await screen.findAllByText("Nested · BTCUSDT · Long · 15m (v1)");
   expect(replace).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("button", { name: "Save monitoring" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "Recover saved request" }));
@@ -91,28 +91,29 @@ it("definite first-attempt rejection preserves editable rows and releases recove
   await loaded(); toggleFirst(); fireEvent.click(screen.getByRole("button", { name: "Save monitoring" }));
   await screen.findByText("Saved configuration changed");
   expect(screen.queryByRole("button", { name: "Recover saved request" })).not.toBeInTheDocument();
-  expect(screen.getByLabelText("Monitor BTCUSDT Nested")).not.toBeChecked();
+  expect(screen.getByLabelText("Monitor Nested · BTCUSDT · Long · 15m (v1)")).not.toBeChecked();
   expect(screen.getByRole("button", { name: "Save monitoring" })).not.toBeDisabled();
 });
 
 it("keeps restored recovery disabled until the initial configuration is ready", async () => {
   replace.mockRejectedValueOnce(new TypeError("Lost reply"));
   const first = render(<WatcherAssignmentsSection />);
-  await screen.findByText("BTCUSDT · Nested"); toggleFirst();
+  await screen.findAllByText("Nested · BTCUSDT · Long · 15m (v1)"); toggleFirst();
   fireEvent.click(screen.getByRole("button", { name: "Save monitoring" }));
-  await screen.findByText("Lost reply");
+  await screen.findByText("Couldn't save. Try again.");
+  expect(screen.queryByText("Lost reply")).not.toBeInTheDocument();
   const original = structuredClone(replace.mock.calls[0]![0]);
   first.unmount();
   let finish!: (value: AssignmentsConfiguration) => void;
   read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
   render(<WatcherAssignmentsSection />);
   const recovery = await screen.findByRole("button", { name: "Recover saved request" });
-  expect(screen.getByText("Loading monitoring…")).toBeInTheDocument();
+  expect(screen.getByTestId("assignments-loading")).toBeInTheDocument();
   expect(recovery).toBeDisabled();
   fireEvent.click(recovery);
   expect(replace).toHaveBeenCalledTimes(1);
   finish(configuration());
-  await screen.findByText("BTCUSDT · Nested");
+  await screen.findAllByText("Nested · BTCUSDT · Long · 15m (v1)");
   await waitFor(() => expect(recovery).not.toBeDisabled());
   expect(replace).toHaveBeenCalledTimes(1);
   fireEvent.click(recovery);
@@ -138,11 +139,11 @@ it("validates before storing recovery and lets a locally rejected edit be correc
 it("validates a restored original request again before explicit recovery transport", async () => {
   replace.mockRejectedValueOnce(new TypeError("Lost reply"));
   const first = render(<WatcherAssignmentsSection />);
-  await screen.findByText("BTCUSDT · Nested"); toggleFirst();
+  await screen.findAllByText("Nested · BTCUSDT · Long · 15m (v1)"); toggleFirst();
   fireEvent.click(screen.getByRole("button", { name: "Save monitoring" }));
-  await screen.findByText("Lost reply");
+  await screen.findByText("Couldn't save. Try again.");
   first.unmount(); render(<WatcherAssignmentsSection />);
-  await screen.findByText("BTCUSDT · Nested");
+  await screen.findAllByText("Nested · BTCUSDT · Long · 15m (v1)");
   expect(validateRequest).toHaveBeenCalledTimes(2);
   validateRequest.mockImplementationOnce(() => { throw new Error("Saved request validation unavailable"); });
   fireEvent.click(screen.getByRole("button", { name: "Recover saved request" }));
@@ -192,4 +193,14 @@ it("account changes discard old data and cancel late reads", async () => {
   await screen.findByText("No saved strategy assignments.");
   finish(configuration());
   await waitFor(() => expect(screen.queryByText("BTCUSDT · Nested")).not.toBeInTheDocument());
+});
+
+it("shows Retry instead of raw text when monitoring cannot load, and has no explainer", async () => {
+  read.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  render(<WatcherAssignmentsSection />);
+  await screen.findByText("Couldn't load.");
+  expect(screen.queryByText(/Failed to fetch|Assign saved versions/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await screen.findAllByText("Nested · BTCUSDT · Long · 15m (v1)");
+  expect(screen.queryByText("Couldn't load.")).not.toBeInTheDocument();
 });

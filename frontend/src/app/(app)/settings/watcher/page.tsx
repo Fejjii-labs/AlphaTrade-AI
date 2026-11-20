@@ -3,7 +3,6 @@
 import { SessionScoped } from "@/components/settings/SessionScoped";
 import { WatcherAssignmentsSection } from "@/components/WatcherAssignmentsSection";
 import { WatcherWatchlistSection } from "@/components/WatcherWatchlistSection";
-import { WorkerRuntimeReadout } from "@/components/WorkerRuntimeReadout";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatusTile, type StatusTone } from "@/components/ui/status-tile";
@@ -33,7 +32,7 @@ function workerTile(worker: WorkerEffectiveObservation | null | undefined): Tile
   return { tone: "unknown", state: "Not reported" };
 }
 
-export default function WatcherSettingsPage() {
+export default function MarketsSettingsPage() {
   return (
     <SessionScoped>
       <WatcherSettings />
@@ -48,15 +47,16 @@ function WatcherSettings() {
   return (
     <div className="page-sections" data-testid="settings-watcher">
       <PageHeader
-        title="Watcher"
+        title="Markets"
         actions={
           <Button
             variant="outline"
             className="h-11"
+            aria-label="Refresh markets"
             disabled={monitoring.loading}
             onClick={() => void monitoring.reload()}
           >
-            Refresh watcher
+            Refresh
           </Button>
         }
       />
@@ -71,12 +71,6 @@ function WatcherSettings() {
       </div>
       <WatcherWatchlistSection />
       <WatcherAssignmentsSection />
-      <details className="rounded-card border border-border-subtle bg-surface-1 p-4">
-        <summary className="cursor-pointer text-sm">Worker details</summary>
-        <div className="pt-2">
-          <WorkerRuntimeReadout observation={worker} />
-        </div>
-      </details>
     </div>
   );
 }

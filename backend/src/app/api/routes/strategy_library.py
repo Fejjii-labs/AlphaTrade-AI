@@ -53,7 +53,7 @@ router = APIRouter(prefix="/strategies", tags=["strategies"])
 
 
 @router.post("", response_model=UserStrategy, summary="Create user strategy")
-async def create_strategy(
+def create_strategy(
     body: StrategyLibraryCreate,
     tenant: TraderDep,
     service: StrategyLibraryServiceDep,
@@ -74,7 +74,7 @@ async def create_strategy(
 
 
 @router.get("", response_model=PaginatedUserStrategies, summary="List user strategies")
-async def list_strategies(
+def list_strategies(
     tenant: TraderDep,
     service: StrategyLibraryServiceDep,
     limit: int = Query(default=50, ge=1, le=200),
@@ -90,7 +90,7 @@ async def list_strategies(
 
 
 @router.get("/{strategy_id}", response_model=UserStrategy, summary="Get user strategy")
-async def get_strategy(
+def get_strategy(
     strategy_id: uuid.UUID,
     tenant: TraderDep,
     service: StrategyLibraryServiceDep,
@@ -99,7 +99,7 @@ async def get_strategy(
 
 
 @router.patch("/{strategy_id}", response_model=UserStrategy, summary="Update user strategy")
-async def update_strategy(
+def update_strategy(
     strategy_id: uuid.UUID,
     body: UserStrategyUpdate,
     tenant: TraderDep,
@@ -121,7 +121,7 @@ async def update_strategy(
     response_model=UserStrategyVersion,
     summary="Create strategy version",
 )
-async def create_strategy_version(
+def create_strategy_version(
     strategy_id: uuid.UUID,
     body: UserStrategyVersionCreate,
     tenant: TraderDep,
@@ -143,7 +143,7 @@ async def create_strategy_version(
     response_model=PaginatedUserStrategyVersions,
     summary="List strategy versions",
 )
-async def list_strategy_versions(
+def list_strategy_versions(
     strategy_id: uuid.UUID,
     tenant: TraderDep,
     service: StrategyLibraryServiceDep,
@@ -165,7 +165,7 @@ async def list_strategy_versions(
     response_model=BacktestRun,
     summary="Queue or run a strategy backtest (historical simulation)",
 )
-async def create_backtest(
+def create_backtest(
     strategy_id: uuid.UUID,
     body: BacktestRunCreate,
     tenant: TraderDep,
@@ -197,7 +197,7 @@ async def create_backtest(
     response_model=PaginatedBacktestRuns,
     summary="List backtest runs for strategy",
 )
-async def list_backtests(
+def list_backtests(
     strategy_id: uuid.UUID,
     tenant: TraderDep,
     service: BacktestServiceDep,
@@ -219,7 +219,7 @@ async def list_backtests(
     response_model=PaperValidationRun,
     summary="Start paper validation tracking",
 )
-async def start_paper_validation(
+def start_paper_validation(
     strategy_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperValidationServiceDep,
@@ -241,7 +241,7 @@ async def start_paper_validation(
     response_model=PaperEligibilityReport,
     summary="Paper eligibility gates and blockers (paper only)",
 )
-async def get_paper_eligibility(
+def get_paper_eligibility(
     strategy_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperEligibilityServiceDep,
@@ -261,7 +261,7 @@ async def get_paper_eligibility(
     response_model=PaperValidationSummary,
     summary="List paper validation runs",
 )
-async def list_paper_validation(
+def list_paper_validation(
     strategy_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperValidationServiceDep,
@@ -282,7 +282,7 @@ async def list_paper_validation(
     response_model=PaperValidationRun,
     summary="Get paper validation run with metrics",
 )
-async def get_paper_validation_run(
+def get_paper_validation_run(
     strategy_id: uuid.UUID,
     run_id: uuid.UUID,
     tenant: TraderDep,
@@ -301,7 +301,7 @@ async def get_paper_validation_run(
     response_model=StrategyTestability,
     summary="Strategy testability score",
 )
-async def get_strategy_testability(
+def get_strategy_testability(
     strategy_id: uuid.UUID,
     tenant: TraderDep,
     service: StrategyTestabilityServiceDep,
@@ -318,7 +318,7 @@ async def get_strategy_testability(
     response_model=StructuredRules,
     summary="Update structured rule blocks",
 )
-async def patch_structured_rules(
+def patch_structured_rules(
     strategy_id: uuid.UUID,
     body: StructuredRulesPatch,
     tenant: TraderDep,
@@ -340,7 +340,7 @@ async def patch_structured_rules(
     response_model=StructuredRulesValidation,
     summary="Validate structured rules",
 )
-async def validate_structured_rules(
+def validate_structured_rules(
     strategy_id: uuid.UUID,
     body: StructuredRules,
     tenant: TraderDep,
@@ -356,7 +356,7 @@ async def validate_structured_rules(
     response_model=StructureFromTextResponse,
     summary="Draft structured rules from plain English",
 )
-async def structure_from_text(
+def structure_from_text(
     strategy_id: uuid.UUID,
     body: StructureFromTextRequest,
     tenant: TraderDep,
@@ -372,7 +372,7 @@ async def structure_from_text(
     response_model=CompileOutcome,
     summary="Explicit compile/review of a confirmed strategy version",
 )
-async def compile_strategy_version(
+def compile_strategy_version(
     strategy_id: uuid.UUID,
     version_id: uuid.UUID,
     tenant: TraderDep,
@@ -395,7 +395,7 @@ async def compile_strategy_version(
     response_model=StrategyLifecycleEventRecord,
     summary="Explicit approval of an executable compiled strategy version",
 )
-async def approve_strategy_version(
+def approve_strategy_version(
     strategy_id: uuid.UUID,
     version_id: uuid.UUID,
     body: StrategyVersionApproveRequest,

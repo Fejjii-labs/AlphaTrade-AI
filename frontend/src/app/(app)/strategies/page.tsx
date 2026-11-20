@@ -3,19 +3,14 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { ExperimentsPanel } from "@/components/strategies/ExperimentsPanel";
 import { FamilyCard } from "@/components/strategies/FamilyCard";
 import { StrategyRules } from "@/components/strategies/StrategyRules";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
-import { SectionHeader } from "@/components/ui/section-header";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
-import type { BrainFamily, BrainOverview, BrainSetup } from "@/lib/api/brain-types";
-import { savedEntries } from "@/lib/api/saved-entries";
-import { humanizeToken } from "@/lib/format";
-import { strategyStatusFor } from "@/lib/strategy-status";
+import type { BrainFamily, BrainOutcomes, BrainOverview, BrainSetup } from "@/lib/api/brain-types";
 import { cn } from "@/lib/utils";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
@@ -29,9 +24,16 @@ const families = [
   { id: "sfp", name: "SFP", kind: "swing_failure_pattern/v1", detectionFamily: "sfp" },
   { id: "dline", name: "D-line", kind: "d_line/v1", detectionFamily: "d_line" },
 ] satisfies { id: string; name: string; kind: string; detectionFamily: BrainFamily }[];
-// The server bounds setups to 20 rows; setup_count is the family's full total.
-function recentOf(view: BrainOverview) {
-  return { setups: view.setups, count: view.setup_count ?? view.setups.length };
+
+type FamilyRead = { setups: BrainSetup[]; outcomes: BrainOutcomes | null };
+
+function familyRead(view: BrainOverview): FamilyRead {
+  return { setups: view.setups, outcomes: view.outcomes ?? null };
+}
+
+function sentence(token: string): string {
+  const text = token.replaceAll("_", " ").toLowerCase();
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 export default function StrategiesPage() {
@@ -48,31 +50,27 @@ function StrategiesWorkspace() {
   const params = useSearchParams();
   const family = families.find((f) => f.id === params.get("family"));
   const loader = useCallback(async () => {
-    // One bounded read per family, so a busy SFP week cannot push Nested detections out.
+    // One bounded read per family, so a busy SFP week cannot push Nested setups out.
     const since = new Date(Date.now() - 7 * 86400000).toISOString();
-    const [nested, sfp, dline, library, drafts] = await Promise.allSettled([
+    const [nested, sfp, dline] = await Promise.allSettled([
       api.strategyBrain.overview({ family: "nested_continuation", since }),
       api.strategyBrain.overview({ family: "sfp", since }),
       api.strategyBrain.overview({ family: "d_line", since }),
-      api.strategies.list({ limit: 50 }),
-      savedEntries.list({ category: "strategies", limit: 6 }),
     ]);
     const brain = [nested, sfp, dline].find((r) => r.status === "fulfilled");
     return {
       brain: brain?.status === "fulfilled" ? brain.value : null,
       recent: {
-        nested_continuation: nested.status === "fulfilled" ? recentOf(nested.value) : null,
-        d_line: dline.status === "fulfilled" ? recentOf(dline.value) : null,
-        sfp: sfp.status === "fulfilled" ? recentOf(sfp.value) : null,
-      } as Record<BrainFamily, { setups: BrainSetup[]; count: number } | null>,
-      library: library.status === "fulfilled" ? library.value.items : null,
-      drafts: drafts.status === "fulfilled" ? drafts.value.items : null,
+        nested_continuation: nested.status === "fulfilled" ? familyRead(nested.value) : null,
+        d_line: dline.status === "fulfilled" ? familyRead(dline.value) : null,
+        sfp: sfp.status === "fulfilled" ? familyRead(sfp.value) : null,
+      } as Record<BrainFamily, FamilyRead | null>,
     };
   }, []);
-  const { data, loading, reload } = useAsyncData(loader, []);
+  const { data, loading } = useAsyncData(loader, []);
   const router = useRouter();
   useEffect(() => {
-    // Risk policy moved to Autonomous; old `/strategies#risk` links follow it.
+    // Risk policy moved to the Bot page; old `/strategies#risk` links follow it.
     if (window.location.hash === "#risk") router.replace("/autonomous#limits");
   }, [router]);
   return (
@@ -97,7 +95,7 @@ function StrategiesWorkspace() {
             href="/strategies"
             className="inline-flex min-h-11 items-center text-accent"
           >
-            ← Back to Strategies
+            ← Strategies
           </Link>
           {family.id === "dline" && <p>Draft research only. No execution or alerts are authorized.</p>}
           {data?.brain?.strategies
@@ -109,19 +107,12 @@ function StrategiesWorkspace() {
               >
                 <div className="flex flex-wrap justify-between gap-2">
                   <h2 className="font-semibold">
-                    {s.spec.symbol} · {s.spec.direction} ·{" "}
-                    {s.spec.trigger_timeframe}
+                    {s.spec.symbol} · {sentence(s.spec.direction)} · {s.spec.trigger_timeframe}
                   </h2>
                   <span className="text-sm">
-                    {humanizeToken(s.status)} · v{s.version}
+                    {s.enabled ? "On" : "Off"} · v{s.version}
                   </span>
                 </div>
-                <Link
-                  href={`/strategy-lab/${s.strategy_id}`}
-                  className="inline-flex min-h-11 items-center text-accent"
-                >
-                  Open configuration &amp; revisions
-                </Link>
                 <details>
                   <summary className="min-h-11 cursor-pointer text-sm">
                     Rules
@@ -131,109 +122,26 @@ function StrategiesWorkspace() {
               </article>
             ))}
           {!loading && !data?.brain && (
-            <p role="status">Configurations unavailable.</p>
+            <p role="status">Strategies unavailable.</p>
           )}
         </>
       ) : (
-        <>
-          <SectionHeader eyebrow="Library" title="Strategy families" />
-          <div className="grid items-start gap-3 md:grid-cols-2">
-            {families.map((f) => (
+        <div className="grid items-start gap-3 md:grid-cols-2">
+          {families.map((f) => {
+            const read = data?.recent[f.detectionFamily] ?? null;
+            return (
               <FamilyCard
                 key={f.id}
                 id={f.id}
                 name={f.name}
                 loading={loading}
-                versions={data?.brain ? data.brain.strategies.filter((s) => s.spec.kind === f.kind).length : null}
-                detections={data?.recent[f.detectionFamily] ?? null}
+                strategies={data?.brain ? data.brain.strategies.filter((s) => s.spec.kind === f.kind) : null}
+                outcomes={read?.outcomes ?? null}
+                setups={read?.setups ?? null}
               />
-            ))}
-          </div>
-          <ExperimentsPanel initialExperiment={params.get("experiment")} />
-          <section className="page-sections" data-testid="captured-strategy-notes">
-            <SectionHeader
-              eyebrow="Agent capture"
-              title="Captured strategy drafts"
-              actions={
-                <Link
-                  href="/journal?tab=knowledge&category=strategies"
-                  className="inline-flex min-h-10 items-center text-[length:var(--text-label)] text-accent"
-                >
-                  All strategy notes
-                </Link>
-              }
-            />
-            <p className="text-[length:var(--text-caption)] text-text-muted">
-              Recent Agent captures. Configuration and approval remain separate.
-            </p>
-            {loading ? (
-              <p role="status">Loading captured notes…</p>
-            ) : data?.drafts == null ? (
-              <p role="status">Captured notes unavailable.</p>
-            ) : data.drafts.length === 0 ? (
-              <p className="text-sm text-text-muted">No captured strategy notes yet.</p>
-            ) : (
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {data.drafts.map((d) => (
-                  <details
-                    key={d.id}
-                    data-testid="captured-strategy-note"
-                    className="min-w-0 rounded-card border border-border-subtle bg-surface-1 p-4"
-                  >
-                    <summary className="min-h-11 cursor-pointer break-words font-medium">
-                      {d.title}
-                    </summary>
-                    <div className="space-y-2 pt-2">
-                      <p className="break-words text-sm text-text-secondary">{d.summary}</p>
-                      <p className="text-xs text-text-muted">Captured note · v{d.revision}</p>
-                      <Link
-                        href={`/journal?tab=knowledge&category=strategies&saved=${encodeURIComponent(d.id)}`}
-                        className="inline-flex min-h-11 items-center text-sm text-accent"
-                      >
-                        Open saved note
-                      </Link>
-                    </div>
-                  </details>
-                ))}
-              </div>
-            )}
-          </section>
-          <section className="space-y-3">
-            <h2 className="text-lg font-semibold">Other configurations</h2>
-            {data?.library
-              ?.filter(
-                (s) =>
-                  !data.brain?.strategies.some((b) => b.strategy_id === s.id),
-              )
-              .map((s) => (
-                <article
-                  key={s.id}
-                  className="flex flex-wrap justify-between gap-3 rounded-card border border-border-subtle p-4"
-                >
-                  <Link href={`/strategy-lab/${s.id}`} className="text-accent">
-                    {s.latest_card?.strategy_name || s.name}
-                  </Link>
-                  <span className="text-sm">{strategyStatusFor(s).label}</span>
-                </article>
-              ))}
-            {!loading && data?.library == null ? (
-              <p role="status">Strategy configurations unavailable.</p>
-            ) : null}
-            {!loading && data?.library?.length === 0 && (
-              <p className="text-sm text-text-muted">
-                Discuss your rules with Agent to create a draft.
-              </p>
-            )}
-            <Button
-              variant="outline"
-              className="h-11"
-              disabled={loading}
-              onClick={() => void reload()}
-            >
-              Refresh strategies
-            </Button>
-          </section>
-        </>
+            );
+          })}
+        </div>
       )}
     </div>
   );
