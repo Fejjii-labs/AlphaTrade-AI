@@ -8,15 +8,17 @@ two cancelled orders as trades.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import JournalTrade
+from app.db.models import JournalTrade, Organization, User
 from app.repositories.journal_trades import JournalTradeStatsRow
 from app.schemas.common import (
     JournalTradeSource,
@@ -32,17 +34,17 @@ from app.services.blofin_demo_manual_mirror import (
     publish_mirror_performance,
     record_mirror_cycle,
 )
-from tests.test_blofin_demo_manual_mirror import (  # noqa: F401 - fixtures
+from tests.test_blofin_demo_manual_mirror import (  # noqa: F401 - autouse pin fixture
     _PIN_UID,
     NOW,
     ORG,
     USER,
     WINDOW_BEGIN,
     _drafts,
+    _engine,
     _pinned_mirror_account,
     _rows,
     _settings,
-    session,
 )
 from tests.test_journal_performance_dashboard import _build, _row
 
@@ -111,6 +113,9 @@ def test_cc_trade_without_blofin_pnl_is_pending_not_price_math() -> None:
 def test_pending_rows_do_not_change_verified_totals() -> None:
     verified = replace(
         _row("5", _CC_CLOSE - timedelta(days=1), source=JournalTradeSource.BLOFIN_DEMO_MANUAL),
+        entry_price=Decimal("1"),
+        exit_price=Decimal("1.5"),
+        size=Decimal("10"),
         exit_reason="closed",
     )
     result = _build([verified, _pending_cc_row()])
@@ -214,13 +219,26 @@ def test_mirror_leaves_pnl_pending_when_blofin_omits_realized_pnl_or_fee() -> No
         del row[missing]
         [draft] = _drafts([row], instruments=[_CC_INSTRUMENT]).closed
         assert draft.net_pnl is None and draft.gross_pnl is None and draft.fees is None
-        assert draft.exit_reason == f"unverified:missing_blofin_{'pnl' if missing == 'realizedPnl' else 'fee'}"
+        assert (
+            draft.exit_reason
+            == f"unverified:missing_blofin_{'pnl' if missing == 'realizedPnl' else 'fee'}"
+        )
         assert draft.result is TradeResult.OPEN
 
 
 # --------------------------------------------------------------------------- #
 # Backfill: an already-closed pending row is filled on the next sync
 # --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def session() -> Iterator[Session]:
+    maker = _engine()
+    with maker() as current:
+        current.add(Organization(id=ORG, name="Mirror Org"))
+        current.add(User(id=USER, email="mirror@test.example", hashed_password="not-a-real-hash"))
+        current.commit()
+        yield current
 
 
 class _WindowClient:
@@ -328,4 +346,3 @@ def test_backfill_leaves_row_pending_when_blofin_no_longer_returns_it(session: S
     assert stored.status is JournalTradeStatus.CLOSED
     assert stored.net_pnl is None and stored.gross_pnl is None
     assert stored.exit_reason == "unverified:pnl_mismatch"
-
