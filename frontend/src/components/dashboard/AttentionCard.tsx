@@ -8,38 +8,63 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/section-header";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
-import type { AttentionQueue } from "@/lib/api/attention-types";
-import { humanizeToken } from "@/lib/format";
+import type { AttentionItem, AttentionQueue } from "@/lib/api/attention-types";
+import { humanizeToken, stripDisplayIdentifiers } from "@/lib/format";
+
+function latestSource(item: AttentionItem): number {
+  return Math.max(...item.sources.map((source) => Date.parse(source.occurred_at)));
+}
+
+function isTelegramDeadLetter(item: AttentionItem): boolean {
+  return item.category === "telegram_delivery_failure" && /\bdead[_ -]?letter\b/i.test(item.reason);
+}
 
 export function AttentionContent({
   queue,
   now,
   limit = 5,
+  collapsible = false,
 }: {
   queue: AttentionQueue;
   now: number;
   limit?: number;
+  collapsible?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const items = queue.items.filter((item) =>
     item.expires_at == null || Date.parse(item.expires_at) > now,
   );
+  if (collapsible) items.sort((a, b) => latestSource(b) - latestSource(a));
+  const visible = collapsible && expanded
+    ? items
+    : (collapsible ? items.filter((item) => !isTelegramDeadLetter(item)) : items).slice(0, limit);
   return (
     <div className="space-y-3 text-sm" data-testid="attention-content">
-      {items.length === 0 ? (
-        <p>No alerts</p>
+      {visible.length === 0 ? (
+        <p>{items.length ? "No recent alerts" : "No alerts"}</p>
       ) : (
         <ul className="space-y-3">
-          {items.slice(0, limit).map((item) => (
+          {visible.map((item) => (
             <li key={item.item_id} className="break-words border-b border-border-subtle pb-3 last:border-0">
               <p className="font-medium">
-                {humanizeToken(item.severity)} · {item.title}{item.symbol ? ` · ${item.symbol}` : ""}
+                {humanizeToken(item.severity)} · {stripDisplayIdentifiers(item.title) || "Alert"}{item.symbol ? ` · ${item.symbol}` : ""}
               </p>
-              <p className="mt-1 whitespace-pre-wrap text-text-secondary">{item.reason}</p>
+              <p className="mt-1 whitespace-pre-wrap text-text-secondary">{stripDisplayIdentifiers(item.reason)}</p>
             </li>
           ))}
         </ul>
       )}
-      {items.length > limit ? <p className="text-xs text-text-muted">{limit} of {items.length}</p> : null}
+      {visible.length < items.length ? <p className="text-xs text-text-muted">{visible.length} of {items.length}</p> : null}
+      {collapsible && (expanded || visible.length < items.length) ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+          className="min-h-11 text-sm text-accent underline-offset-2 hover:underline"
+        >
+          {expanded ? "Show less" : "Show all"}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -72,7 +97,7 @@ export function AttentionBadge() {
   );
 }
 
-export function AttentionCard({ limit }: { limit?: number } = {}) {
+export function AttentionCard({ limit, collapsible }: { limit?: number; collapsible?: boolean } = {}) {
   const loader = useCallback(() => api.dashboard.attention(), []);
   const { data, loading, error, reload } = useAsyncData(loader, []);
   const [now, setNow] = useState(() => Date.now());
@@ -109,7 +134,7 @@ export function AttentionCard({ limit }: { limit?: number } = {}) {
       <CardContent className="card-inner pt-0">
         {loading ? <p role="status">Loading…</p> : error || !valid ? (
           <p role="alert">Alerts unavailable</p>
-        ) : data ? <AttentionContent queue={data} now={Math.max(now, Date.now())} limit={limit} /> : null}
+        ) : data ? <AttentionContent queue={data} now={Math.max(now, Date.now())} limit={limit} collapsible={collapsible} /> : null}
       </CardContent>
     </Card>
   );

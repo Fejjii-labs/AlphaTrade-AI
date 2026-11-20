@@ -1,5 +1,7 @@
 "use client";
 
+import { formatStrategyLabel } from "@/lib/format";
+
 import Link from "next/link";
 import { FormEvent, type ReactNode, useRef, useState } from "react";
 
@@ -402,7 +404,7 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
                               })
                             }
                           />
-                          <span>{option.name}</span>
+                          <span>{formatStrategyLabel(option.name)}</span>
                           {blocker ? <span className="text-xs text-text-muted">· {blocker}</span> : null}
                         </label>
                       </li>

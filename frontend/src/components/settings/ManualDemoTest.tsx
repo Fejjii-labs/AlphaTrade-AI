@@ -171,7 +171,7 @@ export function ManualDemoTest() {
           {result.missing_evidence.map((warning) => <p key={warning}>{warning}</p>)}
           <Button disabled={busy} onClick={() => void act(async () => { setResult(await manualDemo.reconcile(result.command_id)); })}>Refresh venue evidence</Button>
           {result.can_cancel && <Button disabled={busy} onClick={() => void act(async () => { setResult(await manualDemo.cancel(result.command_id)); })}>Cancel unfilled entry remainder</Button>}
-          <details><summary>Stored evidence</summary><p>Command: {result.command_id}</p><p>Client order: {result.client_order_id}</p><p>Venue order: {result.venue_order_id ?? "Not verified"}</p><p>Protection orders: {result.protection_order_ids?.join(", ") || "Not verified"}</p><p>Plan: {result.revision_id}</p><p>Hash: {preview?.content_hash}</p><p>Journal: {result.journal_trade_id ?? "No actual fill recorded"}</p></details>
+          <details><summary>Stored evidence</summary><p>Venue order: {result.venue_order_id ? "Recorded on venue" : "Not verified"}</p><p>Protection orders: {result.protection_order_ids?.length ? "Recorded on venue" : "Not verified"}</p><p>Journal: {result.journal_trade_id ? "Fill projection recorded" : "No actual fill recorded"}</p></details>
         </div>}
       </>}
       <ManualDemoActivity refreshKey={result?.command_id} />
