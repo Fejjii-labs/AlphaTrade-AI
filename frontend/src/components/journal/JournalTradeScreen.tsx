@@ -15,7 +15,7 @@ import {
   blofinHistoryId,
   isBlofinReconciledJournalTrade,
 } from "@/lib/journal-blofin-reconciliation";
-import { formatDateTime, formatMoney, formatQuantity, humanizeToken, venueLabel } from "@/lib/format";
+import { formatDateTime, formatMoney, formatQuantity, humanizeToken, stripDisplayIdentifiers, venueLabel } from "@/lib/format";
 import { friendlyError } from "@/lib/api/client";
 
 export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
@@ -156,7 +156,7 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
           <div className="mt-3 space-y-2 break-words [overflow-wrap:anywhere]">
             {attempt && !reconciled ? <><p>Entry order: {evidence?.venue_order_id ? "Recorded on venue" : "Unverified"}</p><p>Historically configured protection: {humanizeToken(evidence?.historical_protection)}</p><p>Active protection: {evidence?.position_status === "closed_verified" ? "Not applicable to verified closed exposure" : humanizeToken(evidence?.protection)}</p><p>Triggered protection: {humanizeToken(evidence?.triggered_protection)}</p><p>Evidence observed: {formatDateTime(evidence?.observed_at)}</p></> : null}
             {!reconciled ? evidence?.missing_evidence.map((note) => <p key={note}>{note}</p>) : null}
-            {data.evidence.map((item) => <p key={item.id}>{humanizeToken(item.kind)}: {item.caption ?? item.ref ?? "Recorded evidence"}</p>)}
+            {data.evidence.map((item) => <p key={item.id}>{humanizeToken(item.kind)}: {stripDisplayIdentifiers(item.caption ?? "") || "Recorded evidence"}</p>)}
             {data.rule_checks.map((item) => <p key={item.id}>{humanizeToken(item.rule_key)}: {humanizeToken(item.status)}{item.notes ? ` · ${item.notes}` : ""}</p>)}
           </div>
         </details>

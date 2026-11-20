@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NotificationSettingsPanel } from "./NotificationSettingsPanel";
 import { telegramPolicyFixture } from "./settings/telegram-policy.fixture";
 import { api } from "@/lib/api";
+import { makeWatcherMonitoringSnapshot } from "@/lib/watcher-monitoring-fixtures";
 import { appConfig } from "@/lib/config";
 import type { NotificationPreferences } from "@/lib/api/types";
 
@@ -131,7 +132,7 @@ describe("Trader notification settings", () => {
     render(<NotificationSettingsPanel />);
     await screen.findByLabelText("Minimum alert severity");
     expect(screen.getByTestId("settings-telegram-state")).toHaveTextContent(
-      "disabled",
+      "API delivery disabled",
     );
     expect(
       screen.getByText("Telegram preference").parentElement,
@@ -146,7 +147,7 @@ describe("Trader notification settings", () => {
       screen.getByText("Delivery frequency").parentElement,
     ).toHaveTextContent("immediate");
     expect(
-      screen.getByText(/Connection is not verified by this API/),
+      screen.getByText(/Message delivery has not been verified here/),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("notifications-never-trade-copy")).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
@@ -212,7 +213,7 @@ describe("Trader notification settings", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Retry telegram state" }),
     );
-    await screen.findByText("disabled");
+    await screen.findByText("API delivery disabled");
   });
 
   it("keeps Telegram state visible when alert preferences fail", async () => {
@@ -222,7 +223,7 @@ describe("Trader notification settings", () => {
     render(<NotificationSettingsPanel />);
     await screen.findByText("Alert preferences unavailable.");
     expect(screen.getByTestId("settings-telegram-state")).toHaveTextContent(
-      "disabled",
+      "API delivery disabled",
     );
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
@@ -286,7 +287,7 @@ describe("Policy V2 settings integration", () => {
     );
     expect(screen.queryByText("private-recipient")).not.toBeInTheDocument();
     expect(screen.getByTestId("settings-telegram-state")).toHaveTextContent(
-      "disabled",
+      "API delivery disabled",
     );
     expect(api.notifications.updatePreferences).toHaveBeenCalledExactlyOnceWith(
       { telegram_enabled: true, telegram_policy: updated.telegram_policy },
@@ -320,7 +321,36 @@ describe("Policy V2 settings integration", () => {
       ).not.toBeInTheDocument(),
     );
     expect(screen.getByTestId("settings-telegram-state")).toHaveTextContent(
-      "disabled",
+      "API delivery disabled",
     );
+  });
+});
+
+describe("Worker Telegram delivery", () => {
+  it.each([false, true])("uses worker delivery flags only when fresh (stale: %s)", async (stale) => {
+    const snapshot = makeWatcherMonitoringSnapshot({
+      worker_effective: {
+        source: "worker", health_state: stale ? "STALE" : "RUNNING", stale,
+        autonomy_mode: "paper",
+        autonomous_internal_paper_env_ceiling: false,
+        autonomous_internal_paper_db_enabled: false,
+        autonomous_internal_paper_effective: false,
+        watcher_orchestration_enabled: true,
+        watcher_paper_staging_activation: false,
+        telegram_paper_activation_armed: false,
+        telegram_interaction_enabled: true,
+        telegram_alerts_enabled: false,
+        automatic_telegram_delivery_enabled: true,
+        watchlist: ["BTCUSDT"], real_trading_enabled: false,
+      },
+      approved_strategies: [{
+        strategy_id: "strategy-1", strategy_version_id: "version-1",
+        name: "Nested BTCUSDT long 15m 49ae657c4173", lifecycle_state: "approved", compiled: true,
+      }],
+    });
+    render(<NotificationSettingsPanel snapshot={snapshot} />);
+    await screen.findByText(stale ? "API delivery disabled" : "Enabled on worker");
+    expect(screen.queryByText(/Reported strategies|49ae657c4173/)).not.toBeInTheDocument();
+    expect(screen.getByText("Reported markets")).toBeInTheDocument();
   });
 });

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { DataNumber } from "@/components/ui/data-number";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import type { CanonicalJournalTradeListItem } from "@/lib/api/types";
-import { formatDateTime, formatMonetary, formatPrice, UNAVAILABLE } from "@/lib/format";
+import { formatDateTime, formatMonetary, formatPrice, formatStrategyLabel, UNAVAILABLE } from "@/lib/format";
 
 type Trade = CanonicalJournalTradeListItem;
 
@@ -42,7 +42,7 @@ function columns(onOpen: () => void): Array<DataTableColumn<Trade>> {
       cell: (t) => (
         <span className="flex flex-col">
           <span className="font-medium">{t.symbol}</span>
-          <span className="text-caption text-text-muted">{t.strategy_label ?? "No strategy"}</span>
+          <span className="text-caption text-text-muted">{t.strategy_label ? formatStrategyLabel(t.strategy_label) : "No strategy"}</span>
         </span>
       ),
     },

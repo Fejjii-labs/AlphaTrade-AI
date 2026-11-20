@@ -14,14 +14,13 @@ export default function AlertsSettingsPage() {
   );
 }
 
-/** Recent alerts first, then the Telegram settings that decide what is sent. */
 function AlertsSettings() {
   const monitoring = useWatcherMonitoring();
   return (
     <div className="page-sections" data-testid="settings-alerts">
       <PageHeader title="Alerts" />
-      <AttentionCard limit={Infinity} />
-      <NotificationSettingsPanel snapshot={monitoring.loading ? null : monitoring.data} />
+      <NotificationSettingsPanel snapshot={monitoring.loading || monitoring.error ? null : monitoring.data} />
+      <AttentionCard collapsible />
     </div>
   );
 }

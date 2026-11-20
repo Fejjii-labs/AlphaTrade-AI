@@ -3,6 +3,7 @@
 import { useCallback } from "react";
 
 import { useAsyncData } from "@/hooks/useAsyncData";
+import { formatStrategyLabel } from "@/lib/format";
 import { api } from "@/lib/api";
 import type { BrainStrategy } from "@/lib/api/brain-types";
 
@@ -18,7 +19,7 @@ function side(direction: string): string {
 /** "Nested · BTCUSDT · Short · 15m" */
 export function strategyLine(strategy: BrainStrategy): string {
   return [
-    FAMILY[strategy.spec.kind] ?? strategy.name,
+    FAMILY[strategy.spec.kind] ?? formatStrategyLabel(strategy.name),
     strategy.spec.symbol,
     side(strategy.spec.direction),
     strategy.spec.trigger_timeframe,
