@@ -420,3 +420,74 @@ describe("reason codes, limits, countdown and turns (UI overhaul B7b)", () => {
     expect(f.controller.meter()).toEqual({ speaking: true, level: 0.4 });
   });
 });
+
+describe("voice start never stops silently (staging 2026-11-19: clicks left no message)", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>(done => { resolve = done; });
+    return { promise, resolve };
+  }
+
+  it("a conversation change during start explains the cancellation", async () => {
+    const created = deferred<string | null>();
+    const f = fixture({ ensureConversation: vi.fn().mockReturnValue(created.promise) });
+    const starting = f.controller.start();
+    await vi.waitFor(() => expect(f.states.at(-1)?.state).toBe("connecting"));
+    f.controller.contextChanged();
+    created.resolve(conversation); await starting;
+    expect(f.connect).not.toHaveBeenCalled();
+    expect(f.states.at(-1)).toMatchObject({ state: "error", active: false, error: expect.stringContaining("conversation changed") });
+  });
+
+  it("an aborted conversation create says the start was cancelled, not a raw abort", async () => {
+    const f = fixture({ ensureConversation: vi.fn().mockRejectedValue(new DOMException("Aborted", "AbortError")) });
+    await f.controller.start();
+    expect(f.states.at(-1)?.error).toContain("Voice start was cancelled");
+    expect(f.states.at(-1)?.error).not.toContain("Aborted");
+  });
+
+  it("hiding the page while the microphone prompt is open does not cancel the start", async () => {
+    const granted = deferred<undefined>();
+    const audio = { start: vi.fn().mockReturnValue(granted.promise), stop: vi.fn(), play: vi.fn(), interrupt: vi.fn().mockReturnValue(null) };
+    const f = fixture({ audio, hidden: () => false });
+    const starting = f.controller.start();
+    await vi.waitFor(() => expect(audio.start).toHaveBeenCalled());
+    f.controller.pageHidden();
+    granted.resolve(undefined); await starting;
+    expect(f.connect).toHaveBeenCalledOnce();
+    f.socket.onopen?.(); f.socket.emit({ type: "session.ready" });
+    expect(f.states.at(-1)).toMatchObject({ state: "listening", active: true, error: null });
+  });
+
+  it("a session that becomes ready while the page is still hidden stops with a message", async () => {
+    const f = fixture({ hidden: () => true });
+    await f.controller.start(); f.socket.onopen?.(); f.socket.emit({ type: "session.ready" });
+    expect(f.states.at(-1)).toMatchObject({ active: false, error: expect.stringContaining("page was hidden") });
+  });
+
+  it("hiding the page during a ready session ends it with a message", async () => {
+    const f = fixture({ hidden: () => false });
+    await f.controller.start(); f.socket.emit({ type: "session.ready" });
+    f.controller.pageHidden();
+    expect(f.states.at(-1)).toMatchObject({ active: false, error: expect.stringContaining("page was hidden") });
+  });
+
+  it("the user's own End stays silent", async () => {
+    const created = deferred<string | null>();
+    const f = fixture({ ensureConversation: vi.fn().mockReturnValue(created.promise) });
+    const starting = f.controller.start();
+    await vi.waitFor(() => expect(f.states.at(-1)?.state).toBe("connecting"));
+    f.controller.end();
+    created.resolve(conversation); await starting;
+    expect(f.states.at(-1)).toMatchObject({ state: "idle", active: false, error: null });
+  });
+
+  it("reads the strategy context when the session starts, not when the controller was built", async () => {
+    const binding: { strategy?: string } = {};
+    const f = fixture({ context: () => ({ symbol: "BTCUSDT", strategy_id: binding.strategy }) });
+    const starting = f.controller.start();
+    binding.strategy = "33333333-3333-4333-8333-333333333333";
+    await starting; f.socket.onopen?.();
+    expect(f.socket.sent[0]).toMatchObject({ type: "session.start", context: { symbol: "BTCUSDT", strategy_id: binding.strategy } });
+  });
+});
