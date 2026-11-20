@@ -141,11 +141,14 @@ class WatcherWatchlistRepository:
         if current is None:
             if config.revision != 0:
                 return False
+            # Revision zero is the uncapped default. The worker's view can
+            # disable slots temporarily, so persist the default on first publish.
+            stored = default_watchlist(now=config.updated_at)
             current = WatcherWatchlistRow(
                 organization_id=organization_id,
-                revision=0,
-                slots=[asdict(s) for s in config.slots],
-                updated_at=config.updated_at,
+                revision=stored.revision,
+                slots=[asdict(slot) for slot in stored.slots],
+                updated_at=stored.updated_at,
             )
             self.session.add(current)
             self.session.flush()
@@ -215,6 +218,7 @@ class WatcherWatchlistRepository:
             valid = (
                 row is not None
                 and row.configuration_revision == config.revision
+                and row.payload.get("enabled") == slot.enabled
                 and (
                     timedelta(0)
                     <= aware(now) - aware(row.observed_at)

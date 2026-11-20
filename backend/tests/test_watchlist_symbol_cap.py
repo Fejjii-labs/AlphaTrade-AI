@@ -15,6 +15,7 @@ from app.db.models import Organization
 from app.repositories.watcher_watchlist import WatcherWatchlistRepository
 from app.workers.watcher_watchlist import (
     DEFAULT_WATCHLIST_SYMBOLS,
+    SymbolStatusBook,
     WatchlistConfiguration,
     WatchlistSlot,
     cap_enabled_slots,
@@ -109,6 +110,25 @@ def test_repository_load_applies_the_configured_cap(session, monkeypatch) -> Non
         assert repository._load_stored(ORG).enabled_symbols() == DEFAULT_WATCHLIST_SYMBOLS
     finally:
         get_settings.cache_clear()
+
+
+def test_first_worker_publish_keeps_default_slots_readable_after_cap_is_raised(
+    session, monkeypatch
+) -> None:
+    monkeypatch.setattr(WatcherWatchlistRepository, "_max_symbols", staticmethod(lambda: 1))
+    repository = WatcherWatchlistRepository(session)
+    config = repository.load(ORG)
+    now = datetime.now(UTC)
+    assert repository.publish(
+        ORG, config, SymbolStatusBook().project(config, source_mode="paper"), observed_at=now
+    )
+    session.commit()
+
+    monkeypatch.setattr(WatcherWatchlistRepository, "_max_symbols", staticmethod(lambda: 5))
+    uncapped, statuses = repository.status(ORG, source_mode="paper", now=now, max_age_seconds=60)
+    assert uncapped.enabled_symbols() == DEFAULT_WATCHLIST_SYMBOLS
+    assert all(row["enabled"] for row in statuses)
+    assert all(row["setup_state"] == "pending" for row in statuses[1:])
 
 
 def test_cap_setting_bounds() -> None:
