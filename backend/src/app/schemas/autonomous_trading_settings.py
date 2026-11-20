@@ -53,6 +53,8 @@ class AutonomousTradingSettingsView(StrictModel):
     worker_heartbeat_age_seconds: float | None = None
     worker_flags_stale: bool = True
     autonomy_mode: str = ""
+    risk_model_v2_enabled: bool | None = None
+    demo_risk_v2_leverage: int | None = None
     # BloFin demo only: the app sets this on the demo venue before an entry.
     demo_leverage: int = 10
     demo_margin_mode: Literal["isolated", "cross"] = "isolated"

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.config import Settings, get_settings
 from app.core.dependencies import AutonomousTradingSettingsServiceDep, SessionDep
+from app.db.models import BotRiskSettings
 from app.schemas.autonomous_activity import AutonomousActivityView
 from app.schemas.autonomous_settings_bounds import AutonomousSettingsBoundsView
 from app.schemas.autonomous_trading_settings import (
@@ -54,8 +55,22 @@ _WRITE = Depends(
 def get_autonomous_trading_settings(
     tenant: ReaderDep,
     service: AutonomousTradingSettingsServiceDep,
+    session: SessionDep,
+    settings: Settings = Depends(get_settings),
 ) -> AutonomousTradingSettingsView:
-    return service.get(organization_id=tenant.organization_id, user_id=tenant.user_id)
+    view = service.get(organization_id=tenant.organization_id, user_id=tenant.user_id)
+    return _with_demo_risk_leverage(view, session, settings)
+
+
+def _with_demo_risk_leverage(
+    view: AutonomousTradingSettingsView, session: SessionDep, settings: Settings
+) -> AutonomousTradingSettingsView:
+    if str(view.organization_id) != settings.governed_blofin_demo_organization_id:
+        view.risk_model_v2_enabled = False
+    if view.risk_model_v2_enabled:
+        row = session.get(BotRiskSettings, 1)
+        view.demo_risk_v2_leverage = None if row is None else row.leverage
+    return view
 
 
 @router.get(
@@ -98,6 +113,7 @@ def update_autonomous_trading_settings(
     tenant: OwnerDep,
     service: AutonomousTradingSettingsServiceDep,
     session: SessionDep,
+    settings: Settings = Depends(get_settings),
 ) -> AutonomousTradingSettingsView:
     try:
         result = service.update(
@@ -105,6 +121,7 @@ def update_autonomous_trading_settings(
             organization_id=tenant.organization_id,
             user_id=tenant.user_id,
         )
+        result = _with_demo_risk_leverage(result, session, settings)
         session.commit()
         return result
     except AutonomousSettingsValidationError as exc:

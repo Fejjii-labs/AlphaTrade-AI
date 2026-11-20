@@ -1,5 +1,14 @@
 /** Typed models mirroring backend Pydantic schemas. */
 
+export type DemoBotRiskSettings = {
+  risk_per_trade_pct: string;
+  daily_stop_pct: string;
+  leverage: number;
+  margin_mode: "isolated";
+  grade_risk_overrides: Record<string, string>;
+  grades_gate_entries: boolean;
+};
+
 export type RiskSeverity = "info" | "low" | "medium" | "high" | "critical";
 export type TradeDirection = "long" | "short";
 export type ProposalStatus =
@@ -1204,6 +1213,8 @@ export interface AutonomousTradingSettingsView {
   worker_flags_stale?: boolean;
   autonomy_mode?: string;
   /** BloFin demo only: the app sets this on the demo venue before an entry. */
+  risk_model_v2_enabled?: boolean | null;
+  demo_risk_v2_leverage?: number | null;
   demo_leverage?: number;
   demo_margin_mode?: DemoMarginMode;
   demo_leverage_overrides?: Record<string, DemoLeverageOverride>;
