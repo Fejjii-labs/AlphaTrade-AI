@@ -19,7 +19,7 @@ const settings = {
   account_max_trades_per_day: 20, effective_max_trades_per_day: 20, strategy_options: [], symbol_options: [],
   max_daily_loss_percent_ceiling: "6", max_risk_per_trade_percent_ceiling: "5",
   autonomy_mode: "blofin_demo", worker_runtime_health: "RUNNING", worker_flags_stale: false,
-  demo_leverage: 3, demo_margin_mode: "isolated", max_demo_leverage_ceiling: 10,
+  risk_model_v2_enabled: false, demo_leverage: 3, demo_margin_mode: "isolated", max_demo_leverage_ceiling: 10,
 } as AutonomousTradingSettingsView;
 
 const strategy = (symbol: string, direction: string, enabled: boolean, kind = "operational_nested_continuation/v1") => ({
@@ -63,12 +63,12 @@ describe("BotSettings", () => {
     expectNoIdentifiers();
   });
 
-  it("binds leverage to demo_leverage, lists 2x/3x/5x/10x and saves on change with a Saved mark", async () => {
+  it("binds leverage to demo_leverage, lists 1x through 10x and saves on change with a Saved mark", async () => {
     vi.spyOn(api.autonomous, "updateSettings").mockResolvedValue({ ...settings, demo_leverage: 10 });
     render(<BotSettings />);
     const select = await screen.findByRole("combobox", { name: "Leverage" });
     expect(select).toHaveValue("3");
-    expect([...select.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["2×", "3×", "5×", "10×"]);
+    expect([...select.querySelectorAll("option")].map((o) => o.textContent)).toEqual(Array.from({ length: 10 }, (_, i) => `${i + 1}×`));
     expect(api.riskPolicy.profile).not.toHaveBeenCalled();
     expect(api.autonomous.bounds).not.toHaveBeenCalled();
     fireEvent.change(select, { target: { value: "10" } });
@@ -79,6 +79,25 @@ describe("BotSettings", () => {
     expect(screen.queryByTestId("leverage-raise-confirm")).not.toBeInTheDocument();
   });
 
+  it("shows v2 leverage and preserves the latest full payload on save", async () => {
+    vi.mocked(api.autonomous.settings).mockResolvedValue({ ...settings, risk_model_v2_enabled: true, demo_risk_v2_leverage: 6 });
+    const latest = {
+      leverage: 7, margin_mode: "isolated" as const, daily_stop_pct: "3.00",
+      risk_per_trade_pct: "0.75", grade_risk_overrides: { A: "1.25" }, grades_gate_entries: true,
+    };
+    const read = vi.spyOn(api.riskPolicy, "demoBotSettings").mockResolvedValue(latest);
+    const write = vi.spyOn(api.riskPolicy, "updateDemoBotSettings").mockResolvedValue({ ...latest, leverage: 9 });
+    const legacy = vi.spyOn(api.autonomous, "updateSettings");
+    render(<BotSettings />);
+    const select = await screen.findByRole("combobox", { name: "Leverage" });
+    await waitFor(() => expect(select).toHaveValue("6"));
+    fireEvent.change(select, { target: { value: "9" } });
+    await waitFor(() => expect(select).toHaveValue("9"));
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith({ ...latest, leverage: 9 });
+    expect(legacy).not.toHaveBeenCalled();
+  });
+
   it("shows a short error and keeps the saved value when saving fails", async () => {
     vi.spyOn(api.autonomous, "updateSettings").mockRejectedValue(new TypeError("Failed to fetch"));
     render(<BotSettings />);
@@ -87,6 +106,32 @@ describe("BotSettings", () => {
     expect(await screen.findByTestId("leverage-status")).toHaveTextContent("Not saved. Try again.");
     expect(screen.getByTestId("leverage-status")).not.toHaveTextContent("Failed to fetch");
     expect(select).toHaveValue("3");
+  });
+
+  it("keeps the v2 selection when the v2 PUT fails", async () => {
+    vi.mocked(api.autonomous.settings).mockResolvedValue({
+      ...settings, risk_model_v2_enabled: true, demo_risk_v2_leverage: 6,
+    });
+    vi.spyOn(api.riskPolicy, "demoBotSettings").mockResolvedValue({
+      leverage: 6, margin_mode: "isolated", daily_stop_pct: "3.00",
+      risk_per_trade_pct: "0.75", grade_risk_overrides: {}, grades_gate_entries: false,
+    });
+    vi.spyOn(api.riskPolicy, "updateDemoBotSettings").mockRejectedValue(new Error("Write failed"));
+    const legacy = vi.spyOn(api.autonomous, "updateSettings");
+    render(<BotSettings />);
+    const select = await screen.findByRole("combobox", { name: "Leverage" });
+    fireEvent.change(select, { target: { value: "9" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Not saved. Try again.");
+    expect(select).toHaveValue("6");
+    expect(legacy).not.toHaveBeenCalled();
+  });
+
+  it("disables saving while the configured worker has not reported the risk model", async () => {
+    vi.mocked(api.autonomous.settings).mockResolvedValue({ ...settings, risk_model_v2_enabled: null });
+    render(<BotSettings />);
+    const select = await screen.findByRole("combobox", { name: "Leverage" });
+    expect(select).toHaveValue("");
+    expect(select).toBeDisabled();
   });
 
   it("is read-only for non-owners", async () => {

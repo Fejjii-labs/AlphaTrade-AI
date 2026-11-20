@@ -1,5 +1,5 @@
 {
-  "openapi_sha256": "4c7ef8b2b80690df43ce2679bb7918ee492496cba281f5ec62251dc25558901a",
+  "openapi_sha256": "1e5dafe030ff5075e9d42b94a8a54beab9a529ed3f80fff8acc0861e344bdafd",
   "pilot_sha256": "2d3d2dd7e1d69d680dd184abff6379527bafe4b582efffc4457dcfe507f8cbfd",
   "schemas": {
     "AccountMode": "0d7a38d0433240925513df0814ac36c497880945d49b5e563ad77ee16c3be2f1",

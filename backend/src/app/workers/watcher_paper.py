@@ -2187,6 +2187,7 @@ class WatcherPaperRuntime:
                     automatic_telegram_delivery_enabled=bool(
                         self._settings.automatic_telegram_delivery_enabled
                     ),
+                    risk_model_v2_enabled=self._settings.risk_model_v2_enabled,
                     preserve_cycle=False,
                     autonomy_mode=autonomy_mode_token(resolution),
                     autonomous_internal_paper_db_enabled=db_enabled,

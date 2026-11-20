@@ -145,6 +145,7 @@ def _publish_effective_flags(
             telegram_interaction_enabled=bool(settings.telegram_interaction_enabled),
             telegram_alerts_enabled=bool(settings.telegram_alerts_enabled),
             automatic_telegram_delivery_enabled=bool(settings.automatic_telegram_delivery_enabled),
+            risk_model_v2_enabled=settings.risk_model_v2_enabled,
             preserve_cycle=True,
         ),
     )
