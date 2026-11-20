@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.agent_voice.config import VoiceLimits, VoiceUnavailableError
 from app.agent_voice.live_config import LiveLimits
+from app.agent_voice.reservations_sweep import release_expired_voice_holds
 from app.core.config import Settings
 from app.db.models import Organization, OrganizationQuota, UsageEvent
 from app.db.voice_realtime import VoiceSessionReservation
@@ -72,22 +73,32 @@ class VoiceLedger:
         tokens = self.limits.reserved_tokens(self.settings)
         with self.sessions() as session:
             tenant = self.principal(session)
-            session.scalar(
+            lock = (
                 select(Organization)
                 .where(Organization.id == tenant.organization_id)
                 .with_for_update()
+            )
+            session.scalar(lock)
+            if release_expired_voice_holds(session, tenant.organization_id):
+                # Keep the settlement even when this admission is then refused.
+                session.commit()
+                session.scalar(lock)
+            unsettled = (VoiceSessionReservation.status != "closed") | (
+                VoiceSessionReservation.accounted_cost.is_(None)
             )
             competing = session.scalar(
                 select(func.coalesce(func.sum(VoiceSessionReservation.reserved_cost), 0)).where(
                     VoiceSessionReservation.organization_id == tenant.organization_id,
                     VoiceSessionReservation.budget_reference == self.limits.budget_reference,
+                    unsettled,
                 )
             )
             usage = UsageRepository(session)
             used = usage.summarize(
                 organization_id=tenant.organization_id, since=self.limits.budget_as_of
             ).total_cost
-            # A previous reservation remains a debit even after a restart/unknown reply.
+            # An unsettled reservation remains a debit even after a restart/unknown reply.
+            # A settled one is already in ``used``: its measured or charged usage event.
             if (
                 maximum + Decimal(competing or 0) + Decimal(used or 0)
                 > self.limits.remaining_budget_usd
@@ -135,8 +146,7 @@ class VoiceLedger:
                     func.coalesce(func.sum(VoiceSessionReservation.reserved_tokens), 0),
                 ).where(
                     VoiceSessionReservation.organization_id == tenant.organization_id,
-                    (VoiceSessionReservation.status != "closed")
-                    | VoiceSessionReservation.accounted_cost.is_(None),
+                    unsettled,
                 )
             ).one()
             if quota.monthly_cost_limit > 0 and (
