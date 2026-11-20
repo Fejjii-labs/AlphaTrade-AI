@@ -600,7 +600,6 @@ def test_required_evidence_staleness_missing_and_version_binding(tenant_store, m
 
 
 def test_user_observation_is_idempotent_tenant_scoped_and_cannot_change_rules(tenant_store):
-    import asyncio
 
     from app.api.routes.strategy_brain import ObservationRequest, user_observation
     from app.core.errors import NotFoundError, ValidationAppError
@@ -624,21 +623,17 @@ def test_user_observation_is_idempotent_tenant_scoped_and_cannot_change_rules(te
     identity = scoped_setup_id(org, template["version_id"], detection(series)[-1].setup_id)
     tenant = SimpleNamespace(organization_id=org, user_id=user)
     body = ObservationRequest(idempotency_key=uuid4(), observation="Research idea, not an outcome")
-    first = asyncio.run(user_observation(identity, body, tenant, session))
-    second = asyncio.run(user_observation(identity, body, tenant, session))
+    first = user_observation(identity, body, tenant, session)
+    second = user_observation(identity, body, tenant, session)
     assert first["record_id"] == second["record_id"]
     assert first["provenance"] == "user_belief" and first["changes_active_rules"] is False
     with pytest.raises(ValidationAppError):
-        asyncio.run(
-            user_observation(
-                identity, body.model_copy(update={"observation": "Changed"}), tenant, session
-            )
+        user_observation(
+            identity, body.model_copy(update={"observation": "Changed"}), tenant, session
         )
     with pytest.raises(NotFoundError):
-        asyncio.run(
-            user_observation(
-                identity, body, SimpleNamespace(organization_id=uuid4(), user_id=user), session
-            )
+        user_observation(
+            identity, body, SimpleNamespace(organization_id=uuid4(), user_id=user), session
         )
     assert (
         resolve_executable_strategy_policy(
@@ -834,3 +829,75 @@ def test_since_boundary_includes_the_exact_instant_and_excludes_earlier(store, r
     )
     assert [s["setup_id"] for s in view["setups"]] == [str(at_boundary.id)]
     assert view["setup_count"] == 1
+
+
+@pytest.mark.parametrize("store", ["tenant_store", "postgres_tenant_store"])
+def test_outcomes_count_confirmed_traded_and_won_setups(store, request):
+    from app.db.models import JournalTrade
+    from app.schemas.common import JournalTradeSource, JournalTradeStatus
+
+    session, org, user = request.getfixturevalue(store)
+    template = approved(session, org, user)
+    now = datetime(2026, 10, 26, 12, tzinfo=UTC)
+
+    def trade(net_pnl):
+        row = JournalTrade(
+            id=uuid4(),
+            organization_id=org,
+            user_id=user,
+            source=JournalTradeSource.PAPER_EXECUTION,
+            status=JournalTradeStatus.CLOSED,
+            symbol="BTCUSDT",
+            timeframe="15m",
+            direction=TradeDirection.LONG,
+            net_pnl=Decimal(net_pnl),
+            tags=[],
+        )
+        session.add(row)
+        session.flush()
+        return row.id
+
+    def setup(state, minutes, **extra):
+        row = _stored_setup(
+            template, org, now - timedelta(minutes=minutes), extra.pop("payload", None)
+        )
+        row.state = state
+        for key, value in extra.items():
+            setattr(row, key, value)
+        return row
+
+    confirmed = setup("CONFIRMED", 1)
+    forming = setup("FORMING", 2)
+    expired_after_confirm = setup("EXPIRED", 3)
+    won = setup("COMPLETED", 4, journal_trade_id=trade("5"))
+    lost = setup("TRADE_CANDIDATE", 5, journal_trade_id=trade("-2"))
+    invalidated = setup("INVALIDATED", 6)
+    other_family = setup("COMPLETED", 7, payload={"family": "sfp"}, journal_trade_id=trade("9"))
+    session.add_all(
+        [confirmed, forming, expired_after_confirm, won, lost, invalidated, other_family]
+    )
+    session.flush()
+    session.add_all(
+        [
+            BrainSetupEventRow(
+                id=uuid4(),
+                organization_id=org,
+                setup_id=expired_after_confirm.id,
+                kind="system_observation",
+                occurred_at=now - timedelta(minutes=10),
+                payload={"state": "CONFIRMED"},
+            ),
+            BrainSetupEventRow(
+                id=uuid4(),
+                organization_id=org,
+                setup_id=invalidated.id,
+                kind="system_observation",
+                occurred_at=now - timedelta(minutes=10),
+                payload={"state": "FORMING"},
+            ),
+        ]
+    )
+    session.commit()
+
+    view = overview(session, organization_id=org, family="nested_continuation", now=now)
+    assert view["outcomes"] == {"confirmed": 4, "traded": 2, "won": 1}

@@ -6,9 +6,9 @@ import { Suspense, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { FieldHint, Input, Label } from "@/components/ui/input";
-import { PaperModeBanner } from "@/components/PaperModeBanner";
 import { ErrorState, SuccessState } from "@/components/states";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
+import { friendlyError } from "@/lib/api/client";
 
 const ERROR_ID = "reset-password-error";
 const PASSWORD_HINT_ID = "reset-password-hint";
@@ -34,7 +34,7 @@ function ResetPasswordForm() {
       const response = await api.auth.confirmPasswordReset(token, password);
       setMessage(response.message);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Reset failed.");
+      setError(friendlyError(err, "Reset failed."));
     } finally {
       setBusy(false);
     }
@@ -42,11 +42,7 @@ function ResetPasswordForm() {
 
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col justify-start gap-3 px-4 py-4 [@media(min-height:600px)]:justify-center [@media(min-height:600px)]:gap-6 [@media(min-height:600px)]:py-10">
-      <div>
-        <h1 className="text-2xl font-semibold text-zinc-50">Reset password</h1>
-        <p className="text-sm text-zinc-400">Choose a new password for your account.</p>
-      </div>
-      <PaperModeBanner />
+      <h1 className="text-2xl font-semibold text-zinc-50">Reset password</h1>
       <form onSubmit={onSubmit} className="space-y-4 rounded-xl border border-zinc-800 bg-zinc-900/70 p-5">
         <div className="space-y-2">
           <Label htmlFor="password">New password</Label>

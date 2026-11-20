@@ -1,26 +1,21 @@
-import { existsSync, readdirSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { ADVANCED_ROUTES, SETTINGS_ROUTE_PREFIXES } from "@/components/layout/advanced-routes";
 import {
-  getDestinationId,
-  PRIMARY_DESTINATIONS,
+  ALL_DESTINATIONS,
   SECONDARY_NAV,
 } from "@/components/layout/navigation-config";
+import { SETTINGS_SECTIONS } from "@/lib/navigation/settings-sections";
 import nextConfig from "../../../next.config";
 import {
   findRegisteredRoute,
-  PAGE_REDIRECTS,
   resolveRoute,
   ROUTE_REDIRECTS,
   ROUTE_REGISTRY,
   routesOfKind,
 } from "./route-registry";
-
-const redirectMock = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({ redirect: redirectMock }));
 
 const APP_DIR = path.resolve(__dirname, "../../app");
 
@@ -36,14 +31,6 @@ function pageRoutes(dir = APP_DIR, prefix: string[] = []): string[] {
   return found;
 }
 
-function pageFile(route: string): string {
-  for (const group of ["(app)", "(public)"]) {
-    const file = path.join(APP_DIR, group, route, "page.tsx");
-    if (existsSync(file)) return file;
-  }
-  throw new Error(`No page.tsx for ${route}`);
-}
-
 describe("route registry", () => {
   it("lists every page.tsx exactly once, and nothing else", () => {
     const pages = pageRoutes().sort();
@@ -52,14 +39,13 @@ describe("route registry", () => {
     expect(new Set(registered).size).toBe(registered.length);
   });
 
-  it("gives every diagnostics route a group and no other route one", () => {
-    for (const route of ROUTE_REGISTRY) {
-      if (route.kind === "diagnostics") expect(route.group, route.path).toBeTruthy();
-      else expect(route.group, route.path).toBeUndefined();
-    }
-  });
-
-  it("keeps the public pages and deep links the plan names", () => {
+  it("keeps the five pages, four Settings tabs, Knowledge and two deep links", () => {
+    expect(routesOfKind("primary").map((route) => route.path).sort()).toEqual(
+      ["/", "/agent", "/autonomous", "/journal", "/settings", "/strategies"],
+    );
+    expect(routesOfKind("section").map((route) => route.path).sort()).toEqual(
+      ["/knowledge", "/settings/alerts", "/settings/exchange", "/settings/watcher"],
+    );
     expect(routesOfKind("public").map((route) => route.path)).toEqual([
       "/login",
       "/register",
@@ -67,33 +53,15 @@ describe("route registry", () => {
       "/reset-password",
       "/verify-email",
     ]);
-    for (const deepLink of [
-      "/strategies/setups/abc",
-      "/decision/candidates/abc",
-      "/execution/manual-demo/abc",
-      "/decision/approvals/abc",
-      "/decision/executions/abc",
-      "/decision/plans/abc",
-      "/decision/outcomes/abc",
-      "/backtests/abc",
-      "/strategy-lab/abc",
-    ]) {
+    for (const deepLink of ["/strategies/setups/abc", "/execution/manual-demo/abc"]) {
       expect(findRegisteredRoute(deepLink)?.kind, deepLink).toBe("deep-link");
     }
-    expect(findRegisteredRoute("/decision/candidates")?.kind).toBe("diagnostics");
   });
 
-  it("marks every redirecting page as kind redirect", () => {
-    const redirectPages = new Set(
-      routesOfKind("redirect").map((route) => route.path),
-    );
+  it("leaves no page behind a redirect, except query-only ones", () => {
     for (const rule of ROUTE_REDIRECTS) {
-      const page = ROUTE_REGISTRY.find((route) => route.path === rule.source);
-      // A query-only redirect (`/journal?tab=knowledge`) leaves its page live.
-      if (page && !rule.has) expect(redirectPages.has(page.path), rule.source).toBe(true);
-    }
-    for (const page of redirectPages) {
-      expect(ROUTE_REDIRECTS.some((rule) => rule.source === page), page).toBe(true);
+      if (rule.has || rule.source.includes(":")) continue;
+      expect(findRegisteredRoute(rule.source), rule.source).toBeNull();
     }
   });
 });
@@ -103,40 +71,25 @@ describe("redirects", () => {
     "%s lands on a real page",
     (_source, rule) => {
       const query = (rule.has ?? []).map(({ key, value }) => `${key}=${value ?? "1"}`).join("&");
-      const sample = rule.source.replace(":id", "sample-id") + (query ? `?${query}` : "");
+      const sample =
+        rule.source.replace(":id", "sample-id").replace(":path*", "sample/child") + (query ? `?${query}` : "");
       const landing = resolveRoute(sample);
       expect(landing, `${rule.source} → ${rule.destination}`).not.toBeNull();
-      expect(landing!.kind).not.toBe("redirect");
     },
   );
 
-  it.each(
-    ROUTE_REDIRECTS.filter((rule) => rule.via === "config").map((rule) => [rule.source, rule]),
-  )("%s is served by next.config", async (_source, rule) => {
+  it.each(ROUTE_REDIRECTS.map((rule) => [rule.source, rule]))("%s is served by next.config", async (_source, rule) => {
     const rules = await nextConfig.redirects!();
     expect(rules).toContainEqual(
       expect.objectContaining({ source: rule.source, destination: rule.destination, permanent: false }),
     );
   });
-
-  it.each(PAGE_REDIRECTS.map((rule) => [rule.source, rule]))(
-    "%s page calls redirect() with the registered target",
-    async (_source, rule) => {
-      redirectMock.mockClear();
-      const mod = (await import(/* @vite-ignore */ pageFile(rule.source))) as {
-        default: () => unknown;
-      };
-      mod.default();
-      expect(redirectMock).toHaveBeenCalledExactlyOnceWith(rule.destination);
-    },
-  );
 });
-
 describe("navigation links resolve to real pages (no 404)", () => {
   const links = [...new Set([
-    ...PRIMARY_DESTINATIONS.map((item) => item.href),
+    ...ALL_DESTINATIONS.map((item) => item.href),
     ...SECONDARY_NAV.flatMap((group) => group.items.map((item) => item.href)),
-    ...ADVANCED_ROUTES.map((route) => route.href),
+    ...SETTINGS_SECTIONS.map((section) => section.href),
   ])];
 
   it.each(links.map((href) => [href]))("%s", (href) => {
@@ -144,11 +97,36 @@ describe("navigation links resolve to real pages (no 404)", () => {
   });
 });
 
-describe("/risk belongs to one destination", () => {
-  it("is not also a Settings prefix", () => {
-    expect(SETTINGS_ROUTE_PREFIXES).not.toContain("/risk");
-    expect(getDestinationId("/risk")).toBe("autonomous");
-    expect(getDestinationId("/risk/autonomous")).toBe("autonomous");
+describe("removed routes land on their nearest kept page", () => {
+  it.each([
+    ["/risk", "/autonomous"],
+    ["/risk/autonomous", "/autonomous"],
+    ["/dashboard", "/"],
+    ["/coaching", "/agent"],
+    ["/settings/team", "/settings"],
+    ["/settings/billing", "/settings"],
+    ["/settings/audit", "/settings"],
+    ["/settings/diagnostics", "/settings"],
+    ["/settings/help", "/settings"],
+    ["/settings/notifications", "/settings/alerts"],
+    ["/watcher", "/settings/watcher"],
+    ["/market-watcher", "/settings/watcher"],
+    ["/alerts", "/settings/alerts"],
+    ["/alerts/review", "/settings/alerts"],
+    ["/decision/candidates/cand-1", "/autonomous"],
+    ["/approvals", "/autonomous"],
+    ["/paper-validation/run-sessions/s-1", "/strategies"],
+    ["/strategy-lab", "/strategies"],
+    ["/strategy-lab/strategy-7", "/agent"],
+    ["/backtests/bt-1", "/strategies"],
+    ["/journal/import", "/journal"],
+    ["/analytics", "/journal"],
+    ["/lessons/lesson-1", "/journal"],
+    ["/portfolio", "/"],
+    ["/positions", "/"],
+    ["/workspace", "/agent"],
+  ])("%s → %s", (source, page) => {
+    expect(resolveRoute(source)?.path).toBe(page);
   });
 });
 

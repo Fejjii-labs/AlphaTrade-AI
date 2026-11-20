@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -32,7 +32,8 @@ function component(
 }
 
 describe("ScoreRadar", () => {
-  it("leaves unscored components off the polygon and marks them n/a", () => {
+  it("leaves unscored components off the polygon and marks them n/a", async () => {
+    plotted.data = [];
     render(
       <ScoreRadar
         overall={70}
@@ -45,6 +46,8 @@ describe("ScoreRadar", () => {
       />,
     );
     expect(screen.getByTestId("score-radar-chart")).toBeInTheDocument();
+    // The radar itself loads on demand.
+    await waitFor(() => expect(plotted.data.length).toBe(3));
     expect(plotted.data.map((d) => d.axis)).toEqual(["Win %", "Profit factor", "Avg win/loss"]);
     expect(plotted.data.every((d) => d.score !== null && d.score !== 0)).toBe(true);
     expect(screen.getByTestId("score-radar-unscored")).toHaveTextContent(
@@ -52,7 +55,8 @@ describe("ScoreRadar", () => {
     );
   });
 
-  it("keeps a real zero score on the polygon", () => {
+  it("keeps a real zero score on the polygon", async () => {
+    plotted.data = [];
     render(
       <ScoreRadar
         overall={40}
@@ -63,7 +67,7 @@ describe("ScoreRadar", () => {
         ]}
       />,
     );
-    expect(plotted.data.find((d) => d.axis === "Max drawdown")?.score).toBe(0);
+    await waitFor(() => expect(plotted.data.find((d) => d.axis === "Max drawdown")?.score).toBe(0));
     expect(screen.queryByTestId("score-radar-unscored")).not.toBeInTheDocument();
   });
 

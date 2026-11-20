@@ -24,7 +24,7 @@ router = APIRouter(prefix="/organizations", tags=["organizations"])
     response_model=OrganizationInvitationView,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_invitation(
+def create_invitation(
     body: CreateInvitationRequest,
     tenant: OwnerDep,
     account: AccountServiceDep,
@@ -36,7 +36,7 @@ async def create_invitation(
 
 
 @router.get("/invitations", response_model=InvitationListResponse)
-async def list_invitations(
+def list_invitations(
     tenant: OwnerDep,
     account: AccountServiceDep,
 ) -> InvitationListResponse:
@@ -48,7 +48,7 @@ async def list_invitations(
     "/invitations/{invitation_id}/accept",
     response_model=OrganizationInvitationView,
 )
-async def accept_invitation(
+def accept_invitation(
     invitation_id: uuid.UUID,
     body: AcceptInvitationRequest,
     tenant: TenantDep,
@@ -64,7 +64,7 @@ async def accept_invitation(
     "/invitations/{invitation_id}/revoke",
     response_model=OrganizationInvitationView,
 )
-async def revoke_invitation(
+def revoke_invitation(
     invitation_id: uuid.UUID,
     tenant: OwnerDep,
     account: AccountServiceDep,

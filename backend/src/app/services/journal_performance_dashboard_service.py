@@ -22,6 +22,12 @@ Rules (documented so every number can be re-derived by hand):
   linked paper trade / validation run, ``PAPER_INTERNAL`` plan) or with no
   exchange recorded is never real. Backtest,
   imported and system trades are read only when their scope is selected.
+- Unreconciled BloFin demo closes (mirror ``exit_reason`` ``unverified`` or
+  ``unverified:<reason>``) have no recorded net PnL. Their P&L is the venue
+  price move, ``(exit - entry) x size`` (short flips the sign), which is how
+  BloFin computes ``realizedPnl``; fees and funding are not subtracted. Such
+  rows count in every figure and are reported as ``unverified_pnl_count``;
+  ``pnl_trade_coverage`` counts only recorded net PnL as verified.
 - Partial closes: only CLOSED rows count. BloFin demo partial closes are
   grouped by positionId into one CLOSED journal row for the realized
   portion (exit reason ``partially_closed`` until flat) and are included.
@@ -51,7 +57,7 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Final, Protocol
@@ -67,7 +73,7 @@ from app.repositories.journal_trades import (
     SourceVenueRule,
     VenueRequirement,
 )
-from app.schemas.common import JournalTradeSource, TradeResult
+from app.schemas.common import JournalTradeSource, TradeDirection, TradeResult
 from app.schemas.journal_performance_dashboard import (
     JournalDashboardCurvePoint,
     JournalDashboardDay,
@@ -314,6 +320,34 @@ def classify(row: JournalTradeStatsRow) -> TradeResult | None:
     return row.result if row.result != TradeResult.OPEN else None
 
 
+def _unreconciled(row: JournalTradeStatsRow) -> bool:
+    reason = row.exit_reason or ""
+    return reason == "unverified" or reason.startswith("unverified:")
+
+
+def with_venue_price_pnl(
+    rows: list[JournalTradeStatsRow],
+) -> tuple[list[JournalTradeStatsRow], frozenset[uuid.UUID]]:
+    """Fill net PnL of unreconciled mirror closes from venue prices; return their ids."""
+    out: list[JournalTradeStatsRow] = []
+    flagged: set[uuid.UUID] = set()
+    for row in rows:
+        if (
+            row.net_pnl is None
+            and _unreconciled(row)
+            and row.entry_price is not None
+            and row.exit_price is not None
+            and row.size is not None
+        ):
+            delta = row.exit_price - row.entry_price
+            if row.direction is TradeDirection.SHORT:
+                delta = -delta
+            row = replace(row, net_pnl=delta * row.size)
+            flagged.add(row.id)
+        out.append(row)
+    return out, frozenset(flagged)
+
+
 def label_conflicts(rows: list[JournalTradeStatsRow]) -> int:
     """Rows whose recorded result disagrees with their recorded net-PnL sign."""
     return sum(
@@ -377,7 +411,11 @@ def summarize(rows: list[JournalTradeStatsRow]) -> JournalDashboardSummary:
     )
 
 
-def bucket_days(rows: list[JournalTradeStatsRow], tz: ZoneInfo) -> list[JournalDashboardDay]:
+def bucket_days(
+    rows: list[JournalTradeStatsRow],
+    tz: ZoneInfo,
+    unverified: frozenset[uuid.UUID] = frozenset(),
+) -> list[JournalDashboardDay]:
     grouped: dict[date, list[JournalTradeStatsRow]] = defaultdict(list)
     for row in rows:
         if row.effective_time is not None:
@@ -398,6 +436,7 @@ def bucket_days(rows: list[JournalTradeStatsRow], tz: ZoneInfo) -> list[JournalD
                 losses=losses,
                 breakeven=sum(1 for r in results if r == TradeResult.BREAKEVEN),
                 win_rate=_ratio(wins, wins + losses),
+                unverified_count=sum(1 for row in day_rows if row.id in unverified),
             )
         )
     return days
@@ -611,12 +650,13 @@ def build_dashboard(
     open_trades_excluded: int = 0,
     now: datetime | None = None,
 ) -> JournalPerformanceDashboardResponse:
+    rows, unverified = with_venue_price_pnl(rows)
     summary = summarize(rows)
+    summary.unverified_pnl_count = len(unverified)
     if filters.scope == JournalDashboardScope.DEMO:
-        summary.pnl_trade_coverage = (
-            f"{summary.pnl_sample_count} of {summary.trade_count} trades verified"
-        )
-    days = bucket_days(rows, tz)
+        verified = summary.pnl_sample_count - len(unverified)
+        summary.pnl_trade_coverage = f"{verified} of {summary.trade_count} trades verified"
+    days = bucket_days(rows, tz, unverified)
     risk = risk_metrics(rows, days, summary.net_pnl)
     confidence = _confidence(len(rows))
     warnings: list[str] = []
@@ -624,6 +664,11 @@ def build_dashboard(
         warnings.append("No closed trades match the filters.")
     elif confidence in (SampleConfidence.INSUFFICIENT, SampleConfidence.LOW):
         warnings.append(f"Only {len(rows)} closed trade(s); treat these figures as anecdotal.")
+    if unverified:
+        warnings.append(
+            f"{len(unverified)} BloFin close(s) are unreconciled; their P&L is the venue "
+            "price move before fees and funding."
+        )
     if summary.pnl_sample_count < summary.trade_count:
         warnings.append(
             f"{summary.trade_count - summary.pnl_sample_count} closed trade(s) have no "

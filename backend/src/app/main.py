@@ -77,7 +77,7 @@ from app.api.routes import (
 )
 from app.core.config import Environment, Settings, get_settings
 from app.core.deployment_safety import deployment_posture
-from app.core.errors import register_exception_handlers
+from app.core.errors import UnhandledErrorMiddleware, register_exception_handlers
 from app.core.exchange_readiness import run_exchange_demo_startup_check
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
@@ -247,6 +247,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.strategy_registry = build_strategy_registry()
     app.state.tool_registry = build_tool_registry(settings)
 
+    # Innermost first: unhandled errors become a JSON 500 *inside* CORS so the
+    # browser sees the envelope (with request id) instead of "Failed to fetch".
+    app.add_middleware(UnhandledErrorMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

@@ -4,12 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KillSwitchButton } from "@/components/KillSwitchButton";
 
 const setKillSwitchActive = vi.fn();
+const refreshKillSwitch = vi.fn();
 
 const appState = {
   killSwitchActive: false,
   killSwitchBusy: false,
   killSwitchError: null as string | null,
   setKillSwitchActive,
+  refreshKillSwitch,
 };
 
 vi.mock("@/contexts/AppContext", () => ({
@@ -111,10 +113,18 @@ describe("KillSwitchButton confirmation (FP2-203)", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText("Kill switch update failed (owner role required)."),
+        screen.getByText("Couldn't update. Try again."),
       ).toBeInTheDocument(),
     );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("shows a short error with Retry under the button", () => {
+    appState.killSwitchError = "Couldn't load.";
+    render(<KillSwitchButton />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refreshKillSwitch).toHaveBeenCalledOnce();
   });
 
   it("cancels without calling the API and restores focus to the trigger", () => {

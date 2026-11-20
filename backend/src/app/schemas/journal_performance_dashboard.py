@@ -55,6 +55,9 @@ class JournalDashboardSummary(StrictModel):
     trade_count: int = 0
     pnl_sample_count: int = 0
     pnl_trade_coverage: str | None = None
+    # Trades in the P&L sample whose P&L is the BloFin price move of a close the
+    # mirror could not reconcile (fees/funding unproven): shown, never verified.
+    unverified_pnl_count: int = 0
     wins: int = 0
     losses: int = 0
     breakeven: int = 0
@@ -84,6 +87,7 @@ class JournalDashboardDay(StrictModel):
     losses: int
     breakeven: int
     win_rate: float | None = None
+    unverified_count: int = 0  # trades that day with unverified (venue price) P&L
 
 
 class JournalDashboardCurvePoint(StrictModel):

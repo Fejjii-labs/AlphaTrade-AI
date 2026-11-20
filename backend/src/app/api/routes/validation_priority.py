@@ -41,7 +41,7 @@ _Limit = Query(default=20, ge=1, le=100)
     summary="Ranked queue of pending setups to validate next",
     dependencies=[_VALIDATION_PRIORITY_READ_LIMIT],
 )
-async def validation_priority_queue(
+def validation_priority_queue(
     tenant: ReaderDep,
     service: ValidationPriorityServiceDep,
     item_type: PriorityItemType | None = Query(default=None),
@@ -68,7 +68,7 @@ async def validation_priority_queue(
     summary="Pending setup counts by action label and reliability",
     dependencies=[_VALIDATION_PRIORITY_READ_LIMIT],
 )
-async def validation_priority_summary(
+def validation_priority_summary(
     tenant: ReaderDep,
     service: ValidationPriorityServiceDep,
     start_date: date | None = Query(default=None),
@@ -91,7 +91,7 @@ async def validation_priority_summary(
     summary="Detailed priority factor breakdown for one pending setup",
     dependencies=[_VALIDATION_PRIORITY_READ_LIMIT],
 )
-async def validation_priority_explain(
+def validation_priority_explain(
     tenant: ReaderDep,
     service: ValidationPriorityServiceDep,
     item_type: PriorityItemType,

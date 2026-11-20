@@ -181,7 +181,7 @@ describe("Trader dashboard", () => {
     );
     expect(asyncState.reload).toHaveBeenCalled();
   });
-  it("keeps Daily Review compact without duplicating the shell mode", () => {
+  it("shows no shell mode duplicate and no Attention or Daily Review card", () => {
     render(<DashboardPage />);
     expect(
       screen.queryByTestId("dashboard-paper-only"),
@@ -192,7 +192,9 @@ describe("Trader dashboard", () => {
     expect(
       screen.getByRole("heading", { level: 1, name: "Dashboard" }),
     ).toBeInTheDocument();
-    expect(screen.getByTestId("daily-review-unavailable")).toBeInTheDocument();
+    expect(screen.queryByTestId("dashboard-daily-review")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dashboard-attention")).not.toBeInTheDocument();
+    expect(screen.getByTestId("dashboard-strip-alerts")).toHaveAttribute("href", "/settings/alerts");
   });
   it("retains the runtime conflict warning", () => {
     safetyPosture.realTradingEnabled = true;
@@ -264,7 +266,7 @@ describe("Trader dashboard", () => {
     fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(screen.getByTestId("dashboard-open-count")).toHaveTextContent("3");
     expect(screen.getByTestId("dashboard-daily-status")).toHaveTextContent(
-      "Daily status unavailable",
+      "Unavailable",
     );
     expect(screen.getByTestId("dashboard-daily-pnl")).toHaveTextContent(
       UNAVAILABLE,
@@ -289,9 +291,7 @@ describe("Trader dashboard", () => {
       formatCurrency("1000.50"),
     );
     expect(screen.getByTestId("dashboard-open-count")).toHaveTextContent("3");
-    expect(
-      screen.getByRole("link", { name: "Open simulator portfolio" }),
-    ).toHaveAttribute("href", "/portfolio");
+    expect(screen.queryByRole("link", { name: "Open simulator portfolio" })).not.toBeInTheDocument();
     expect(screen.queryByText("BTCUSDT · long")).not.toBeInTheDocument();
   });
 
@@ -328,21 +328,20 @@ describe("Trader dashboard", () => {
     });
     render(<DashboardPage />);
     const strip = screen.getByTestId("dashboard-status-strip");
-    expect(strip).toHaveTextContent("Kill switch active");
+    expect(strip).toHaveTextContent("Paused");
     expect(strip).toHaveTextContent("Locked");
-    expect(strip).toHaveTextContent("Daily loss limit reached (display only)");
-    expect(strip).toHaveTextContent("0 trades remaining of 5");
-    expect(strip).toHaveTextContent("Europe/Paris");
+    expect(strip).toHaveTextContent("Loss limit reached");
+    expect(strip).not.toHaveTextContent(/display only|trades remaining/);
+    expect(strip).not.toHaveTextContent("Europe/Paris");
     fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
-    expect(screen.getByTestId("dashboard-status-strip")).toHaveTextContent("Kill switch active");
-    fireEvent.change(screen.getByRole("combobox", { name: "Other trade scopes" }), { target: { value: "backtest" } });
+    expect(screen.getByTestId("dashboard-status-strip")).toHaveTextContent("Paused");
     expect(screen.getByTestId("dashboard-status-strip")).toHaveTextContent("Locked");
   });
 
   it("never shows an unknown kill switch as off", () => {
     appContext.killSwitchStatus = null;
     render(<DashboardPage />);
-    expect(screen.getByTestId("dashboard-strip-kill-switch")).toHaveTextContent("Kill switch status unknown");
+    expect(screen.getByTestId("dashboard-strip-kill-switch")).toHaveTextContent("Pause unknown");
     expect(screen.getByTestId("dashboard-strip-unavailable")).toBeInTheDocument();
   });
 });

@@ -1,18 +1,24 @@
 "use client";
 
 import { useAuth } from "@/contexts/AuthContext";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect } from "react";
 
-import { JournalHubScreen } from "@/components/journal/JournalHubScreen";
-import { parseJournalQuery } from "@/components/journal/journalContext";
-import { JournalTradeScreen } from "@/components/journal/JournalTradeScreen";
-import { JournalKnowledgeWorkspace } from "@/components/journal/JournalKnowledgeWorkspace";
+import { knowledgeRedirect, parseJournalQuery } from "@/components/journal/journalContext";
 import { JournalReturnLink } from "@/components/journal/JournalReturnLink";
+import { JournalTradeScreen } from "@/components/journal/JournalTradeScreen";
+import { TradesScreen } from "@/components/journal/TradesScreen";
 
 export default function JournalPage() {
   const { user, organization } = useAuth();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const context = parseJournalQuery(searchParams);
+  const redirect = knowledgeRedirect(new URLSearchParams(searchParams));
+  useEffect(() => {
+    if (redirect) router.replace(redirect);
+  }, [redirect, router]);
+  if (redirect) return null;
   if (context.tradeId)
     return (
       <div className="space-y-3">
@@ -23,21 +29,5 @@ export default function JournalPage() {
         />
       </div>
     );
-  const record =
-    searchParams.get("view") === "record" ||
-    Boolean(
-      context.proposalId ||
-      context.positionId ||
-      context.entryId ||
-      context.tradeId ||
-      context.sessionId,
-    );
-  if (record)
-    return (
-      <div className="space-y-3">
-        <JournalReturnLink />
-        <JournalHubScreen />
-      </div>
-    );
-  return <JournalKnowledgeWorkspace />;
+  return <TradesScreen />;
 }

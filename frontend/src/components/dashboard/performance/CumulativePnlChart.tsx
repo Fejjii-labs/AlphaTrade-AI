@@ -1,24 +1,15 @@
 "use client";
 
 import { useId } from "react";
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import type { TooltipProps } from "recharts";
+import dynamic from "next/dynamic";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JournalDashboardCurvePoint } from "@/lib/api/types";
 import { formatMonetary } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-import { formatCompactPnl, pnlTone, toNumber } from "./performance-model";
+import type { CurveDatum } from "./CumulativePnlPlot";
+import { pnlTone, toNumber } from "./performance-model";
 
 const lastTone = {
   profit: "text-success",
@@ -27,11 +18,11 @@ const lastTone = {
   none: "text-text-muted",
 } as const;
 
-type CurveDatum = { date: string; cumulative: number; daily: number };
-
-function shortDate(iso: string): string {
-  return `${iso.slice(5, 7)}/${iso.slice(8, 10)}`;
-}
+// Recharts loads only when there is a curve to draw.
+const CumulativePnlPlot = dynamic(() => import("./CumulativePnlPlot"), {
+  ssr: false,
+  loading: () => <Skeleton className="h-full w-full" />,
+});
 
 /** Gradient stop where the curve crosses zero (fraction from the top). */
 export function zeroOffset(values: number[]): number {
@@ -54,18 +45,6 @@ export function curveSummary(points: JournalDashboardCurvePoint[]): string {
     `from ${formatMonetary(first.cumulative_net_pnl)} on ${first.date} ` +
     `to ${formatMonetary(last.cumulative_net_pnl)} on ${last.date}; ` +
     `high ${formatMonetary(Math.max(...values))}, low ${formatMonetary(Math.min(...values))}.`
-  );
-}
-
-function CurveTooltip({ active, payload }: TooltipProps<number, string>) {
-  if (!active || !payload?.length) return null;
-  const datum = payload[0].payload as CurveDatum;
-  return (
-    <div className="rounded-control border border-border-subtle bg-surface-2 px-3 py-2 text-xs text-text-primary shadow-elevation2">
-      <p className="font-medium text-text-secondary">{datum.date}</p>
-      <p className="font-data">Cumulative {formatMonetary(datum.cumulative)}</p>
-      <p className="font-data text-text-secondary">Day {formatMonetary(datum.daily)}</p>
-    </div>
   );
 }
 
@@ -119,53 +98,11 @@ export function CumulativePnlChart({
         <Skeleton className="mt-2 h-56 w-full" data-testid="cumulative-loading" />
       ) : data.length ? (
         <div className="mt-2 h-56 w-full" aria-hidden="true">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-              <defs>
-                <linearGradient id={`fill-${gradientId}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset={0} stopColor="var(--color-success)" stopOpacity={0.35} />
-                  <stop offset={offset} stopColor="var(--color-success)" stopOpacity={0.08} />
-                  <stop offset={offset} stopColor="var(--color-danger)" stopOpacity={0.08} />
-                  <stop offset={1} stopColor="var(--color-danger)" stopOpacity={0.35} />
-                </linearGradient>
-                <linearGradient id={`stroke-${gradientId}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset={offset} stopColor="var(--color-success)" />
-                  <stop offset={offset} stopColor="var(--color-danger)" />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="var(--color-border-subtle)" vertical={false} />
-              <XAxis
-                dataKey="date"
-                tickFormatter={shortDate}
-                tick={{ fill: "var(--color-text-muted)", fontSize: 11 }}
-                axisLine={false}
-                tickLine={false}
-                minTickGap={24}
-              />
-              <YAxis
-                tickFormatter={(value: number) => formatCompactPnl(value)}
-                tick={{ fill: "var(--color-text-muted)", fontSize: 11 }}
-                axisLine={false}
-                tickLine={false}
-                width={64}
-              />
-              <ReferenceLine y={0} stroke="var(--color-border-strong)" />
-              <Tooltip content={<CurveTooltip />} />
-              <Area
-                type="linear"
-                dataKey="cumulative"
-                stroke={`url(#stroke-${gradientId})`}
-                strokeWidth={2}
-                fill={`url(#fill-${gradientId})`}
-                baseValue={0}
-                isAnimationActive={false}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          <CumulativePnlPlot data={data} offset={offset} gradientId={gradientId} />
         </div>
       ) : (
         <p className="my-8 text-center text-sm text-text-muted">
-          No closed trades with recorded P&amp;L in this range.
+          No closed trades in this range.
         </p>
       )}
       {points.length ? (

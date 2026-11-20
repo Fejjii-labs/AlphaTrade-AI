@@ -42,7 +42,7 @@ _PREFS_TEST = Depends(
     summary="Get notification preferences",
     dependencies=[_PREFS_READ],
 )
-async def get_notification_preferences(
+def get_notification_preferences(
     tenant: ReaderDep,
     service: NotificationPreferencesServiceDep,
 ) -> NotificationPreferencesResponse:
@@ -55,9 +55,7 @@ async def get_notification_preferences(
     summary="Named choices for Telegram policy filters",
     dependencies=[_PREFS_READ],
 )
-async def get_telegram_policy_options(
-    tenant: ReaderDep, session: SessionDep
-) -> TelegramPolicyOptions:
+def get_telegram_policy_options(tenant: ReaderDep, session: SessionDep) -> TelegramPolicyOptions:
     return telegram_policy_options(
         session, organization_id=tenant.organization_id, user_id=tenant.user_id
     )
@@ -69,7 +67,7 @@ async def get_telegram_policy_options(
     summary="Update notification preferences",
     dependencies=[_PREFS_WRITE],
 )
-async def update_notification_preferences(
+def update_notification_preferences(
     payload: NotificationPreferencesUpdate,
     tenant: TraderDep,
     service: NotificationPreferencesServiceDep,
@@ -93,7 +91,7 @@ async def update_notification_preferences(
     summary="Reset notification preferences to defaults",
     dependencies=[_PREFS_WRITE],
 )
-async def reset_notification_preferences(
+def reset_notification_preferences(
     tenant: TraderDep,
     service: NotificationPreferencesServiceDep,
     session: SessionDep,
@@ -112,7 +110,7 @@ async def reset_notification_preferences(
     summary="Send safe test notification (no trade execution)",
     dependencies=[_PREFS_TEST],
 )
-async def send_test_notification(
+def send_test_notification(
     tenant: TraderDep,
     delivery: AlertDeliveryServiceDep,
     session: SessionDep,

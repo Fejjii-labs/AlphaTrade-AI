@@ -111,7 +111,7 @@ def _settings(**updates: object) -> Settings:
 def _run_heartbeat(settings: Settings) -> PaperWorkerHeartbeatResponse:
     from app.api.routes.health import paper_worker_heartbeat
 
-    return asyncio.run(paper_worker_heartbeat(settings, BackgroundTasks()))
+    return paper_worker_heartbeat(settings, BackgroundTasks())
 
 
 def _capture_telegram(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -315,7 +315,7 @@ def test_health_shows_the_refusal_and_pages_once(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr("app.api.routes.health._load_runtime_rows", lambda: rows)
     monkeypatch.setattr("app.db.session.get_session_factory", lambda: _Session(_Rows()))
     settings = _settings()
-    body = asyncio.run(health(settings))
+    body = health(settings)
     assert body.arming_refusal.refused is True
     assert body.arming_refusal.reason == COOLDOWN_INVALID
     assert body.arming_refusal.source == "exit_monitor"
@@ -972,7 +972,7 @@ def test_disarmed_reboot_clears_an_armed_monitor_and_a_refusal(
 
     sent.clear()
     _fresh_worker_heartbeat(factory)
-    body = asyncio.run(health(settings))
+    body = health(settings)
     report = _run_heartbeat(settings)
     assert body.arming_refusal.refused is False
     assert report.arming_refusal.refused is False
@@ -1009,7 +1009,7 @@ def test_disarmed_reboot_clears_an_armed_monitor_and_a_refusal(
     assert run_paper_worker_process(once=True) == "disarmed"
     sent.clear()
     _fresh_worker_heartbeat(factory)
-    body = asyncio.run(health(settings))
+    body = health(settings)
     report = _run_heartbeat(settings)
     assert body.arming_refusal.refused is False
     assert report.exit_monitor_status == "disabled"
@@ -1089,7 +1089,7 @@ def test_failed_kill_switch_page_retries_once_per_version(
     from app.api.routes.health import paper_worker_heartbeat
 
     tasks = BackgroundTasks()
-    report = asyncio.run(paper_worker_heartbeat(settings, tasks))
+    report = paper_worker_heartbeat(settings, tasks)
     assert report.kill_switch.active is True
     assert report.kill_switch.source == "drawdown"
     page = "Kill switch activated. New entries stay blocked until a human deactivates it."
@@ -1105,7 +1105,7 @@ def test_failed_kill_switch_page_retries_once_per_version(
     reset_safety_alert_dedup()
     sent.clear()
     again_tasks = BackgroundTasks()
-    again = asyncio.run(paper_worker_heartbeat(settings, again_tasks))
+    again = paper_worker_heartbeat(settings, again_tasks)
     asyncio.run(again_tasks())
     assert again.kill_switch.active is True
     assert all(page not in message for message in sent)
@@ -1514,7 +1514,7 @@ def test_health_skips_the_retry_thread_when_nothing_is_pending(
     from app.api.routes.health import paper_worker_heartbeat
 
     tasks = BackgroundTasks()
-    asyncio.run(paper_worker_heartbeat(settings, tasks))
+    paper_worker_heartbeat(settings, tasks)
     assert tasks.tasks == []
     assert kill_switch_retry_should_schedule(None) is True
     assert kill_switch_retry_should_schedule({}) is False
@@ -1554,11 +1554,11 @@ def test_health_skips_the_retry_thread_inside_the_minute(
     from app.api.routes.health import paper_worker_heartbeat
 
     due = BackgroundTasks()
-    asyncio.run(paper_worker_heartbeat(settings, due))
+    paper_worker_heartbeat(settings, due)
     assert len(due.tasks) == 1
     asyncio.run(due())
     quiet = BackgroundTasks()
-    asyncio.run(paper_worker_heartbeat(settings, quiet))
+    paper_worker_heartbeat(settings, quiet)
     assert quiet.tasks == []
 
 
@@ -1841,5 +1841,5 @@ def test_health_does_not_schedule_a_retry_for_stale_slots(
     from app.api.routes.health import paper_worker_heartbeat
 
     tasks = BackgroundTasks()
-    asyncio.run(paper_worker_heartbeat(settings, tasks))
+    paper_worker_heartbeat(settings, tasks)
     assert tasks.tasks == []

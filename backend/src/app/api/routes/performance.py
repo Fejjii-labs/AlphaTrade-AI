@@ -20,7 +20,7 @@ router = APIRouter(prefix="/performance", tags=["performance"])
 
 
 @router.get("/report", response_model=PerformanceReport, summary="Account performance report")
-async def get_performance_report(
+def get_performance_report(
     tenant: ReaderDep,
     performance: PerformanceServiceDep,
 ) -> PerformanceReport:
@@ -35,7 +35,7 @@ async def get_performance_report(
     response_model=PaperPortfolioResponse,
     summary="Unified paper portfolio performance",
 )
-async def get_paper_portfolio(
+def get_paper_portfolio(
     tenant: ReaderDep,
     portfolio: PaperPortfolioServiceDep,
     start_date: date | None = Query(default=None),
@@ -64,7 +64,7 @@ async def get_paper_portfolio(
     response_model=PerformanceSnapshotListResponse,
     summary="List manual account performance snapshots",
 )
-async def list_performance_snapshots(
+def list_performance_snapshots(
     tenant: ReaderDep,
     portfolio: PaperPortfolioServiceDep,
     start_date: date | None = Query(default=None),
@@ -85,7 +85,7 @@ async def list_performance_snapshots(
     response_model=PerformanceSnapshotResponse,
     summary="Persist an account performance snapshot",
 )
-async def create_performance_snapshot(
+def create_performance_snapshot(
     tenant: OwnerDep,
     performance: PerformanceServiceDep,
     session: SessionDep,

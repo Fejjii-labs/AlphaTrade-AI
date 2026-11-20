@@ -148,9 +148,7 @@ describe("Trader notification settings", () => {
     expect(
       screen.getByText(/Connection is not verified by this API/),
     ).toBeInTheDocument();
-    expect(
-      screen.getByTestId("notifications-never-trade-copy"),
-    ).toHaveTextContent("never execute trades");
+    expect(screen.queryByTestId("notifications-never-trade-copy")).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /test/i }),

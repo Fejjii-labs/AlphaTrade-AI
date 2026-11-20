@@ -71,6 +71,10 @@ class JournalTradeStatsRow:
     # Effective trade time (exit, else entry, else creation) — the clock the date
     # filters and ordering use. Defaulted so hand-built rows stay valid.
     effective_time: datetime | None = None
+    # Venue prices and size, so the dashboard can show the price P&L of a
+    # BloFin demo close the mirror left unreconciled (flagged unverified).
+    exit_price: Decimal | None = None
+    size: Decimal | None = None
 
 
 _ANNOTATION_EXCLUDED_FROM_STATS = frozenset({"tags", "notes", "grade"})
@@ -105,6 +109,8 @@ def _stats_columns() -> tuple[object, ...]:
         JournalTrade.exit_reason,
         JournalTrade.strategy_label,
         _effective_time().label("effective_time"),
+        JournalTrade.exit_price,
+        JournalTrade.size,
     )
 
 

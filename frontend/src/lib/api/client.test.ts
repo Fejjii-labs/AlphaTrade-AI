@@ -265,3 +265,122 @@ describe("api client proactive access-token refresh (kill-switch 401s)", () => {
     expect(sessionStorage.getItem("alphatrade_access_token")).not.toBe("late-token");
   });
 });
+
+describe("api client resilience (timeouts, one GET retry, shared in-flight GETs)", () => {
+  afterEach(() => {
+    sessionStorage.clear();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  const ok = (body: unknown) => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
+
+  it("retries a GET once after a network failure", async () => {
+    const fetchMock = vi.fn().mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValue(ok({ a: 1 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { apiFetch } = await import("@/lib/api/client");
+    await expect(apiFetch("/thing", { auth: false })).resolves.toEqual({ a: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a GET once on 503 and gives up after the second failure", async () => {
+    const unavailable = { ok: false, status: 503, statusText: "Service Unavailable", text: async () => "" };
+    const fetchMock = vi.fn().mockResolvedValue(unavailable);
+    vi.stubGlobal("fetch", fetchMock);
+    const { apiFetch, ApiError } = await import("@/lib/api/client");
+    await expect(apiFetch("/thing", { auth: false })).rejects.toBeInstanceOf(ApiError);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("never retries a POST", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", fetchMock);
+    const { apiFetch, NetworkError } = await import("@/lib/api/client");
+    await expect(apiFetch("/thing", { method: "POST", auth: false })).rejects.toBeInstanceOf(NetworkError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a 4xx", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 404, statusText: "Not Found", text: async () => "" });
+    vi.stubGlobal("fetch", fetchMock);
+    const { apiFetch } = await import("@/lib/api/client");
+    await expect(apiFetch("/thing", { auth: false })).rejects.toMatchObject({ status: 404 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("times out a hung request instead of waiting forever", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_url: string, init: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { apiFetch, NetworkError, REQUEST_TIMEOUT_MS } = await import("@/lib/api/client");
+    const pending = apiFetch("/slow", { method: "POST", auth: false });
+    const assertion = expect(pending).rejects.toBeInstanceOf(NetworkError);
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS.write + 10);
+    await assertion;
+    // A write with its own signal (agent turn) keeps its own budget.
+    const owned = apiFetch("/turn", { method: "POST", auth: false, signal: new AbortController().signal });
+    let settled = false;
+    owned.catch(() => {}).finally(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS.write * 3);
+    expect(settled).toBe(false);
+  });
+
+  it("does not retry when the caller aborts", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn(() => {
+      controller.abort();
+      return Promise.reject(new DOMException("Aborted", "AbortError"));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { apiFetch } = await import("@/lib/api/client");
+    await expect(apiFetch("/thing", { auth: false, signal: controller.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one request between identical concurrent GETs", async () => {
+    const resolvers: Array<(value: unknown) => void> = [];
+    const fetchMock = vi.fn<(url: string) => Promise<unknown>>(() => new Promise((r) => { resolvers.push(r); }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { apiFetch } = await import("@/lib/api/client");
+    const first = apiFetch("/shared", { auth: false });
+    const second = apiFetch("/shared", { auth: false });
+    const other = apiFetch("/shared", { auth: false, query: { x: 1 } });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      expect.stringMatching(/\/shared$/),
+      expect.stringMatching(/\/shared\?x=1$/),
+    ]);
+    resolvers[0](ok({ n: 1 }));
+    resolvers[1](ok({ n: 2 }));
+    await expect(first).resolves.toEqual({ n: 1 });
+    await expect(second).resolves.toEqual({ n: 1 });
+    await expect(other).resolves.toEqual({ n: 2 });
+    // Once settled, the next call fetches again (no stale cache).
+    const again = apiFetch("/shared", { auth: false });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    resolvers[2](ok({ n: 3 }));
+    await expect(again).resolves.toEqual({ n: 3 });
+  });
+
+  it("turns errors into short plain text", async () => {
+    const { ApiError, NetworkError, friendlyError } = await import("@/lib/api/client");
+    expect(friendlyError(new TypeError("Failed to fetch"))).toBe("Couldn't load.");
+    expect(friendlyError(new NetworkError("timeout"))).toBe("Couldn't load.");
+    expect(friendlyError(new ApiError("Internal Server Error", 500, null))).toBe("Couldn't load.");
+    expect(friendlyError(new ApiError("Forbidden", 403, null))).toBe("No access.");
+    expect(friendlyError(new ApiError("Strategy name already exists.", 409, null))).toBe(
+      "Strategy name already exists.",
+    );
+    expect(friendlyError(new Error("Trade not found in this organization"))).toBe(
+      "Trade not found in this organization",
+    );
+    expect(friendlyError(new Error("Failed to fetch"), "Couldn't save.")).toBe("Couldn't save.");
+  });
+});

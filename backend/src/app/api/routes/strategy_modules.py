@@ -14,7 +14,7 @@ router = APIRouter(prefix="/strategies", tags=["strategy-modules"])
 
 
 @router.get("/modules", summary="List registered strategy modules")
-async def list_strategy_modules(
+def list_strategy_modules(
     service: StrategyServiceDep,
     _tenant: ReaderDep,
 ) -> list[StrategyId]:
@@ -26,7 +26,7 @@ async def list_strategy_modules(
     response_model=StrategyEvaluateResponse,
     summary="Research-only strategy module evaluation",
 )
-async def evaluate_strategy(
+def evaluate_strategy(
     body: StrategyEvaluateRequest,
     service: StrategyServiceDep,
     _tenant: TraderDep,
