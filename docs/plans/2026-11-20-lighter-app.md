@@ -8,3 +8,9 @@ Review base 5391d0ba. Implementation worktree /tmp/p-light on perf/lighter-app.
 4. Run the affected backend tests and Ruff, the relevant Vitest tests, and frontend typecheck, lint and production build. Record actual counts and caveats in the requested report. Land in reviewable slices for startup/watcher, demo projection, and polling. Run the full backend gate once when the final head is ready for merge review, then obtain Griller's verdict on that SHA.
 
 No staging or shared database changes are needed. The reported RAM and query savings are hypotheses to verify with the import and query regression checks and later staging observation.
+
+## Implementation notes
+
+The implementation starts from b5b1b3b7 in /tmp/lighter2. It skips the immediate native refresh for a recently synced Dashboard snapshot and keeps the configured recurring cadence. The Journal renders trades independently of saved notes. Agent opens the latest conversation page in one request and fetches the conversation index when History opens.
+
+This handoff is for branch review. The coordinator owns the merge-review gate and verdict.
