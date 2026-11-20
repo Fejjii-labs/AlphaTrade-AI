@@ -12451,6 +12451,423 @@
         "title": "DisciplineScoreSummary",
         "type": "object"
       },
+      "DlineParameters": {
+        "additionalProperties": false,
+        "properties": {
+          "atr_period": {
+            "default": 14,
+            "maximum": 100.0,
+            "minimum": 2.0,
+            "title": "Atr Period",
+            "type": "integer"
+          },
+          "attempt_cap": {
+            "default": 2,
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Attempt Cap",
+            "type": "integer"
+          },
+          "break_buffer_atr": {
+            "anyOf": [
+              {
+                "maximum": 2.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0",
+            "title": "Break Buffer Atr"
+          },
+          "ema_period": {
+            "default": 50,
+            "maximum": 200.0,
+            "minimum": 2.0,
+            "title": "Ema Period",
+            "type": "integer"
+          },
+          "ema_slope_bars": {
+            "default": 3,
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Ema Slope Bars",
+            "type": "integer"
+          },
+          "entry_mode": {
+            "default": "breakout",
+            "enum": [
+              "breakout",
+              "retest"
+            ],
+            "title": "Entry Mode",
+            "type": "string"
+          },
+          "fib_09_orientation": {
+            "default": "deep_retracement",
+            "enum": [
+              "deep_retracement",
+              "from_origin"
+            ],
+            "title": "Fib 09 Orientation",
+            "type": "string"
+          },
+          "fib_09_tolerance_atr": {
+            "anyOf": [
+              {
+                "maximum": 2.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0.15",
+            "title": "Fib 09 Tolerance Atr"
+          },
+          "fifteen_minute_htf": {
+            "$ref": "#/components/schemas/Timeframe",
+            "default": "4h"
+          },
+          "five_minute_htf": {
+            "$ref": "#/components/schemas/Timeframe",
+            "default": "1h"
+          },
+          "five_minute_ob_policy": {
+            "default": "cap",
+            "enum": [
+              "cap",
+              "allow_runner"
+            ],
+            "title": "Five Minute Ob Policy",
+            "type": "string"
+          },
+          "hourly_htf": {
+            "$ref": "#/components/schemas/Timeframe",
+            "default": "1d"
+          },
+          "htf_max_age_bars": {
+            "default": 2,
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Htf Max Age Bars",
+            "type": "integer"
+          },
+          "htf_required": {
+            "default": true,
+            "title": "Htf Required",
+            "type": "boolean"
+          },
+          "lookback": {
+            "default": 96,
+            "maximum": 500.0,
+            "minimum": 10.0,
+            "title": "Lookback",
+            "type": "integer"
+          },
+          "minimum_rr": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 2.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "2",
+            "title": "Minimum Rr"
+          },
+          "minimum_separation": {
+            "default": 2,
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Minimum Separation",
+            "type": "integer"
+          },
+          "minimum_stop_ticks": {
+            "default": 1,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Minimum Stop Ticks",
+            "type": "integer"
+          },
+          "minimum_touches": {
+            "default": 2,
+            "maximum": 3.0,
+            "minimum": 2.0,
+            "title": "Minimum Touches",
+            "type": "integer"
+          },
+          "pivot_width": {
+            "default": 2,
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Pivot Width",
+            "type": "integer"
+          },
+          "preferred_touches": {
+            "default": 3,
+            "maximum": 10.0,
+            "minimum": 3.0,
+            "title": "Preferred Touches",
+            "type": "integer"
+          },
+          "range_efficiency_threshold": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0.2",
+            "title": "Range Efficiency Threshold"
+          },
+          "range_lookback": {
+            "default": 14,
+            "maximum": 100.0,
+            "minimum": 2.0,
+            "title": "Range Lookback",
+            "type": "integer"
+          },
+          "ranging_first_target_min_rr": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 100.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "2",
+            "title": "Ranging First Target Min Rr"
+          },
+          "retest_policy": {
+            "const": "frozen_break_projection",
+            "default": "frozen_break_projection",
+            "title": "Retest Policy",
+            "type": "string"
+          },
+          "retest_tolerance_atr": {
+            "anyOf": [
+              {
+                "maximum": 2.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0.15",
+            "title": "Retest Tolerance Atr"
+          },
+          "retest_window": {
+            "default": 6,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Retest Window",
+            "type": "integer"
+          },
+          "risk_fraction": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 0.03,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0.01",
+            "title": "Risk Fraction"
+          },
+          "round_trip_cost_fraction": {
+            "anyOf": [
+              {
+                "maximum": 0.1,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0.001",
+            "title": "Round Trip Cost Fraction"
+          },
+          "runner_fraction": {
+            "anyOf": [
+              {
+                "maximum": 0.2,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0.2",
+            "title": "Runner Fraction"
+          },
+          "slope_max_atr": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0.8",
+            "title": "Slope Max Atr"
+          },
+          "slope_min_atr": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0.01",
+            "title": "Slope Min Atr"
+          },
+          "stop_buffer_atr": {
+            "anyOf": [
+              {
+                "maximum": 5.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0.1",
+            "title": "Stop Buffer Atr"
+          },
+          "touch_atr": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0.15",
+            "title": "Touch Atr"
+          },
+          "tp1_fraction": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1.0,
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0.5",
+            "title": "Tp1 Fraction"
+          },
+          "version": {
+            "const": "dline-research/v1",
+            "default": "dline-research/v1",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "title": "DlineParameters",
+        "type": "object"
+      },
+      "DlineSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/TradeDirection",
+            "default": "long"
+          },
+          "kind": {
+            "const": "d_line/v1",
+            "default": "d_line/v1",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "default": "D-line draft research",
+            "title": "Name",
+            "type": "string"
+          },
+          "paper_only": {
+            "const": true,
+            "default": true,
+            "title": "Paper Only",
+            "type": "boolean"
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/DlineParameters"
+          },
+          "spec_version": {
+            "const": "strategy-pattern-spec/v1",
+            "default": "strategy-pattern-spec/v1",
+            "title": "Spec Version",
+            "type": "string"
+          },
+          "symbol": {
+            "const": "BTCUSDT",
+            "default": "BTCUSDT",
+            "title": "Symbol",
+            "type": "string"
+          },
+          "trigger_timeframe": {
+            "default": "15m",
+            "enum": [
+              "5m",
+              "15m",
+              "1h"
+            ],
+            "title": "Trigger Timeframe",
+            "type": "string"
+          }
+        },
+        "title": "DlineSpec",
+        "type": "object"
+      },
       "DocumentCreateRequest": {
         "additionalProperties": false,
         "description": "Register document metadata without ingesting body text.",
@@ -19325,13 +19742,13 @@
             ],
             "title": "Net Pnl"
           },
-          "trade_count": {
-            "title": "Trade Count",
+          "pnl_pending_count": {
+            "default": 0,
+            "title": "Pnl Pending Count",
             "type": "integer"
           },
-          "unverified_count": {
-            "default": 0,
-            "title": "Unverified Count",
+          "trade_count": {
+            "title": "Trade Count",
             "type": "integer"
           },
           "win_rate": {
@@ -19683,6 +20100,11 @@
             ],
             "title": "Net Pnl"
           },
+          "pnl_pending_count": {
+            "default": 0,
+            "title": "Pnl Pending Count",
+            "type": "integer"
+          },
           "pnl_sample_count": {
             "default": 0,
             "title": "Pnl Sample Count",
@@ -19713,11 +20135,6 @@
           "trade_count": {
             "default": 0,
             "title": "Trade Count",
-            "type": "integer"
-          },
-          "unverified_pnl_count": {
-            "default": 0,
-            "title": "Unverified Pnl Count",
             "type": "integer"
           },
           "win_loss_ratio": {
@@ -48938,6 +49355,7 @@
           "mental_capital_guard",
           "nested_continuation",
           "sfp",
+          "d_line",
           "manual_review"
         ],
         "title": "StrategyId",
@@ -78447,7 +78865,8 @@
                 {
                   "enum": [
                     "nested_continuation",
-                    "sfp"
+                    "sfp",
+                    "d_line"
                   ],
                   "type": "string"
                 },
@@ -78676,6 +79095,54 @@
           }
         ],
         "summary": "Research Lifecycle",
+        "tags": [
+          "strategy-brain"
+        ]
+      }
+    },
+    "/strategy-brain/templates/dline": {
+      "post": {
+        "operationId": "propose_dline_strategy_brain_templates_dline_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DlineSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Propose Dline Strategy Brain Templates Dline Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Propose Dline",
         "tags": [
           "strategy-brain"
         ]

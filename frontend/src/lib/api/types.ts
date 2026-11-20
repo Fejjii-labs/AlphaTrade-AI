@@ -44,6 +44,7 @@ export type StrategyId =
   | "mental_capital_guard"
   | "nested_continuation"
   | "sfp"
+  | "d_line"
   | "manual_review";
 /** Backend DocumentSourceType values (RAG corpus). */
 export type DocumentSourceType =
@@ -4595,8 +4596,8 @@ export interface JournalDashboardSummary {
   trade_count: number;
   pnl_sample_count: number;
   pnl_trade_coverage?: string | null;
-  /** Trades whose P&L is the BloFin price move of an unreconciled close (not verified). */
-  unverified_pnl_count?: number;
+  /** Closed trades whose P&L is pending from BloFin (never derived from prices). */
+  pnl_pending_count?: number;
   wins: number;
   losses: number;
   breakeven: number;
@@ -4619,8 +4620,8 @@ export interface JournalDashboardDay {
   wins: number;
   losses: number;
   breakeven: number;
-  /** Trades that day whose P&L is unverified. */
-  unverified_count?: number;
+  /** Trades that day whose P&L is pending from BloFin. */
+  pnl_pending_count?: number;
   win_rate: number | null;
 }
 

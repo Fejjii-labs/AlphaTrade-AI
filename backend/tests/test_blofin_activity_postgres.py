@@ -773,3 +773,28 @@ def test_invalid_page_shape_preserves_previous_success_and_marks_stale(world):
     result = page(world)
     assert len(result.items) == 1 and result.freshness == "stale"
     assert result.coverage[1].last_successful_sync == NOW
+
+
+def test_import_start_at_drops_older_native_facts_and_still_completes(world):
+    engine, settings, config, _, venue = world
+    cutoff = NOW - timedelta(minutes=30)
+    old_ms, new_ms = str(MS - 3_600_000), str(MS - 1000)
+    venue.pages["fill"] = {
+        None: [fill("f-new", "o-new", ts=new_ms), fill("f-old", "o-old", ts=old_ms)],
+        "f-old": [],
+    }
+    venue.pages["order"] = {
+        None: [
+            order("o-new", updateTime=new_ms),
+            order("o-old", createTime=str(MS - 3_700_000), updateTime=old_ms),
+        ],
+        "o-old": [],
+    }
+    clean = settings.model_copy(update={"blofin_import_start_at": cutoff})
+    for _ in range(3):
+        run_activity_sync(engine, clean, config, provider=venue.provider(), clock=lambda: NOW)
+    with Session(engine) as session:
+        kept = set(session.execute(select(BloFinActivityFact.kind, BloFinActivityFact.native_id)))
+        cursors = {c.kind: c for c in session.scalars(select(BloFinActivityCursor))}
+    assert kept == {("fill", "f-new"), ("order", "o-new")}
+    assert cursors["fill"].window_complete and cursors["order"].window_complete

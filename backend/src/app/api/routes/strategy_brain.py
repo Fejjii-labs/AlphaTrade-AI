@@ -15,6 +15,7 @@ from app.schemas.nested_continuation import NESTED_KIND, NestedContinuationSpec
 from app.security.rate_limit import tenant_rate_limit_dependency
 from app.security.rbac import ReaderDep, TraderDep
 from app.services.strategy_versioning import StrategyVersioningService
+from app.strategy_brain.dline.contracts import DlineSpec
 from app.strategy_brain.nested_preview import preview_nested_subscriptions
 from app.strategy_brain.records import _insert_once
 from app.strategy_brain.service import BrainFamily, create_template, details, overview
@@ -78,6 +79,15 @@ def preview_nested(
 
 @router.post("/templates/sfp", status_code=201)
 def propose_sfp(body: SfpSpec, tenant: TraderDep, session: SessionDep) -> dict:
+    result = create_template(
+        session, organization_id=tenant.organization_id, user_id=tenant.user_id, spec=body
+    )
+    session.commit()
+    return result
+
+
+@router.post("/templates/dline", status_code=201)
+async def propose_dline(body: DlineSpec, tenant: TraderDep, session: SessionDep) -> dict:
     result = create_template(
         session, organization_id=tenant.organization_id, user_id=tenant.user_id, spec=body
     )

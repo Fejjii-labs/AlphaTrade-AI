@@ -112,6 +112,14 @@ A full seven-day read also runs at least every
 a failed or incomplete full read stays due. A full read is the same read a
 restart does.
 
+Clean start: `BLOFIN_IMPORT_START_AT` (ISO 8601 with a UTC offset, e.g.
+`2026-11-20T12:45:00Z`; unset by default) is a floor for every read. No
+history, fills, funding, or orders read starts before it, and a position
+opened before it is not written, closed or open. Native activity sync applies
+the same floor: orders and fills that occurred before it are not stored, and
+its cursors still advance. Use it after deleting old demo trades so a restart
+or full read does not import them again.
+
 Residual risk: a history row that the venue publishes more than the overlap
 after its `createTime` is missed by the incremental reads. It reaches the
 journal at the next full read, so up to about six hours plus one mirror

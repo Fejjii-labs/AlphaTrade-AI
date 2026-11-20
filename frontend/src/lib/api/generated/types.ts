@@ -4273,7 +4273,7 @@ export interface components {
          * @description Trading setup types (strategy modules plus manual review).
          * @enum {string}
          */
-        StrategyId: "htf_trend_pullback" | "liquidity_sweep_reversal" | "countertrend_short_build" | "passive_level_order" | "profit_protection" | "green_day_guard" | "mental_capital_guard" | "nested_continuation" | "sfp" | "manual_review";
+        StrategyId: "htf_trend_pullback" | "liquidity_sweep_reversal" | "countertrend_short_build" | "passive_level_order" | "profit_protection" | "green_day_guard" | "mental_capital_guard" | "nested_continuation" | "sfp" | "d_line" | "manual_review";
         /**
          * StrategyPromotionRequirements
          * @description Authored requirements; absent values require explicit evidence review.

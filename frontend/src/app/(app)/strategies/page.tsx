@@ -22,6 +22,7 @@ const families = [
     kind: "operational_nested_continuation/v1",
   },
   { id: "sfp", name: "SFP", kind: "swing_failure_pattern/v1", detectionFamily: "sfp" },
+  { id: "dline", name: "D-line", kind: "d_line/v1", detectionFamily: "d_line" },
 ] satisfies { id: string; name: string; kind: string; detectionFamily: BrainFamily }[];
 
 type FamilyRead = { setups: BrainSetup[]; outcomes: BrainOutcomes | null };
@@ -51,15 +52,17 @@ function StrategiesWorkspace() {
   const loader = useCallback(async () => {
     // One bounded read per family, so a busy SFP week cannot push Nested setups out.
     const since = new Date(Date.now() - 7 * 86400000).toISOString();
-    const [nested, sfp] = await Promise.allSettled([
+    const [nested, sfp, dline] = await Promise.allSettled([
       api.strategyBrain.overview({ family: "nested_continuation", since }),
       api.strategyBrain.overview({ family: "sfp", since }),
+      api.strategyBrain.overview({ family: "d_line", since }),
     ]);
-    const brain = [nested, sfp].find((r) => r.status === "fulfilled");
+    const brain = [nested, sfp, dline].find((r) => r.status === "fulfilled");
     return {
       brain: brain?.status === "fulfilled" ? brain.value : null,
       recent: {
         nested_continuation: nested.status === "fulfilled" ? familyRead(nested.value) : null,
+        d_line: dline.status === "fulfilled" ? familyRead(dline.value) : null,
         sfp: sfp.status === "fulfilled" ? familyRead(sfp.value) : null,
       } as Record<BrainFamily, FamilyRead | null>,
     };
@@ -94,6 +97,7 @@ function StrategiesWorkspace() {
           >
             ← Strategies
           </Link>
+          {family.id === "dline" && <p>Draft research only. No execution or alerts are authorized.</p>}
           {data?.brain?.strategies
             .filter((s) => s.spec.kind === family.kind)
             .map((s) => (

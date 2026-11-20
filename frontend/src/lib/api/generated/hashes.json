@@ -1,6 +1,6 @@
 {
-  "openapi_sha256": "5e1887948eb0d6630dbfd112081c12c96ddc393577441b03be18d9121ef9687a",
-  "pilot_sha256": "2d3d2dd7e1d69d680dd184abff6379527bafe4b582efffc4457dcfe507f8cbfd",
+  "openapi_sha256": "4a265cf1b4846925894ff595a94fbdd70483e326f19b4c6995d14d16d88db795",
+  "pilot_sha256": "873f0d00e23fa7a2cbc8810394abc1ab9e5583ca2e04a6f7235b2bfd2733fae8",
   "schemas": {
     "AccountMode": "0d7a38d0433240925513df0814ac36c497880945d49b5e563ad77ee16c3be2f1",
     "ActionRequest": "3f1f59fc3e48b3482b6d6ab4166719d64a93ec682a89555b139463942fba145a",
@@ -160,7 +160,7 @@
     "StrategyCard-Input": "aee8f8a610fd752768ab3a5330b466c8799bab66d67975026826f2a00c4a6d3a",
     "StrategyCard-Output": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf",
     "StrategyHit": "1ee52b8494abf662fe233e2932f6fb3b96807885a0c3db4ad18ee7896202406e",
-    "StrategyId": "1120e67bfb670113f7ff354f083a3ffe4d2fa2d42706ad65eb57822ef655d6cb",
+    "StrategyId": "212ae2fa27e7ac11b137fb8d7f0efc451190ed508ee7a101d48e70becbc15e7d",
     "StrategyPromotionRequirements": "aba090d64f14dbac5e301816799952a510f3af1cd4bf13fe8b1537d29fc8fb51",
     "StrategyProposalRecord": "f5f005ccd9f12872af0c2d5526b06ea7381c99c7f29b43b5f9525b58cd8483c5",
     "StrategyProposalStatus": "ba9b07dc29b5a6d0e10ba7865b0e1a1c734b606f31ac3d2824396e0d49211aff",

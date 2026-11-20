@@ -61,7 +61,6 @@ from app.services.blofin_demo_manual_mirror import (
     _instruments,
     _money,
     _parse_slices_detailed,
-    _price_pnl,
     _Slice,
     _time,
     try_lock_journal_mirror,
@@ -246,12 +245,11 @@ def _proposed(
 ) -> tuple[dict[str, Any], bool, list[str]]:
     """A6 §4 lifetime economics, whether it is verified, and why not."""
     legs = sorted(life.legs, key=lambda leg: (leg.closed_at, leg.history_id))
-    drafts = [_draft_from_slice(leg) for leg in legs]
     reasons: set[str] = set()
     if any(leg.opened_at < pages.funding_begin for leg in legs):
         reasons.add("funding_before_coverage")
-    if any(not draft.price_matches for draft in drafts):
-        reasons.add("price_unverified")
+    if any(leg.realized is None for leg in legs):
+        reasons.add("blofin_pnl_missing")
     sizes = [leg.contracts * leg.contract_value for leg in legs if leg.contract_value is not None]
     size: Decimal | None = sum(sizes, Decimal("0")) if len(sizes) == len(legs) else None
     entry = _weighted(legs, "open_price")
@@ -270,12 +268,16 @@ def _proposed(
     )
     if closed and not full:
         reasons.add("partially_closed_incomplete")
-    gross = _total([_price_pnl(leg) for leg in legs])
-    if "price_unverified" in reasons:
-        gross = None
+    # BloFin's own positions-history realizedPnl; never a price recomputation.
+    gross = _total([leg.realized for leg in legs])
     fees = _total([leg.fee for leg in legs])
     funding = _total([leg.funding if leg.funding_ok else None for leg in legs])
-    verified = closed and full and all(draft.verified for draft in drafts) and not reasons
+    verified = (
+        closed
+        and full
+        and not reasons
+        and all(leg.fee is not None and leg.funding_ok for leg in legs)
+    )
     net = None
     if verified and gross is not None and fees is not None and funding is not None:
         net = gross - fees - funding

@@ -372,23 +372,25 @@ def test_resting_limit_entries_reconcile_by_position_id(session):
     )
 
 
-def test_conflicting_order_id_cannot_verify_two_positions(session):
+def test_conflicting_order_ids_do_not_withhold_blofin_pnl(session):
+    # Order history only links orders; BloFin positions-history owns P&L and fee.
     bundle = _five_closes()
     entries = [order for order in bundle["orders"] if order["pnl"] == "0"]
     entries[1]["orderId"] = entries[0]["orderId"]
     _apply_five(session, bundle)
     rows = _rows(session)
-    assert len([row for row in rows if row.exit_reason == "unverified:conflicting_order_id"]) == 2
-    assert sum(row.net_pnl is not None for row in rows) == 3
+    assert sorted(row.net_pnl for row in rows) == list(
+        map(Decimal, ("-10.2", "9.3", "9.8", "9.8", "14.6"))
+    )
 
 
-def test_only_unreconciled_position_is_withheld_with_a_short_reason(session):
+def test_only_position_missing_blofin_pnl_is_withheld_with_a_short_reason(session):
     bundle = _five_closes()
-    del bundle["orders"][-1]["fee"]  # missing opening fee for the funding position
+    del bundle["history"][-1]["realizedPnl"]  # BloFin omitted P&L for the funding position
     _apply_five(session, bundle)
     rows = _rows(session)
     bad = next(row for row in rows if row.symbol == "ADAUSDT")
-    assert bad.net_pnl is None and bad.exit_reason == "unverified:missing_entry_fee"
+    assert bad.net_pnl is None and bad.exit_reason == "unverified:missing_blofin_pnl"
     assert sum(row.net_pnl is not None for row in rows) == 4
     account = DashboardDemoAccount(status="ok", message="fixture")
     publish_mirror_performance(
@@ -415,14 +417,16 @@ def test_only_unreconciled_position_is_withheld_with_a_short_reason(session):
     )
 
 
-def test_positions_fee_cannot_stand_in_for_missing_entry_order_fee(session):
+def test_positions_history_fee_is_used_without_entry_order_history(session):
     bundle = _five_closes()
     bundle["orders"] = [row for row in bundle["orders"] if row["side"] == "sell"]
     _apply_five(session, bundle)
-    assert all(row.net_pnl is None for row in _rows(session))
+    rows = _rows(session)
+    assert sorted(row.fees for row in rows) == list(map(Decimal, ("0.2",) * 4 + ("0.4",)))
+    assert all(row.net_pnl is not None for row in rows)
 
 
-def test_reconciliation_tolerance_is_per_position_not_per_partial_leg(session):
+def test_blofin_realized_pnl_is_stored_even_when_price_math_disagrees(session):
     bundle = _five_closes()
     for row in bundle["history"]:
         if row["positionId"] == "five-p3":
@@ -432,7 +436,8 @@ def test_reconciliation_tolerance_is_per_position_not_per_partial_leg(session):
             row["pnl"] = str(Decimal(row["pnl"]) + Decimal("0.009"))
     _apply_five(session, bundle)
     row = next(row for row in _rows(session) if row.symbol == "XRPUSDT")
-    assert row.net_pnl is None and row.exit_reason == "unverified:pnl_mismatch"
+    assert row.gross_pnl == Decimal("15.018") and row.net_pnl == Decimal("14.618")
+    assert row.exit_reason == "closed"
 
 
 def test_recorded_venue_gross_is_preserved_within_one_cent_rounding_tolerance(session):
@@ -543,7 +548,9 @@ def test_funding_shared_with_an_open_position_is_not_assigned_to_the_closed_one(
         for row in _rows(session)
         if row.symbol == "ADAUSDT" and row.status is JournalTradeStatus.CLOSED
     )
-    assert row.net_pnl is None and row.exit_reason == "unverified:funding_incomplete"
+    # Funding is unknown (NULL); BloFin realizedPnl minus fee is still stored.
+    assert row.funding is None and row.net_pnl == Decimal("9.8")
+    assert row.exit_reason == "closed"
 
 
 def test_conflicting_duplicate_history_identity_cannot_verify_economics(session):
@@ -590,16 +597,16 @@ def test_old_partial_slice_rows_are_consolidated_without_deleting_annotations(se
         ("filledSize", "2", "incomplete_position_history"),
     ],
 )
-def test_only_the_position_with_conflicting_order_evidence_is_excluded(
-    session, field, value, reason
-):
+def test_conflicting_order_evidence_does_not_override_blofin_pnl(session, field, value, reason):
+    del reason  # the order-side check no longer gates BloFin's figures
     bundle = _five_closes()
     bundle["orders"][0][field] = value
     _apply_five(session, bundle)
     rows = _rows(session)
-    bad = next(row for row in rows if row.symbol == "BTCUSDT")
-    assert bad.net_pnl is None and bad.exit_reason == f"unverified:{reason}"
-    assert sum(row.net_pnl is not None for row in rows) == 4
+    btc = next(row for row in rows if row.symbol == "BTCUSDT")
+    assert btc.gross_pnl == Decimal("10") and btc.fees == Decimal("0.2")
+    assert btc.net_pnl == Decimal("9.8") and btc.exit_reason == "closed"
+    assert sum(row.net_pnl is not None for row in rows) == 5
 
 
 def test_long_matches_price_fee_and_paid_funding_and_ignores_fill_pnl(session: Session) -> None:
@@ -1334,14 +1341,16 @@ def test_incomplete_history_cursor_writes_nothing(session: Session) -> None:
     assert _rows(session) == []
 
 
-def test_eth_doc_price_matches_and_bch_sell_example_does_not() -> None:
+def test_doc_examples_store_blofin_realized_pnl_and_fee_as_reported() -> None:
+    # Price matching is diagnostic only; BloFin's own figures are stored.
     eth = _drafts(_FIXTURE["eth_doc"]["history"]).closed[0]  # type: ignore[attr-defined]
     assert eth.price_matches is True
-    assert eth.verified is False
-    assert eth.gross_pnl is None
+    assert eth.gross_pnl == Decimal("0.7") and eth.fees == Decimal("0.190536")
+    assert eth.funding is None and eth.net_pnl == Decimal("0.509464")
     bch = _drafts(_FIXTURE["bch_doc"]["history"]).closed[0]  # type: ignore[attr-defined]
     assert bch.price_matches is False
-    assert bch.verified is False
+    assert bch.gross_pnl == Decimal("-8.7") and bch.fees == Decimal("0.5472")
+    assert bch.net_pnl == Decimal("-9.2472") and bch.result is TradeResult.LOSS
     assert bch.direction is TradeDirection.SHORT
 
 
@@ -1608,7 +1617,7 @@ def test_failed_cycle_preserves_saved_verified_subset(session: Session) -> None:
     assert "Latest mirror read incomplete" in held.performance.manual_mirror_reason
 
 
-def test_capped_fills_keep_positions_history_and_withhold(session: Session) -> None:
+def test_capped_fills_keep_positions_history_pnl(session: Session) -> None:
     bundle = _paths(_FIXTURE["long"])
     bundle["/api/v1/trade/fills-history"] = [
         {
@@ -1632,8 +1641,9 @@ def test_capped_fills_keep_positions_history_and_withhold(session: Session) -> N
     assert report.next_cursor is None
     row = _rows(session)[0]
     assert row.external_ref == "blofin-demo-history:h-long"
-    assert row.net_pnl is None
-    assert "pnl-unverified" in (row.tags or [])
+    # Fills never feed P&L, so a capped fills read keeps BloFin's figures.
+    assert _money(row.net_pnl) == Decimal("0.18600000")
+    assert "pnl-verified" in (row.tags or [])
     cycle = session.scalar(
         select(JournalTrade).where(JournalTrade.external_ref == "blofin-demo-mirror-cycle")
     )
@@ -1642,8 +1652,9 @@ def test_capped_fills_keep_positions_history_and_withhold(session: Session) -> N
     tenant = TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER)
     held = DashboardDemoAccount(status="ok", message="fixture")
     publish_mirror_performance(held, session=session, tenant=tenant, settings=_settings())
-    assert held.performance.manual_mirror_status == "withheld"
-    assert held.performance.realized_pnl is None
+    assert held.performance.manual_mirror_status == "ready"
+    assert "Latest mirror read incomplete" in held.performance.manual_mirror_reason
+    assert held.performance.realized_pnl == Decimal("0.186")
 
 
 def test_cycle_marker_cannot_be_rewritten_or_deleted(session: Session) -> None:
@@ -1686,7 +1697,7 @@ def test_cycle_marker_cannot_be_rewritten_or_deleted(session: Session) -> None:
     assert "Latest mirror read incomplete" in held.performance.manual_mirror_reason
 
 
-def test_equal_close_times_leave_funding_unverified() -> None:
+def test_equal_close_times_leave_funding_unknown() -> None:
     base = dict(_FIXTURE["long"]["history"][0])
     second = dict(base)
     second["historyId"] = "h-same-close"
@@ -1696,11 +1707,11 @@ def test_equal_close_times_leave_funding_unverified() -> None:
     built = _drafts([base, second], funding=_FIXTURE["long"]["funding"])
     closed = built.closed  # type: ignore[attr-defined]
     assert len(closed) == 1
-    assert all(draft.verified is False for draft in closed)
     assert all(draft.funding is None for draft in closed)
+    assert all(draft.gross_pnl == Decimal("0.3") for draft in closed)
 
 
-def test_touching_positions_do_not_verify_a_shared_funding_bill() -> None:
+def test_touching_positions_do_not_assign_a_shared_funding_bill() -> None:
     left = dict(_FIXTURE["long"]["history"][0])
     left["positionId"] = "p-left"
     left["historyId"] = "h-left"
@@ -1722,7 +1733,6 @@ def test_touching_positions_do_not_verify_a_shared_funding_bill() -> None:
     closed = built.closed  # type: ignore[attr-defined]
     assert len(closed) == 2
     assert {draft.position_id for draft in closed} == {"p-left", "p-right"}
-    assert all(draft.verified is False for draft in closed)
     assert all(draft.funding is None for draft in closed)
 
 
@@ -1768,7 +1778,9 @@ def test_unparsed_history_and_funding_withhold_and_a_duplicate_does_not(
         }
     ]
     _apply(session, bad_fee)
-    assert _rows(session)[0].net_pnl is None
+    # An unparsed funding bill makes funding unknown, not BloFin's P&L.
+    assert _rows(session)[0].funding is None
+    assert _money(_rows(session)[0].net_pnl) == Decimal("0.19000000")
     session.refresh(cycle)
     assert cycle.tags == ["mirror-cycle:incomplete"]
 
@@ -1839,7 +1851,7 @@ def test_non_dict_position_keeps_the_open_tracker(session: Session) -> None:
     assert cycle.tags == ["mirror-cycle:incomplete"]
 
 
-def test_conflicting_instrument_metadata_withholds_the_cycle(session: Session) -> None:
+def test_conflicting_instrument_metadata_marks_the_cycle_incomplete(session: Session) -> None:
     bundle = _paths(_FIXTURE["long"])
     bundle["/api/v1/market/instruments"] = [
         *_FIXTURE["instruments"],
@@ -1852,7 +1864,8 @@ def test_conflicting_instrument_metadata_withholds_the_cycle(session: Session) -
         settings=_settings(),
     )
     session.commit()
-    assert _rows(session)[0].net_pnl is None
+    # Contract metadata never feeds P&L; BloFin's realizedPnl and fee stand.
+    assert _money(_rows(session)[0].net_pnl) == Decimal("0.18600000")
     cycle = session.scalar(
         select(JournalTrade).where(JournalTrade.external_ref == "blofin-demo-mirror-cycle")
     )
@@ -2537,7 +2550,7 @@ def test_incremental_dependency_cap_keeps_the_cursor_and_logs_incremental(
     assert client.served == 300
     capped = [e for e in logs if e["event"] == "blofin_demo_manual_mirror_page_cap"]
     assert [(e["endpoint"], e["mode"]) for e in capped] == [(_FILLS_PATH, "incremental")]
-    assert "pnl-unverified" in (_rows(session)[0].tags or [])
+    assert "pnl-verified" in (_rows(session)[0].tags or [])
 
 
 def test_an_uncapped_read_reports_no_capped_endpoint(session: Session) -> None:
@@ -2689,3 +2702,44 @@ def test_full_read_peak_holds_one_raw_page_not_every_page() -> None:
     # Holding every raw page would add served * page_extra (~10 MB) to the peak.
     # Projection per page keeps at most a page or two of unread fields alive.
     assert fat - lean < 3 * page_extra, (fat, lean, page_extra)
+
+
+class _ParamClient(_Client):
+    def __init__(self, bundle: dict[str, list[dict[str, object]]]) -> None:
+        super().__init__(bundle)
+        self.begins: dict[str, list[str]] = {}
+
+    def request(self, method: str, path: str, **kwargs: object) -> list[dict[str, object]]:
+        params = kwargs.get("params")
+        if isinstance(params, dict) and "begin" in params:
+            self.begins.setdefault(path, []).append(str(params["begin"]))
+        return super().request(method, path, **kwargs)  # type: ignore[arg-type]
+
+
+def test_import_start_at_skips_positions_opened_before_the_cutoff(session: Session) -> None:
+    # partial_open opens at 2026-10-17T00:00Z with one partial close and one open remainder.
+    cutoff = datetime(2026, 10, 17, 1, tzinfo=UTC)
+    client = _ParamClient(_paths(_FIXTURE["partial_open"]))  # type: ignore[arg-type]
+    report = BloFinDemoManualMirror(client, now=NOW).apply(
+        session,
+        organization_id=ORG,
+        user_id=USER,
+        settings=_settings(blofin_import_start_at=cutoff),
+    )
+    session.commit()
+    assert report.created == 0 and report.closed == 0 and report.opens == 0
+    assert _rows(session) == []
+    floor = str(int(cutoff.timestamp() * 1000))
+    assert client.begins and all(
+        int(begin) >= int(floor) for begins in client.begins.values() for begin in begins
+    )
+
+
+def test_import_start_at_before_the_open_keeps_the_position(session: Session) -> None:
+    report = _apply(
+        session,
+        _FIXTURE["partial_open"],
+        blofin_import_start_at=datetime(2026, 10, 17, tzinfo=UTC),
+    )
+    assert report.closed == 1 and report.opens == 1  # type: ignore[attr-defined]
+    assert len(_rows(session)) == 2

@@ -64,6 +64,8 @@ class BloFinActivityRepository:
         facts: tuple[NativeActivityFact, ...],
         metadata: dict[str, dict[str, str | None]],
         now: datetime,
+        *,
+        import_start_ms: int | None = None,
     ) -> None:
         if (cursor.organization_id, cursor.environment, cursor.account_uid) != self.scope.key():
             raise ActivityConflictError("Checkpoint belongs to a different native account scope.")
@@ -75,6 +77,9 @@ class BloFinActivityRepository:
         for fact in facts:
             if fact.kind != cursor.kind:
                 raise ActivityConflictError("Activity stream identity mismatch.")
+            # BLOFIN_IMPORT_START_AT: older facts are skipped; the cursor still advances.
+            if import_start_ms is not None and int(fact.occurred_at_ms) < import_start_ms:
+                continue
             key = (*self.scope.key(), fact.kind, fact.native_id)
             existing = self.session.get(BloFinActivityFact, key)
             digest = fact_hash(fact)

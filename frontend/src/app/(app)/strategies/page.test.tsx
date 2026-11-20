@@ -69,7 +69,7 @@ it("shows confirmed / traded / won per family from its own read, without raw cou
 it("has no experiments, captured drafts or other configurations", async () => {
   render(<StrategiesPage />);
   await waitFor(() => expect(api.strategyBrain.overview).toHaveBeenCalled());
-  expect(screen.getAllByTestId("strategy-family")).toHaveLength(2);
+  expect(screen.getAllByTestId("strategy-family")).toHaveLength(3);
   expect(screen.queryByText(/Experiments/)).not.toBeInTheDocument();
   expect(screen.queryByText(/Captured strategy drafts/)).not.toBeInTheDocument();
   expect(screen.queryByText(/Other configurations/)).not.toBeInTheDocument();
@@ -108,9 +108,15 @@ it("lists a family's strategies with plain labels and a way back", async () => {
 
 it("drops the view on session invalidation and skips unauthenticated reads", async () => {
   const { rerender } = render(<StrategiesPage />);
-  await waitFor(() => expect(api.strategyBrain.overview).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(api.strategyBrain.overview).toHaveBeenCalledTimes(3));
   act(() => sessionCleared());
   state.identity = { user: null, organization: null };
   rerender(<StrategiesPage />);
   expect(screen.queryByTestId("trader-strategies")).not.toBeInTheDocument();
+});
+
+it("registers D-line as a separate draft research family", async () => {
+  render(<StrategiesPage />);
+  await waitFor(() => expect(api.strategyBrain.overview).toHaveBeenCalledWith({ family: "d_line", since: expect.any(String) }));
+  expect(screen.getByText("D-line", { selector: "h2" })).toBeInTheDocument();
 });

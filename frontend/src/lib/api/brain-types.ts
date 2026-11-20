@@ -1,7 +1,7 @@
 import type { Timeframe, TradeDirection } from "./types";
 
-export type BrainFamily = "nested_continuation" | "sfp";
-export type BrainKind = "operational_nested_continuation/v1" | "swing_failure_pattern/v1";
+export type BrainFamily = "nested_continuation" | "sfp" | "d_line";
+export type BrainKind = "operational_nested_continuation/v1" | "swing_failure_pattern/v1" | "d_line/v1";
 export interface BrainDraftBinding {
   symbol: string;
   direction: TradeDirection;
@@ -41,7 +41,18 @@ export interface BrainStrategy {
   execution_permission: string;
   spec: BrainDraftBinding & { kind: BrainKind; parameters: Record<string, unknown> };
 }
+export interface DlineResearchPlan {
+  gross_rr: string;
+  net_rr: string;
+  runner_fraction: string;
+  aggressive_tp: boolean;
+  targets: Array<{ price: string; fraction: string; sources: string[] }>;
+  confluences: Record<string, string>;
+  unavailable: string[];
+}
 export interface BrainSetup {
+  research_plan?: DlineResearchPlan;
+  manual_checklist?: string[];
   setup_id: string;
   strategy_version_id: string;
   state: string;

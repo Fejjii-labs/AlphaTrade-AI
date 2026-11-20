@@ -196,6 +196,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       void runStatusRefresh({ background: true });
     };
 
+    // Hidden tabs skip polling to conserve the API rate limit. The
+    // visibilitychange handler refreshes as soon as the tab is shown again.
     const intervalId = window.setInterval(
       refreshInBackground,
       POSTURE_REFRESH_INTERVAL_MS,

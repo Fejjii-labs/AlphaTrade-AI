@@ -25,10 +25,15 @@ def read_brain(
     timeframe = extract_timeframe(message)
     requested_families = [
         name
-        for name, pattern in (("sfp", r"\bsfp\b|swing failure"), ("nested", r"\bnested\b"))
+        for name, pattern in (
+            ("sfp", r"\bsfp\b|swing failure"),
+            ("nested", r"\bnested\b"),
+            ("d_line", r"\bd[- ]?line\b"),
+        )
         if re.search(pattern, message, re.I)
     ]
     family = requested_families[0] if len(requested_families) == 1 else None
+    stored_family = "nested_continuation" if family == "nested" else family
     data = overview(session, organization_id=organization_id, symbol=query_symbol, user_id=user_id)
     selected = re.search(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b", message, re.I)
     if selected:
@@ -43,7 +48,15 @@ def read_brain(
             setup
             for setup in data["setups"]
             if (not timeframe or setup.get("timeframe") == timeframe)
-            and (not family or (setup.get("family") == "sfp") == (family == "sfp"))
+            and (
+                not family
+                or (
+                    "nested_continuation"
+                    if setup.get("family", "nested") == "nested"
+                    else setup.get("family")
+                )
+                == stored_family
+            )
         ]
         if re.search(r"\b(?:current|latest|forming|state|status)\b", message, re.I):
             # Overview is newest first. Keep independent strategy/timeframe scopes;
@@ -65,9 +78,13 @@ def read_brain(
     definitions = []
     for strategy in data["strategies"]:
         spec = strategy["spec"]
-        is_sfp = spec["kind"] == "swing_failure_pattern/v1"
+        kind_family = {
+            "swing_failure_pattern/v1": "sfp",
+            "operational_nested_continuation/v1": "nested_continuation",
+            "d_line/v1": "d_line",
+        }.get(spec["kind"])
         if (
-            (family and is_sfp != (family == "sfp"))
+            (family and kind_family != stored_family)
             or (query_symbol and spec.get("symbol") != query_symbol.upper())
             or (timeframe and spec.get("trigger_timeframe") != timeframe)
         ):
@@ -148,6 +165,8 @@ def read_brain(
                 if family == "sfp"
                 else "No stored Nested Continuation setup exists for this query. "
                 if family == "nested"
+                else "No stored D-line setup exists for this query. "
+                if family == "d_line"
                 else "No stored Nested Continuation setup exists for this query. "
                 "No stored SFP setup exists for this query. "
             )

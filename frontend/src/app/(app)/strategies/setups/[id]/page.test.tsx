@@ -88,3 +88,18 @@ it("shows a stored CONFIRMED setup as EXPIRED at the exact expires_at instant", 
     await screen.findByRole("heading", { name: "SFP confirmed_sfp · EXPIRED" }),
   ).toBeInTheDocument();
 });
+
+it("shows D-line draft plan fractions, unavailable providers and manual checklist", async () => {
+  mocks.setup.mockResolvedValue({ ...setup, family: "d_line",
+    entry: "103.5", stop: "99.6", targets: ["107.4", "112"],
+    research_plan: { gross_rr: "2.18", net_rr: "2.15", runner_fraction: "0",
+      aggressive_tp: false, targets: [{ price: "107.4", fraction: "0.5", sources: ["fib:0.618"] }],
+      confluences: { htf_bias: "present" }, unavailable: ["automated_ob_provider", "automated_poc_provider"] },
+    manual_checklist: ["Are you OK with the loss?"] });
+  render(<BrainSetupPage />);
+  expect(await screen.findByRole("heading", { name: "D-line · CONFIRMED" })).toBeInTheDocument();
+  expect(screen.getByText(/Draft research only/)).toBeInTheDocument();
+  expect(screen.getByText(/107.4.*50%/)).toBeInTheDocument();
+  expect(screen.getByText(/automated ob provider/)).toBeInTheDocument();
+  expect(screen.getByText("Are you OK with the loss?")).toBeInTheDocument();
+});
