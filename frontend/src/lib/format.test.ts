@@ -1,3 +1,4 @@
+import { formatStrategyLabel } from "./format";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -115,5 +116,16 @@ describe("formatAmount", () => {
     expect(venueLabel("PAPER")).toBe("Paper");
     expect(venueLabel("SOME_TESTNET")).toBe("Some Testnet");
     expect(venueLabel(null)).toBe(UNAVAILABLE);
+  });
+});
+
+describe("strategy display labels", () => {
+  it("cleans generated names and shows each timeframe once", () => {
+    expect(formatStrategyLabel("Nested BTCUSDT long 15m 49ae657c4173", 2, ["15m"]))
+      .toBe("Nested · BTCUSDT · Long · 15m (v2)");
+    expect(formatStrategyLabel("SFP ETHUSDT short 1h 49ae657c4173", 1, ["15m", "1h"]))
+      .toBe("SFP · ETHUSDT · Short · 1h / 15m (v1)");
+    expect(formatStrategyLabel("3fa85f64-5717-4562-b3fc-2c963f66afa6")).toBe("Saved strategy");
+    expect(formatStrategyLabel("Opening range", 3)).toBe("Opening range (v3)");
   });
 });
