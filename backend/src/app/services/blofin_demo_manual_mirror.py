@@ -1503,6 +1503,9 @@ class BloFinDemoManualMirror:
         )
         self._max_pages = settings.blofin_demo_manual_mirror_max_pages
         begin, end, _begin_ms, end_ms = _window(self._now)
+        import_start = settings.blofin_import_start_at
+        if import_start is not None and import_start > begin:
+            begin = min(import_start, end)
         overlap = timedelta(seconds=settings.blofin_demo_manual_mirror_overlap_seconds)
         instruments = self._client.request("GET", _INSTRUMENTS, params=None, signed=False)
         positions = self._client.request("GET", _POSITIONS, params=None, signed=True)
@@ -1553,6 +1556,8 @@ class BloFinDemoManualMirror:
             window_begin=deps_begin,
             window_end=end,
         )
+        if import_start is not None:
+            built = _opened_since(built, import_start)
         backfill = self._backfill_pending(
             session,
             instrument_rows,
@@ -1931,6 +1936,19 @@ class BloFinDemoManualMirror:
             ambiguous=ambiguous,
             skipped_rows=built.skipped_rows,
         )
+
+
+def _opened_since(built: BuildResult, start: datetime) -> BuildResult:
+    """Drop positions opened before BLOFIN_IMPORT_START_AT (clean start)."""
+
+    def keep(draft: MirrorDraft) -> bool:
+        return draft.entry_time is not None and draft.entry_time >= start
+
+    return replace(
+        built,
+        closed=tuple(draft for draft in built.closed if keep(draft)),
+        opens=tuple(draft for draft in built.opens if keep(draft)),
+    )
 
 
 def _without_verified_economics(built: BuildResult) -> BuildResult:

@@ -2702,3 +2702,44 @@ def test_full_read_peak_holds_one_raw_page_not_every_page() -> None:
     # Holding every raw page would add served * page_extra (~10 MB) to the peak.
     # Projection per page keeps at most a page or two of unread fields alive.
     assert fat - lean < 3 * page_extra, (fat, lean, page_extra)
+
+
+class _ParamClient(_Client):
+    def __init__(self, bundle: dict[str, list[dict[str, object]]]) -> None:
+        super().__init__(bundle)
+        self.begins: dict[str, list[str]] = {}
+
+    def request(self, method: str, path: str, **kwargs: object) -> list[dict[str, object]]:
+        params = kwargs.get("params")
+        if isinstance(params, dict) and "begin" in params:
+            self.begins.setdefault(path, []).append(str(params["begin"]))
+        return super().request(method, path, **kwargs)  # type: ignore[arg-type]
+
+
+def test_import_start_at_skips_positions_opened_before_the_cutoff(session: Session) -> None:
+    # partial_open opens at 2026-10-17T00:00Z with one partial close and one open remainder.
+    cutoff = datetime(2026, 10, 17, 1, tzinfo=UTC)
+    client = _ParamClient(_paths(_FIXTURE["partial_open"]))  # type: ignore[arg-type]
+    report = BloFinDemoManualMirror(client, now=NOW).apply(
+        session,
+        organization_id=ORG,
+        user_id=USER,
+        settings=_settings(blofin_import_start_at=cutoff),
+    )
+    session.commit()
+    assert report.created == 0 and report.closed == 0 and report.opens == 0
+    assert _rows(session) == []
+    floor = str(int(cutoff.timestamp() * 1000))
+    assert client.begins and all(
+        int(begin) >= int(floor) for begins in client.begins.values() for begin in begins
+    )
+
+
+def test_import_start_at_before_the_open_keeps_the_position(session: Session) -> None:
+    report = _apply(
+        session,
+        _FIXTURE["partial_open"],
+        blofin_import_start_at=datetime(2026, 10, 17, tzinfo=UTC),
+    )
+    assert report.closed == 1 and report.opens == 1  # type: ignore[attr-defined]
+    assert len(_rows(session)) == 2

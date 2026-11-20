@@ -256,7 +256,13 @@ def run_activity_sync(
                             failed_kinds.add(kind)
                             continue
                         guard()
-                        repo.persist_page(cursor, facts, metadata, clock())
+                        repo.persist_page(
+                            cursor,
+                            facts,
+                            metadata,
+                            clock(),
+                            import_start_ms=settings.blofin_import_start_ms,
+                        )
                         session.commit()
                         pages += 1
                     return ActivitySyncResult(
