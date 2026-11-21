@@ -194,6 +194,7 @@ class AutomatedPaperLoop:
             autonomous_precheck_refusal,
             load_autonomous_strategy_status,
         )
+        from app.services.demo_data_mode import demo_data_mode_enabled
         from app.services.autonomous_trading_settings_service import (
             AutonomousTradingSettingsService,
         )
@@ -219,6 +220,8 @@ class AutomatedPaperLoop:
             ),
             # Only the governed BloFin demo loop skips the paper-eligibility gate.
             require_paper_eligible=self._risk_policy_kind() != "demo",
+            any_symbol=self._risk_policy_kind() == "demo"
+            and demo_data_mode_enabled(getattr(self, "_settings", None)),
         )
         if autonomous_block is not None:
             return _proof(candidate, "blocked", autonomous_block)

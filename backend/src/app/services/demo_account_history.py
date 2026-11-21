@@ -23,22 +23,27 @@ from app.schemas.execution_protocol import (
 )
 
 
-def has_demo_entry_history(session: Session, *, organization_id: UUID, account_id: UUID) -> bool:
+def has_demo_entry_history(
+    session: Session,
+    *,
+    organization_id: UUID,
+    account_id: UUID,
+    instrument: str | None = None,
+) -> bool:
     """Fail closed on demo ALLOW without immutable audited lifecycle resolution.
 
     The caller of the claim predicate holds the account safety epoch lock. The
     immutable, composite-bound plan is the venue authority; no mutable Journal
     state or client-supplied venue string can release this gate.
     Internal paper exposure still participates in the existing risk predicate.
+    An ``instrument`` (demo data mode) narrows the gate to that one coin.
     """
-    return (
-        session.scalar(
-            unresolved_demo_entries(select(ExecutionCommand.id), organization_id=organization_id)
-            .where(ExecutionCommand.account_id == account_id)
-            .limit(1)
-        )
-        is not None
-    )
+    query = unresolved_demo_entries(
+        select(ExecutionCommand.id), organization_id=organization_id
+    ).where(ExecutionCommand.account_id == account_id)
+    if instrument is not None:
+        query = query.where(TradePlanRevision.execution_instrument == instrument)
+    return session.scalar(query.limit(1)) is not None
 
 
 def unresolved_demo_entries[T: tuple[Any, ...]](

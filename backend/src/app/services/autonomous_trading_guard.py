@@ -74,13 +74,15 @@ def autonomous_target_matches(
     strategy_status: AutonomousStrategyStatus | None,
     *,
     require_paper_eligible: bool = True,
+    any_symbol: bool = False,
 ) -> str | None:
     selected = settings.strategy_scope == "selected"
-    if (selected and not settings.strategy_ids) or not settings.symbol:
+    # Demo data mode (services/demo_data_mode.py) trades every scanned coin.
+    if (selected and not settings.strategy_ids) or (not settings.symbol and not any_symbol):
         return "autonomous_settings_incomplete"
     if selected and target.strategy_id not in settings.strategy_ids:
         return "autonomous_strategy_mismatch"
-    if target.symbol.strip().upper() != settings.symbol:
+    if not any_symbol and target.symbol.strip().upper() != settings.symbol:
         return "autonomous_symbol_mismatch"
     if strategy_status is None or strategy_status.strategy_id != target.strategy_id:
         return "autonomous_strategy_status_unverified"
@@ -110,6 +112,7 @@ def autonomous_precheck_refusal(
     *,
     strategy_status: AutonomousStrategyStatus | None,
     require_paper_eligible: bool = True,
+    any_symbol: bool = False,
 ) -> str | None:
     # Unsaved settings keep the previous loop. Trade count, strategy, and coin
     # apply only after the user saves a row. The saved daily loss percent is
@@ -118,7 +121,11 @@ def autonomous_precheck_refusal(
     if settings.using_defaults:
         return None
     mismatch = autonomous_target_matches(
-        settings, target, strategy_status, require_paper_eligible=require_paper_eligible
+        settings,
+        target,
+        strategy_status,
+        require_paper_eligible=require_paper_eligible,
+        any_symbol=any_symbol,
     )
     if mismatch is not None:
         return mismatch
