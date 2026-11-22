@@ -4,13 +4,20 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 from uuid import uuid4
+
+import structlog
 
 from app.evidence_pipeline.types import CurrentPriceQuote
 from app.market_contracts.adapters.protocol import PerpetualMarketSource
-from app.market_contracts.coverage import TradeWindowCoverageProof
+from app.market_contracts.coverage import (
+    TradeWindowCoverageProof,
+    build_complete_trade_window_coverage,
+    build_complete_trade_window_coverage_from_hash,
+)
 from app.market_contracts.cursor import TradeStreamAssembler
-from app.market_contracts.cvd import accumulate_signed_quote, event_set_hash
+from app.market_contracts.cvd import accumulate_signed_quote
 from app.market_contracts.enums import (
     DataCompleteness,
     Finality,
@@ -44,7 +51,8 @@ from app.market_contracts.first_slice import (
 from app.market_contracts.freshness import first_slice_freshness_policy
 from app.market_contracts.identity import EvidenceMarketIdentity, InstrumentIdentity
 from app.market_contracts.ohlcv import ClosedOhlcvSeries
-from app.market_contracts.trades import OrderedTradeBatch
+from app.market_contracts.streaming_hash import TradeSetHasher, VenueIdSetHasher
+from app.market_contracts.trades import OrderedTradeBatch, TradeEvent
 from app.market_monitor.backoff import BackoffPolicy, delay_seconds
 from app.market_monitor.identity import monitor_semantic_hash
 from app.market_monitor.price import quote_from_terminal_trade
@@ -60,10 +68,111 @@ from app.market_monitor.types import (
     StreamHealth,
     SymbolMonitorSnapshot,
 )
+from app.observability.process_memory import release_allocator_memory
 from app.providers.base import ProviderHealth
 from app.schemas.common import Timeframe
 
+logger = structlog.get_logger("market_monitor.runtime")
+
 _MAX_LOOKBACK = timedelta(minutes=10)
+# A catch-up after a slow Watcher cycle, a backoff or a reconnect can cover up
+# to _MAX_LOOKBACK. Read as one list, that is ~3.3 KB of objects per aggTrade:
+# a busy 10-minute BTC window alone could fill the 512 MiB worker (OOM,
+# 2026-11-21). Read it in spans and keep only running totals.
+_MAX_FETCH_SPAN = timedelta(seconds=60)
+
+
+def _fetch_spans(start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+    """Split [start, end) into equal contiguous spans no longer than _MAX_FETCH_SPAN."""
+
+    count = max(1, -(-(end - start) // _MAX_FETCH_SPAN))
+    step = (end - start) / count
+    bounds = [start + step * index for index in range(count)] + [end]
+    return list(pairwise(bounds))
+
+
+class _WindowTotals:
+    """CVD totals and coverage for one polled window, fed one span at a time.
+
+    A complete multi-span window yields the same proof, totals and hashes as
+    one read of the whole window, without holding its trades.
+    """
+
+    def __init__(self, start: datetime) -> None:
+        self.start = start
+        self.end = start
+        self.spans = 0
+        self.complete = True
+        self.cvd_reason: str | None = None
+        self.signed = Decimal("0")
+        self.total = Decimal("0")
+        self.count = 0
+        self._first: TradeEvent | None = None
+        self._last: TradeEvent | None = None
+        self._trade_set = TradeSetHasher()
+        self._venue_ids = VenueIdSetHasher()
+        self._last_coverage: TradeWindowCoverageProof | None = None
+
+    def add(self, batch: OrderedTradeBatch, span_end: datetime) -> None:
+        self.spans += 1
+        self.end = span_end
+        coverage = batch.coverage
+        self._last_coverage = coverage
+        if batch.trades and not (
+            coverage.completeness is DataCompleteness.COMPLETE
+            and coverage.gap_state is GapState.NONE
+        ):
+            self.complete = False
+        if not self.complete or self.cvd_reason is not None or not batch.trades:
+            return
+        try:
+            signed, total = accumulate_signed_quote(batch.trades)
+        except MarketContractError as exc:
+            self.cvd_reason = type(exc).__name__
+            return
+        self.signed += signed
+        self.total += total
+        self.count += len(batch.trades)
+        for trade in batch.trades:
+            self._trade_set.add(
+                venue_trade_id=trade.venue_trade_id,
+                sequence=trade.sequence,
+                content_hash=trade.content_hash,
+            )
+            self._venue_ids.add(trade.venue_trade_id)
+        self._first = self._first or batch.trades[0]
+        self._last = batch.trades[-1]
+
+    @property
+    def usable(self) -> bool:
+        return self.complete and self.cvd_reason is None and self.count > 0
+
+    def event_hash(self) -> str:
+        return self._venue_ids.hexdigest()
+
+    def coverage(self) -> TradeWindowCoverageProof | None:
+        last = self._last_coverage
+        if last is None or self.spans == 1 or not self.complete or self.cvd_reason:
+            return last
+        if self._first is None or self._last is None:
+            return build_complete_trade_window_coverage(
+                identity=last.identity,
+                lineage_id=last.lineage_id,
+                requested_start=self.start,
+                requested_end=self.end,
+                trades=[],
+            )
+        return build_complete_trade_window_coverage_from_hash(
+            identity=last.identity,
+            lineage_id=last.lineage_id,
+            requested_start=self.start,
+            requested_end=self.end,
+            trade_set_hash=self._trade_set.hexdigest(),
+            first_trade_id=self._first.venue_trade_id,
+            last_trade_id=self._last.venue_trade_id,
+            first_sequence=self._first.sequence,
+            last_sequence=self._last.sequence,
+        )
 
 
 class SymbolMonitorRuntime:
@@ -100,6 +209,7 @@ class SymbolMonitorRuntime:
             connection_identity=uuid4(),
         )
         self._watermark_time: datetime | None = None
+        self._watermark_sequence: int | None = None
         self._window_coverage: TradeWindowCoverageProof | None = None
         self._window_signed: Decimal | None = None
         self._window_total: Decimal | None = None
@@ -229,6 +339,7 @@ class SymbolMonitorRuntime:
             connection_identity=uuid4(),
         )
         self._watermark_time = None
+        self._watermark_sequence = None
         self._clear_window_memory()
         self._series_15m = None
         self._series_4h = None
@@ -238,32 +349,62 @@ class SymbolMonitorRuntime:
         if self._assembler.cursor.gap_state is GapState.UNRECOVERABLE:
             self._assembler.release_unrecoverable_for_retry()
         start, end = self._window(now)
-        batch = self._source.fetch_ordered_trades(
-            identity=self.identity,
-            instrument=self.instrument,
-            start=start,
-            end=end,
-            source_connection_id=self._assembler.connection_identity,
-            receive_at=now,
-        )
-        self._assert_batch_identity(batch)
-        self._remember_window(batch)
+        spans = _fetch_spans(start, end)
+        totals = _WindowTotals(start)
         try:
-            if self._assembler.cursor.reconnect_state is ReconnectState.RECONNECTING:
-                self._assembler.recover_from_backfill(batch.trades, observed_at=now)
-                self._reason = MonitorReason.OK if batch.trades else MonitorReason.INCOMPLETE
-                return
-            if not batch.trades:
-                if self._assembler.accepted_trades():
-                    self._assembler.ingest([], observed_at=now, allow_empty=True)
-                    self._reason = MonitorReason.OK
-                else:
-                    self._reason = MonitorReason.INCOMPLETE
-                return
-            self._assembler.ingest(batch.trades, observed_at=now)
-            self._reason = MonitorReason.OK
+            for index, (span_start, span_end) in enumerate(spans):
+                batch = self._source.fetch_ordered_trades(
+                    identity=self.identity,
+                    instrument=self.instrument,
+                    start=span_start,
+                    end=span_end,
+                    source_connection_id=self._assembler.connection_identity,
+                    receive_at=now,
+                )
+                self._assert_batch_identity(batch)
+                totals.add(batch, span_end)
+                try:
+                    self._ingest_span(batch.trades, now, last=index == len(spans) - 1)
+                finally:
+                    self._release_book()
+                del batch
         finally:
-            self._release_book()
+            if totals.spans:
+                self._remember_window(totals)
+            if len(spans) > 1:
+                memory = release_allocator_memory()
+                logger.info(
+                    "market_monitor_catch_up",
+                    symbol=self.instrument.provider_symbol,
+                    window_seconds=round((end - start).total_seconds(), 1),
+                    spans=len(spans),
+                    trades=totals.count,
+                    rss_bytes=memory.rss_bytes,
+                )
+
+    def _ingest_span(self, trades: list[TradeEvent], now: datetime, *, last: bool) -> None:
+        if self._assembler.cursor.reconnect_state is ReconnectState.RECONNECTING:
+            watermark = self._watermark_sequence
+            resumed = (
+                any(trade.sequence > watermark for trade in trades)
+                if (watermark is not None)
+                else bool(trades)
+            )
+            if not resumed and not last:
+                # Nothing past the watermark yet; a later span carries the backfill.
+                return
+            self._assembler.recover_from_backfill(trades, observed_at=now)
+            self._reason = MonitorReason.OK if trades else MonitorReason.INCOMPLETE
+            return
+        if not trades:
+            if self._assembler.accepted_trades():
+                self._assembler.ingest([], observed_at=now, allow_empty=True)
+                self._reason = MonitorReason.OK
+            else:
+                self._reason = MonitorReason.INCOMPLETE
+            return
+        self._assembler.ingest(trades, observed_at=now)
+        self._reason = MonitorReason.OK
 
     def _refresh_ohlcv(self, now: datetime) -> None:
         self._ohlcv_reason = None
@@ -336,6 +477,7 @@ class SymbolMonitorRuntime:
         if self._assembler.cursor.reconnect_state is ReconnectState.RECONNECTING:
             return
         self._watermark_time = self._assembler.cursor.last_event_at
+        self._watermark_sequence = self._assembler.cursor.last_sequence
         self._assembler.begin_reconnect(observed_at=now)
         self._assembler.drop_retained_trades()
         self._clear_window_memory()
@@ -505,35 +647,21 @@ class SymbolMonitorRuntime:
             return MarketAvailability.STALE, MonitorReason.STALE_STREAM
         return MarketAvailability.DEGRADED, self._reason
 
-    def _remember_window(self, batch: OrderedTradeBatch) -> None:
+    def _remember_window(self, totals: _WindowTotals) -> None:
         """Keep the coverage proof and CVD totals. Do not keep the trade list."""
 
-        self._window_coverage = batch.coverage
-        self._window_cvd_reason = None
-        complete = (
-            bool(batch.trades)
-            and batch.coverage.completeness is DataCompleteness.COMPLETE
-            and batch.coverage.gap_state is GapState.NONE
-        )
-        if not complete:
+        self._window_coverage = totals.coverage()
+        self._window_cvd_reason = totals.cvd_reason
+        if not totals.usable:
             self._window_signed = None
             self._window_total = None
             self._window_count = 0
             self._window_event_hash = None
             return
-        try:
-            signed, total = accumulate_signed_quote(batch.trades)
-        except MarketContractError as exc:
-            self._window_signed = None
-            self._window_total = None
-            self._window_count = 0
-            self._window_event_hash = None
-            self._window_cvd_reason = type(exc).__name__
-            return
-        self._window_signed = signed
-        self._window_total = total
-        self._window_count = len(batch.trades)
-        self._window_event_hash = event_set_hash(batch.trades)
+        self._window_signed = totals.signed
+        self._window_total = totals.total
+        self._window_count = totals.count
+        self._window_event_hash = totals.event_hash()
 
     def _clear_window_memory(self) -> None:
         self._window_coverage = None
