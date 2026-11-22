@@ -51,6 +51,10 @@ class ScriptedPerpetualSource:
         self._bars_4h = list(bars_4h or [])
         self.fetch_count = 0
         self.last_error: str | None = None
+        # The monitor reads a long catch-up window in contiguous spans. Like a
+        # real venue, every span of one tick answers from the same queued tape.
+        self._span_item: list[TradeEvent] | None = None
+        self._span_end: datetime | None = None
 
     def enqueue(self, item: list[TradeEvent] | MarketContractError) -> None:
         self._queue.append(item)
@@ -105,15 +109,17 @@ class ScriptedPerpetualSource:
         self._assert_identity(identity, instrument)
         if end <= start:
             raise WrongMarketError("Trade window end must be after start.")
-        self.fetch_count += 1
-        if self._queue:
-            item = self._queue.pop(0)
-            if isinstance(item, MarketContractError):
-                self.last_error = type(item).__name__
-                raise item
-            raw = select_trades_in_window(item, start=start, end=end)
+        if self._span_end is not None and start == self._span_end:
+            item = self._span_item
         else:
-            raw = []
+            self.fetch_count += 1
+            item = self._queue.pop(0) if self._queue else None
+        self._span_item, self._span_end = None, None
+        if isinstance(item, MarketContractError):
+            self.last_error = type(item).__name__
+            raise item
+        raw = [] if item is None else select_trades_in_window(item, start=start, end=end)
+        self._span_item, self._span_end = item, end
         retagged: list[TradeEvent] = []
         for trade in raw:
             adapter_version = trade.adapter_version
