@@ -87,7 +87,7 @@ def propose_sfp(body: SfpSpec, tenant: TraderDep, session: SessionDep) -> dict:
 
 
 @router.post("/templates/dline", status_code=201)
-async def propose_dline(body: DlineSpec, tenant: TraderDep, session: SessionDep) -> dict:
+def propose_dline(body: DlineSpec, tenant: TraderDep, session: SessionDep) -> dict:
     result = create_template(
         session, organization_id=tenant.organization_id, user_id=tenant.user_id, spec=body
     )
