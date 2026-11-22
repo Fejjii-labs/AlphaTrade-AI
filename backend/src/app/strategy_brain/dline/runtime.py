@@ -117,12 +117,11 @@ def to_detection(
 
 
 def detections(scan: DlineLiveScan, *, evaluated_at: datetime) -> tuple[NestedDetection, ...]:
-    events: list[NestedDetection] = []
-    for signal in scan.signals:
-        events.append(to_detection(signal))
-        if signal.expires_at <= evaluated_at:
-            events.append(to_detection(signal, state=BrainSetupState.EXPIRED))
-    return tuple(events)
+    """CONFIRMED events only. Expiry is displayed from expires_at; an EXPIRED event would
+    move a traded row out of TRADE_CANDIDATE and break the journal close link."""
+
+    del evaluated_at
+    return tuple(to_detection(signal) for signal in scan.signals)
 
 
 def assemble_dline(

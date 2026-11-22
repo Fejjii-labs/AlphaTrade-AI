@@ -572,3 +572,14 @@ def test_every_scanned_coin_and_timeframe_has_a_bigger_trend():
         for tf in (Timeframe.M15, Timeframe.M30, Timeframe.H1):
             spec = DlineLiveSpec(symbol=symbol, trigger_timeframe=tf)
             assert spec.htf_timeframe in {Timeframe.H1, Timeframe.H2, Timeframe.H4}
+
+
+def test_later_scan_does_not_expire_a_traded_setup_row():
+    """Expiry is shown from expires_at; no EXPIRED event may block the journal close link."""
+
+    from app.strategy_brain.dline.runtime import detections
+    from tests.test_dline_live import BE_PATH, scan
+
+    result = scan([*COIL, *BE_PATH])
+    events = detections(result, evaluated_at=START + timedelta(days=1))
+    assert {e.state.value for e in events} == {"CONFIRMED"}
