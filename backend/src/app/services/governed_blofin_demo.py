@@ -51,6 +51,7 @@ from app.providers.exchange.governed_blofin import (
     demo_plan_leverage,
 )
 from app.providers.exchange.governed_blofin_exit import DemoPositionLineageError
+from app.providers.exchange.mapping import to_blofin_inst_id
 from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.approval import ApprovalDecisionRequest
 from app.schemas.common import (
@@ -94,6 +95,7 @@ from app.services.autonomous_trading import RiskLimitSnapshot
 from app.services.canonical_paper_execution import CanonicalPaperExecutionService
 from app.services.canonical_serialization import canonical_sha256
 from app.services.demo_account_history import has_demo_entry_history
+from app.services.demo_data_mode import demo_data_mode_enabled
 from app.services.demo_leverage_config import DemoLeverageConfig
 from app.services.demo_lifecycle_resolution import resolve_verified_demo_exit
 from app.services.demo_risk_v2 import (
@@ -761,6 +763,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 build_blofin_client(self._settings),
                 partial_exits=partial_exits_enabled(self._settings, BLOFIN_DEMO_VENUE),
             )
+            # Demo data mode: other coins' positions do not block this coin's entry.
+            self._provider.flat_per_instrument = demo_data_mode_enabled(self._settings)
         return self._provider
 
     def _account(self, session: Session, target: PaperScanTarget) -> ExecutionAccount | None:
@@ -823,8 +827,14 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             )
         # One demo account/key cannot acquire concurrent unrelated positions.
         # Reservations persist for accepted and uncertain entries, fail closed.
+        # Demo data mode narrows this to one entry per coin.
         if has_demo_entry_history(
-            session, account_id=account.id, organization_id=target.organization_id
+            session,
+            account_id=account.id,
+            organization_id=target.organization_id,
+            instrument=to_blofin_inst_id(target.symbol)
+            if demo_data_mode_enabled(self._settings)
+            else None,
         ):
             return _proof(candidate, "blocked", "demo_prior_entry_requires_reconciliation")
         from app.services.automated_paper_loop import _load_active_profile

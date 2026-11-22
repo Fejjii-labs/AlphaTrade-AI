@@ -233,6 +233,9 @@ class GovernedBloFinDemoProvider:
         # then is a ladder submitted, without attached TP/SL, for bot-managed
         # reduce-only closes.
         self.partial_exits_enabled = partial_exits is True
+        # Set by the governed loop in demo data mode (services/demo_data_mode.py):
+        # flatness is proven for the entry's instrument only. Default account-wide.
+        self.flat_per_instrument = False
         self._account = BloFinAccountProvider(client)
         self._clock = clock
         self._expected_native_uid: str | None = None
@@ -342,7 +345,7 @@ class GovernedBloFinDemoProvider:
             )
             tier_sizes = _tier_sizes(tier_rows)
         account_observed_at = self._clock()
-        self.verify_flat_account()
+        self.verify_flat_account(instrument if self.flat_per_instrument else None)
         balance = self._read_usdt_balance()
         with preflight_stage("quote", "GET /api/v1/market/books"):
             started = monotonic()
@@ -386,13 +389,29 @@ class GovernedBloFinDemoProvider:
             maintenance_tiers=maintenance_tiers,
         )
 
-    def verify_flat_account(self) -> None:
-        """Account-wide proof, including orders on other watchlist markets."""
+    def verify_flat_account(self, instrument: str | None = None) -> None:
+        """Account-wide proof, including orders on other watchlist markets.
+
+        With an ``instrument`` (demo data mode) only that market must be flat and
+        idle; every row is still read, and a row without an instId cannot prove
+        the market flat.
+        """
+
+        def other_market(row: object) -> bool:
+            return (
+                instrument is not None
+                and isinstance(row, dict)
+                and isinstance(row.get("instId"), str)
+                and row["instId"] != instrument
+            )
+
         with preflight_stage("positions", "GET /api/v1/account/positions"):
             positions = _account_rows(
                 self._client.request("GET", "/api/v1/account/positions", signed=True)
             )
             for position in positions:
+                if other_market(position):
+                    continue
                 quantity = Decimal(str(position.get("positions")))
                 if not quantity.is_finite() or quantity != 0:
                     raise ValueError("Demo position already open or unreadable; new entry refused.")
@@ -406,7 +425,7 @@ class GovernedBloFinDemoProvider:
                         "GET", f"/api/v1/trade/{endpoint}", params={"limit": "100"}, signed=True
                     )
                 )
-                if pending:
+                if not all(other_market(row) for row in pending):
                     raise ValueError("Demo pending orders or protection; new entry refused.")
 
     def apply_configured_leverage(
@@ -452,8 +471,9 @@ class GovernedBloFinDemoProvider:
         with preflight_stage("position_mode", "GET /api/v1/account/position-mode"):
             if self._account.get_position_mode().position_mode != "net_mode":
                 raise ValueError("Governed demo requires the existing NET account mode.")
-        self.verify_flat_account()
         instrument = to_blofin_inst_id(symbol)
+        # Leverage is per instrument; the margin mode below is account-wide.
+        self.verify_flat_account(instrument if self.flat_per_instrument else None)
         with preflight_stage("margin_mode", "GET /api/v1/account/margin-mode"):
             current = self._account.get_account_margin_mode()
             if not current.supplied:
@@ -467,6 +487,8 @@ class GovernedBloFinDemoProvider:
         except Exception:
             previous_leverage = "unknown"
         if current.margin_mode != margin_mode:
+            if self.flat_per_instrument:
+                self.verify_flat_account()
             with preflight_stage("margin_mode_write", "POST /api/v1/account/set-margin-mode"):
                 try:
                     data = self._client.request(

@@ -73,6 +73,7 @@ from app.services.approval_service import ApprovalService
 from app.services.canonical_execution_journal import CANONICAL_EXECUTION_SOURCE_SYSTEM
 from app.services.canonical_execution_payload import CanonicalExecutionPayloadSerializerV1
 from app.services.demo_account_history import has_demo_entry_history
+from app.services.demo_data_mode import demo_data_mode_enabled
 from app.services.execution_client_order_id import derive_entry_client_order_id
 from app.services.execution_exposure import QuoteExposureError, linear_quote_exposure
 from app.services.execution_integrity import (
@@ -239,6 +240,7 @@ class PaperPlanClaimService:
         )
         self._run_hook(self._hooks.after_epoch_lock)
         # The epoch serializes competing demo claims across all instruments.
+        # Demo data mode holds one entry per instrument instead of per account.
         if (
             blocked_reason is None
             and plan.execution_venue == "BLOFIN_DEMO"
@@ -246,6 +248,10 @@ class PaperPlanClaimService:
                 self._session,
                 organization_id=request.organization_id,
                 account_id=request.account_id,
+                instrument=plan.execution_instrument
+                if plan.schema_version != "ManualDemoTradePlanV1"
+                and demo_data_mode_enabled(self._settings)
+                else None,
             )
         ):
             blocked_reason = "demo_account_already_claimed"

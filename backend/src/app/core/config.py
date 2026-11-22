@@ -278,6 +278,12 @@ class Settings(BaseSettings):
     manual_blofin_demo_enabled: bool = False
     governed_blofin_demo_enabled: bool = False
     governed_demo_sfp_enabled: bool = False
+    # Demo data mode (BloFin DEMO only, default off; needs RISK_MODEL_V2_ENABLED and
+    # never applies with real trading). Takes every valid setup on every scanned coin:
+    # the autonomous single-coin setting and the one-open-demo-position-per-account
+    # rule are lifted. One position per coin, the kill switch and the v2 daily stop
+    # stay (services/demo_data_mode.py).
+    governed_demo_data_mode_enabled: bool = False
     # Per-trade stop-loss band as a percent of total portfolio equity. A demo
     # plan is sized so its stop-distance loss lands inside [min, max]; a plan
     # that cannot fit is refused. Adjustable, not a fixed rule.
@@ -822,6 +828,15 @@ class Settings(BaseSettings):
         if value is not None and value.utcoffset() is None:
             raise ValueError("BLOFIN_IMPORT_START_AT needs a UTC offset (e.g. a trailing Z).")
         return value
+
+    @field_validator("governed_demo_data_mode_enabled", mode="before")
+    @classmethod
+    def _governed_demo_data_mode_flag(cls, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in {"", "true", "false"}:
+            return value.strip().lower() == "true"
+        raise ValueError("GOVERNED_DEMO_DATA_MODE_ENABLED must be true or false.")
 
     @field_validator("governed_demo_sfp_enabled", mode="before")
     @classmethod
