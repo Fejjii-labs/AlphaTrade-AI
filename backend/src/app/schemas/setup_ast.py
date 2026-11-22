@@ -14,6 +14,7 @@ from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, mod
 
 from app.schemas.common import StrictModel, TradeDirection
 from app.schemas.nested_continuation import NestedContinuationSpec
+from app.strategy_brain.dline.live import DlineLiveSpec
 from app.strategy_brain.sfp.contracts import SfpSpec
 from app.strategy_brain.trendpulse_1r.contracts import TrendPulseSpec
 
@@ -200,6 +201,7 @@ class PatternAst(StrictModel):
     nested_spec: NestedContinuationSpec | None = None
     sfp_spec: SfpSpec | None = None
     trendpulse_spec: TrendPulseSpec | None = None
+    dline_spec: DlineLiveSpec | None = None
     symbols: list[str] = Field(min_length=1)
     trigger_timeframe: str = Field(min_length=1, max_length=8)
     context_timeframe: str | None = Field(default=None, max_length=8)
@@ -213,7 +215,8 @@ class PatternAst(StrictModel):
 
     @model_validator(mode="after")
     def one_family(self) -> Self:
-        if sum(s is not None for s in (self.nested_spec, self.sfp_spec, self.trendpulse_spec)) > 1:
+        families = (self.nested_spec, self.sfp_spec, self.trendpulse_spec, self.dline_spec)
+        if sum(s is not None for s in families) > 1:
             raise ValueError("A pattern must bind exactly one family")
         if self.sfp_spec is None and self.expiration_final_bars > 500:
             raise ValueError("Legacy pattern expiration_final_bars must be <= 500")
@@ -230,6 +233,8 @@ class PatternAst(StrictModel):
             payload.pop("sfp_spec", None)
         if self.trendpulse_spec is None:
             payload.pop("trendpulse_spec", None)
+        if self.dline_spec is None:
+            payload.pop("dline_spec", None)
         return payload
 
 

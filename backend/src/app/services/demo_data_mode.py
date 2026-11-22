@@ -19,4 +19,5 @@ def demo_data_mode_enabled(settings: Settings | None) -> bool:
         and getattr(settings, "governed_demo_data_mode_enabled", False) is True
         and getattr(settings, "risk_model_v2_enabled", False) is True
         and getattr(settings, "enable_real_trading", True) is False
+        and getattr(settings, "real_trading_enabled", True) is False
     )

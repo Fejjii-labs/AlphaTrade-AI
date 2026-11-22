@@ -23,18 +23,19 @@ from app.services.display_names import display_name, family_label
 from app.services.strategy_library_service import StrategyLibraryService
 from app.services.strategy_versioning import StrategyVersioningService
 from app.strategy_brain.dline.contracts import DLINE_KIND, DlineSpec
+from app.strategy_brain.dline.live import DLINE_LIVE_KIND, DlineLiveSpec
 from app.strategy_brain.records import NESTED_FAMILY, aware
 from app.strategy_brain.sfp.contracts import SFP_KIND, SfpSpec
 
 BrainFamily = Literal["nested_continuation", "sfp", "d_line"]
 
 
-def template_name(spec: NestedContinuationSpec | SfpSpec | DlineSpec) -> str:
+def template_name(spec: NestedContinuationSpec | SfpSpec | DlineSpec | DlineLiveSpec) -> str:
     """Shared identity for a preview and explicit idempotent template creation."""
     signature = canonical_sha256(spec.model_dump(mode="json"))[:12]
     family_name = (
         "D-line"
-        if isinstance(spec, DlineSpec)
+        if isinstance(spec, (DlineSpec, DlineLiveSpec))
         else "SFP"
         if isinstance(spec, SfpSpec)
         else "Nested"
@@ -50,7 +51,7 @@ def create_template(
     *,
     organization_id: UUID,
     user_id: UUID,
-    spec: NestedContinuationSpec | SfpSpec | DlineSpec,
+    spec: NestedContinuationSpec | SfpSpec | DlineSpec | DlineLiveSpec,
 ) -> dict[str, Any]:
     name = template_name(spec)
     sfp = isinstance(spec, SfpSpec)
@@ -144,13 +145,53 @@ def create_template(
                 ),
             }
         )
+    if isinstance(spec, DlineLiveSpec):
+        p = spec.parameters
+        card = card.model_copy(
+            update={
+                "entry_conditions": [
+                    "Candle body close beyond a 2-3 touch trendline (wicks do not count)",
+                    f"Entry mode {p.entry_mode}: {p.breakout_fraction} at the breakout "
+                    f"(next open), rest as a limit at the line for {p.retest_expiry_bars} bars",
+                ],
+                "confirmation_conditions": [
+                    "Closed candles only; line frozen at the trigger",
+                    f"Slope {p.ideal_angle_degrees} +/- {p.angle_tolerance_degrees} degrees "
+                    "(ATR-normalized)",
+                    f"{spec.htf_timeframe.value} structure: higher highs/lows for longs, "
+                    "lower highs/lows for shorts",
+                ],
+                "invalidation": [
+                    "Structure stop hit on the first attempt ends the line",
+                    f"Max {p.max_attempts_per_line} attempts; a second only after a break-even "
+                    "close following TP1",
+                ],
+                "stop_loss": ["Beyond the structure low (long) / high (short)"],
+                "take_profit_plan": [
+                    f"TP1 {p.tp1_fraction} at {p.tp1_distance_fraction} of the way to the "
+                    "structure extreme, then stop to break-even plus fees",
+                    f"TP2 {p.tp2_fraction} at the structure extreme; "
+                    f"TP3 {p.tp3_fraction} at the {spec.htf_timeframe.value} swing; "
+                    f"runner {p.runner_fraction}",
+                    f"Reward/risk to TP2 at least {p.minimum_reward_risk}",
+                ],
+                "position_sizing": ["Governed BloFin demo risk v2 sizing; demo only"],
+                "brain": StrategyBrainDefinition(
+                    family="d_line",
+                    structure_conditions=["trendline touches", "body close", "HTF structure"],
+                    setup_conditions=["Required evidence AVAILABLE", "immutable approved version"],
+                    alert_rules=[],
+                    execution_constraints=["blofin_demo_only", "demo_data_mode_required"],
+                ),
+            }
+        )
     strategy = StrategyLibraryService(session).create(
         UserStrategyCreate(
             organization_id=organization_id,
             user_id=user_id,
             name=card.strategy_name,
             setup_type=StrategyId.D_LINE
-            if isinstance(spec, DlineSpec)
+            if isinstance(spec, (DlineSpec, DlineLiveSpec))
             else StrategyId.SFP
             if sfp
             else StrategyId.NESTED_CONTINUATION,
@@ -317,7 +358,8 @@ def overview(
         if (
             version is None
             or not version.pattern_spec
-            or version.pattern_spec.get("kind") not in {NESTED_KIND, SFP_KIND, DLINE_KIND}
+            or version.pattern_spec.get("kind")
+            not in {NESTED_KIND, SFP_KIND, DLINE_KIND, DLINE_LIVE_KIND}
         ):
             continue
         lifecycle = StrategyVersioningService(session).latest_lifecycle_event_for_version(
@@ -351,6 +393,8 @@ def overview(
                 "created_from": version.change_source.value,
                 "execution_permission": "none"
                 if version.pattern_spec.get("kind") == DLINE_KIND
+                else "blofin_demo_data_mode_only"
+                if version.pattern_spec.get("kind") == DLINE_LIVE_KIND
                 else "sfp_plan_path_unavailable"
                 if version.pattern_spec.get("kind") == SFP_KIND
                 else "paper_gates_required",

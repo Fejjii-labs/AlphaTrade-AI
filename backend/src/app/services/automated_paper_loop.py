@@ -1550,6 +1550,68 @@ def _sfp_quote_refusal(
     return None
 
 
+_DLINE_TARGET_FORMULAS = {
+    "tp1": "dline-tp1-half-to-structure",
+    "tp2": "dline-tp2-structure-extreme",
+    "tp3": "dline-tp3-htf-swing",
+}
+
+
+def dline_quote_refusal(
+    signal: object, *, entry: Decimal, stop: Decimal, spec: object
+) -> str | None:
+    """Recheck the D-line minimum reward/risk to TP2 at the executable entry."""
+
+    long = signal.direction is TradeDirection.LONG
+    tp2 = signal.targets[1].price
+    risk = (entry - stop) if long else (stop - entry)
+    reward = (tp2 - entry) if long else (entry - tp2)
+    if risk <= 0 or reward <= 0:
+        return "dline_quote_beyond_plan"
+    if reward / risk < spec.parameters.minimum_reward_risk:
+        return "dline_quote_reward_risk_below_minimum"
+    return None
+
+
+def dline_ladder(
+    signal: object, spec: object
+) -> tuple[tuple[tuple[Decimal, Decimal, str], ...], dict[str, object] | None]:
+    """TP1/TP2/TP3 legs plus the closed-candle runner of the shared partial exits."""
+
+    from app.services.partial_exits.runner import RUNNER_RULE_ID, RUNNER_RULE_VERSION
+
+    ladder = tuple((t.price, t.fraction, _DLINE_TARGET_FORMULAS[t.label]) for t in signal.targets)
+    if signal.runner_fraction <= 0:
+        return ladder, None
+    return ladder, {
+        "enabled": True,
+        "activation_target_order": len(ladder),
+        "remaining_quantity_fraction": str(signal.runner_fraction),
+        "rule_id": RUNNER_RULE_ID,
+        "rule_version": RUNNER_RULE_VERSION,
+        "expression": f"lookback_bars={spec.parameters.runner_trail_lookback_bars}",
+    }
+
+
+def dline_notes(signal: object, spec: object, *, demo: bool = False) -> str:
+    p = spec.parameters
+    parts = [
+        f"D-line attempt={signal.attempt}",
+        f"line={signal.line_id}",
+        f"touches={signal.touch_count}",
+        f"angle={signal.angle_degrees}",
+        f"confidence={signal.confidence}",
+        f"htf={signal.htf_timeframe.value}:{signal.htf_trend}",
+        f"entry_mode={p.entry_mode}",
+        f"breakout_fraction={p.breakout_fraction if p.entry_mode == 'split' else 1}",
+        f"retest_limit={signal.retest_limit}",
+        f"retest_expires_at={signal.retest_expires_at.isoformat()}",
+    ]
+    if demo and p.entry_mode == "split":
+        parts.append("retest_leg=not_sent_demo_market_entries_only")
+    return "; ".join(parts)[:1000]
+
+
 def paper_spec_refusal(
     spec: object,
     evaluation_params: object,
@@ -1557,8 +1619,9 @@ def paper_spec_refusal(
 ) -> str | None:
     """Refuse every family the paper and demo plan builders do not know.
 
-    Nested and SFP run in both directions. First-slice runs shorts only, with
-    its own evaluation params. Anything else, in either direction, is
+    Nested, SFP and D-line run in both directions (D-line on the governed demo
+    only, see ``_plan_terms``). First-slice runs shorts only, with its own
+    evaluation params. Anything else, in either direction, is
     ``spec_not_paper_executable``: it is never coerced into first-slice and
     never reduced to a single-target plan. ``direction=None`` checks the
     family only.
@@ -1567,9 +1630,10 @@ def paper_spec_refusal(
     from app.schemas.nested_continuation import NestedContinuationSpec
     from app.schemas.strategy_pattern_spec import FirstSliceAuthoredPatternSpec
     from app.signal_fusion.first_slice_adapter import FirstSliceEvaluationParams
+    from app.strategy_brain.dline.live import DlineLiveSpec
     from app.strategy_brain.sfp.contracts import SfpSpec
 
-    if isinstance(spec, (NestedContinuationSpec, SfpSpec)):
+    if isinstance(spec, (NestedContinuationSpec, SfpSpec, DlineLiveSpec)):
         return None
     if not isinstance(spec, FirstSliceAuthoredPatternSpec):
         return "spec_not_paper_executable"
@@ -1603,12 +1667,14 @@ def _plan_terms(
     fixed_risk_percent: Decimal | None = None,
     internal_paper_sfp: bool = False,
     governed_demo_sfp: bool = False,
+    governed_demo_dline: bool = False,
     side_aware_fill: bool = False,
     spread_haircut: Decimal = Decimal("0"),
     min_stop_atr_floor: Decimal = Decimal("0"),
 ) -> TradePlanRevisionCreate | str:
     from app.schemas.nested_continuation import NestedContinuationSpec
     from app.strategy_brain.detector import detect_nested
+    from app.strategy_brain.dline.live import DlineLiveSpec
     from app.strategy_brain.records import scoped_setup_id
     from app.strategy_brain.sfp.contracts import SfpSpec
 
@@ -1616,6 +1682,9 @@ def _plan_terms(
     # Only the two explicitly authorized paper/demo callers opt in.
     if isinstance(spec, SfpSpec) and not (internal_paper_sfp or governed_demo_sfp):
         return "sfp_execution_plan_not_authorized"
+    # D-line collects data on the governed BloFin demo only (owner decision 2026-11-22).
+    if isinstance(spec, DlineLiveSpec) and not governed_demo_dline:
+        return "dline_execution_demo_only"
     if paper_spec_refusal(spec, None, None) is not None:
         # Unknown families are refused here too, never coerced to first-slice.
         return "spec_not_paper_executable"
@@ -1635,6 +1704,7 @@ def _plan_terms(
         fill_quote = filled
     sfp = isinstance(spec, SfpSpec)
     nested = isinstance(spec, NestedContinuationSpec)
+    dline_signal = None
     structural_setup_id: UUID | None = None
     nested_target: Decimal | None = None
     sfp_target: Decimal | None = None
@@ -1645,6 +1715,15 @@ def _plan_terms(
         if isinstance(resolved, str):
             return resolved
         entry, stop, sfp_target, structural_setup_id = resolved
+    elif isinstance(spec, DlineLiveSpec):
+        from app.strategy_brain.dline.runtime import current_signal_from_assembly
+
+        dline_signal = current_signal_from_assembly(assembled, spec)
+        if dline_signal is None:
+            return "setup_not_confirmed"
+        entry = fill_quote
+        stop = dline_signal.stop
+        structural_setup_id = dline_signal.setup_id
     elif isinstance(spec, NestedContinuationSpec):
         events = detect_nested(assembled.bundle.bars_15m, spec, evaluated_at=assembled.evaluated_at)
         if not events or events[-1].state.value != "CONFIRMED":
@@ -1685,7 +1764,16 @@ def _plan_terms(
     if (is_long and stop >= entry) or (not is_long and stop <= entry):
         return "invalidated_by_price"
     distance = abs(stop - entry)
-    if sfp:
+    ladder = None
+    runner = None
+    if dline_signal is not None:
+        refusal = dline_quote_refusal(dline_signal, entry=entry, stop=stop, spec=spec)
+        if refusal is not None:
+            return refusal
+        ladder, runner = dline_ladder(dline_signal, spec)
+    if dline_signal is not None:
+        target = dline_signal.targets[0].price
+    elif sfp:
         target = sfp_target
     elif nested:
         target = nested_target
@@ -1782,11 +1870,18 @@ def _plan_terms(
             if nested
             else "paper-internal-1r"
         ),
+        ladder=ladder,
+        runner=runner,
         presentation={
             "channel": AuthorizationChannel.API.value,
             "display_title": (
-                "Internal paper SFP structure plan" if sfp else "Internal paper confirmed setup"
+                "Internal paper SFP structure plan"
+                if sfp
+                else "D-line checklist plan"
+                if dline_signal is not None
+                else "Internal paper confirmed setup"
             ),
+            **({"notes": dline_notes(dline_signal, spec)} if dline_signal is not None else {}),
             "strategy_id": str(policy.strategy_id),
             "strategy_version_id": str(candidate.strategy_version_id),
             "setup_id": str(

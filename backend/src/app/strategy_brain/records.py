@@ -14,7 +14,7 @@ from app.strategy_brain.detector import NAMESPACE, NestedDetection, detection_ha
 from app.strategy_brain.sfp.contracts import SfpDetection
 
 TERMINAL = {"INVALIDATED", "EXPIRED", "COMPLETED"}
-# Only Nested and SFP write setups; rows stored before Nested carried a family are Nested.
+# Nested, SFP and D-line write setups; rows stored before Nested carried a family are Nested.
 NESTED_FAMILY = "nested_continuation"
 ALLOWED = {
     "NO_SETUP": {"WATCH", "FORMING"},
@@ -65,6 +65,7 @@ def record_detections(
     events: tuple[NestedDetection, ...],
     evidence_hash: str,
     evaluated_at: datetime,
+    family: str = NESTED_FAMILY,
 ) -> UUID | None:
     latest_id = None
     for event in events:
@@ -117,7 +118,7 @@ def record_detections(
         row.expires_at = event.expires_at
         row.payload = {
             **event.model_dump(mode="json"),
-            "family": NESTED_FAMILY,
+            "family": family,
             "setup_id": str(identity),
             "strategy_version_id": str(version_id),
             "strategy_id": str(strategy_id),

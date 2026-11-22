@@ -43,6 +43,7 @@ from app.signal_fusion.strategy_evaluation_policy import (
     evaluate_canonical_strategy,
 )
 from app.signal_fusion.types import ExecutableSetupRef, RoleTimeframeBinding, RuleWeight
+from app.strategy_brain.dline.live import DLINE_LIVE_KIND, DlineLiveSpec
 from app.strategy_brain.sfp.contracts import SFP_KIND, SfpSpec
 from app.strategy_brain.trendpulse_1r.contracts import TRENDPULSE_KIND, TrendPulseSpec
 
@@ -201,7 +202,13 @@ def evaluate_canonical_strategy_for_version(
 
 def _parse_authored_spec(
     version: UserStrategyVersion,
-) -> FirstSliceAuthoredPatternSpec | NestedContinuationSpec | SfpSpec | TrendPulseSpec:
+) -> (
+    FirstSliceAuthoredPatternSpec
+    | NestedContinuationSpec
+    | SfpSpec
+    | TrendPulseSpec
+    | DlineLiveSpec
+):
     if version.pattern_spec is None:
         raise StrategyEvaluationPolicyError(
             "Executable evaluation requires a stored pattern_spec on the version.",
@@ -214,6 +221,8 @@ def _parse_authored_spec(
             return TrendPulseSpec.model_validate(version.pattern_spec)
         if version.pattern_spec.get("kind") == SFP_KIND:
             return SfpSpec.model_validate(version.pattern_spec)
+        if version.pattern_spec.get("kind") == DLINE_LIVE_KIND:
+            return DlineLiveSpec.model_validate(version.pattern_spec)
         return FirstSliceAuthoredPatternSpec.model_validate(version.pattern_spec)
     except ValidationError as exc:
         raise StrategyEvaluationPolicyError(
@@ -227,7 +236,11 @@ def _fusion_policy_for_compiled(
     organization_id: UUID,
     strategy_version_id: UUID,
     compiled: CompiledSetupDefinition,
-    spec: FirstSliceAuthoredPatternSpec | NestedContinuationSpec | SfpSpec | TrendPulseSpec,
+    spec: FirstSliceAuthoredPatternSpec
+    | NestedContinuationSpec
+    | SfpSpec
+    | TrendPulseSpec
+    | DlineLiveSpec,
 ) -> FusionPolicy:
     setup = ExecutableSetupRef(
         setup_definition_id=compiled.id,
@@ -247,9 +260,13 @@ def _fusion_policy_for_setup(
     organization_id: UUID,
     strategy_version_id: UUID,
     setup: ExecutableSetupRef,
-    spec: FirstSliceAuthoredPatternSpec | NestedContinuationSpec | SfpSpec | TrendPulseSpec,
+    spec: FirstSliceAuthoredPatternSpec
+    | NestedContinuationSpec
+    | SfpSpec
+    | TrendPulseSpec
+    | DlineLiveSpec,
 ) -> FusionPolicy:
-    nested = isinstance(spec, (NestedContinuationSpec, SfpSpec))
+    nested = isinstance(spec, (NestedContinuationSpec, SfpSpec, DlineLiveSpec))
     if isinstance(spec, TrendPulseSpec):
         return build_fusion_policy(
             policy_version=spec.kind,
@@ -311,9 +328,9 @@ def project_executable_to_market(
     """
 
     spec = executable.authored_spec
-    if not isinstance(spec, (NestedContinuationSpec, SfpSpec)):
+    if not isinstance(spec, (NestedContinuationSpec, SfpSpec, DlineLiveSpec)):
         raise StrategyEvaluationPolicyError(
-            "Only SFP and Nested strategies may be projected onto another market.",
+            "Only SFP, Nested and D-line strategies may be projected onto another market.",
             reason_code="market_projection_unsupported",
         )
     token = symbol.strip().upper()

@@ -307,15 +307,21 @@ def record_paper_link(
     assembled, policy = last
     from app.schemas.nested_continuation import NestedContinuationSpec
     from app.signal_fusion.enums import EvidenceRole
+    from app.strategy_brain.dline.live import DlineLiveSpec
     from app.strategy_brain.sfp.contracts import SfpDetection, SfpSpec
     from app.strategy_brain.sfp.detector import detect_sfp
     from app.strategy_brain.sfp_runtime.assessment import select_detection
 
-    if not isinstance(policy.authored_spec, (NestedContinuationSpec, SfpSpec)):
+    if not isinstance(policy.authored_spec, (NestedContinuationSpec, SfpSpec, DlineLiveSpec)):
         return
     events: tuple[SfpDetection, ...] | tuple[NestedDetection, ...]
     nested_latest: NestedDetection | None = None
-    if isinstance(policy.authored_spec, SfpSpec):
+    if isinstance(policy.authored_spec, DlineLiveSpec):
+        from app.strategy_brain.dline.runtime import current_signal_from_assembly, to_detection
+
+        signal = current_signal_from_assembly(assembled, policy.authored_spec)
+        events = (to_detection(signal),) if signal is not None else ()
+    elif isinstance(policy.authored_spec, SfpSpec):
         observations = tuple(
             o
             for o, role in zip(
@@ -356,9 +362,9 @@ def record_paper_link(
             now=now,
         )
 
-    # SFP persists its canonical paper link, but has no accepted Telegram producer.
-    # The Nested-only alert adapter cannot interpret SFP detection fields.
-    if isinstance(policy.authored_spec, SfpSpec):
+    # SFP and D-line persist their canonical paper link, but have no accepted Telegram
+    # producer. The Nested-only alert adapter cannot interpret their detection fields.
+    if isinstance(policy.authored_spec, (SfpSpec, DlineLiveSpec)):
         return None
     if nested_latest is None:
         return None

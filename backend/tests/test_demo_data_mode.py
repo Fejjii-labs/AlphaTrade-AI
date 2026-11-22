@@ -70,6 +70,12 @@ def test_data_mode_needs_risk_v2_and_no_real_trading() -> None:
     assert not demo_data_mode_enabled(None)
 
 
+def test_data_mode_refuses_when_derived_real_trading_flag_is_on(monkeypatch) -> None:
+    # real_trading_enabled is a fail-closed property (always False today); guard on it too.
+    monkeypatch.setattr(Settings, "real_trading_enabled", property(lambda self: True))
+    assert not demo_data_mode_enabled(_settings())
+
+
 # --------------------------------------------------------------------------- #
 # Guard: any coin, same strategy/approval/cap checks
 # --------------------------------------------------------------------------- #

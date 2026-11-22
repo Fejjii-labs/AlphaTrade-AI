@@ -153,14 +153,25 @@ class AssemblingWatcherScanEvidence:
         assembled, executable = self._last_assembly
         from app.schemas.nested_continuation import NestedContinuationSpec
         from app.strategy_brain.detector import detect_nested
+        from app.strategy_brain.dline.live import DlineLiveSpec
         from app.strategy_brain.records import lock_candidate_episode
         from app.strategy_brain.sfp.contracts import SfpSpec
 
-        if not isinstance(executable.authored_spec, (NestedContinuationSpec, SfpSpec)):
+        if not isinstance(
+            executable.authored_spec, (NestedContinuationSpec, SfpSpec, DlineLiveSpec)
+        ):
             return None
         if self._session is None:
             raise ValueError("Brain Candidate persistence requires a database session")
-        if isinstance(executable.authored_spec, SfpSpec):
+        if isinstance(executable.authored_spec, DlineLiveSpec):
+            from app.strategy_brain.dline.runtime import (
+                current_signal_from_assembly,
+                to_detection,
+            )
+
+            signal = current_signal_from_assembly(assembled, executable.authored_spec)
+            events = (to_detection(signal),) if signal is not None else ()
+        elif isinstance(executable.authored_spec, SfpSpec):
             from app.signal_fusion.enums import EvidenceRole
             from app.strategy_brain.sfp.detector import detect_sfp
             from app.strategy_brain.sfp_runtime.assessment import select_detection
@@ -215,10 +226,11 @@ class AssemblingWatcherScanEvidence:
                 reason_code="trendpulse_screening_receipts_required",
             )
         from app.schemas.nested_continuation import NestedContinuationSpec
+        from app.strategy_brain.dline.live import DlineLiveSpec
         from app.strategy_brain.sfp.contracts import SfpSpec
 
         ohlcv_family = executable is not None and isinstance(
-            executable.authored_spec, (NestedContinuationSpec, SfpSpec)
+            executable.authored_spec, (NestedContinuationSpec, SfpSpec, DlineLiveSpec)
         )
         monitor_snapshot = None if ohlcv_family else self._monitor_snapshot()
         if monitor_snapshot is not None:
@@ -256,11 +268,14 @@ class AssemblingWatcherScanEvidence:
         try:
             if ohlcv_family:
                 from app.strategy_brain.assembly import assemble_nested
+                from app.strategy_brain.dline.runtime import assemble_dline
                 from app.strategy_brain.sfp_runtime.assembly import assemble_sfp
 
                 assemble_family = (
                     assemble_sfp
                     if isinstance(executable.authored_spec, SfpSpec)
+                    else assemble_dline
+                    if isinstance(executable.authored_spec, DlineLiveSpec)
                     else assemble_nested
                 )
                 assembled = assemble_family(
@@ -377,7 +392,7 @@ class AssemblingWatcherScanEvidence:
     def _bind_market(
         self, executable: ExecutableStrategyPolicy | None, command: EvaluationCommand
     ) -> ExecutableStrategyPolicy | None:
-        """Evaluate SFP/Nested on the scanned symbol/timeframe, or fail closed.
+        """Evaluate SFP/Nested/D-line on the scanned symbol/timeframe, or fail closed.
 
         A scope off the authored market is evaluated only when projection is
         enabled (WATCHER_APPLY_STRATEGIES_TO_WATCHLIST). Otherwise the scan
@@ -385,12 +400,13 @@ class AssemblingWatcherScanEvidence:
         """
 
         from app.schemas.nested_continuation import NestedContinuationSpec
+        from app.strategy_brain.dline.live import DlineLiveSpec
         from app.strategy_brain.sfp.contracts import SfpSpec
 
         if executable is None:
             return None
         spec = executable.authored_spec
-        if not isinstance(spec, (NestedContinuationSpec, SfpSpec)):
+        if not isinstance(spec, (NestedContinuationSpec, SfpSpec, DlineLiveSpec)):
             return executable
         # A request without a timeframe binds only the symbol.
         timeframe = command.request.timeframe or spec.trigger_timeframe.value

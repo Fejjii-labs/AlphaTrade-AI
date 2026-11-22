@@ -803,6 +803,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             self._settings, "governed_demo_sfp_enabled", False
         ):
             return _proof(candidate, "skipped", "sfp_execution_plan_not_authorized")
+        dline_refusal = self._dline_refusal(policy)
+        if dline_refusal is not None:
+            return _proof(candidate, "skipped", dline_refusal)
         existing = self._runtime.plan_store.get_by_candidate_scope(
             organization_id=target.organization_id,
             user_id=target.user_id,
@@ -937,6 +940,27 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             )
         return proof
 
+    def _dline_refusal(self, policy: object) -> str | None:
+        """D-line trades only under demo data mode with demo partial exits (its ladder).
+
+        Demo data mode already requires risk model v2 and real trading off; the
+        partial-exit flag requires the demo exchange mode and real trading off.
+        """
+
+        from app.strategy_brain.dline.live import DlineLiveSpec
+
+        spec = getattr(policy, "authored_spec", None)
+        if not isinstance(spec, DlineLiveSpec):
+            return None
+        if not demo_data_mode_enabled(self._settings):
+            return "dline_requires_demo_data_mode"
+        if not partial_exits_enabled(self._settings, BLOFIN_DEMO_VENUE):
+            return "dline_requires_demo_partial_exits"
+        if spec.parameters.entry_mode == "retest":
+            # Demo entries are market orders; a resting retest limit is not supported yet.
+            return "dline_retest_entry_unsupported_on_demo"
+        return None
+
     def _eligibility_command(
         self,
         session: Session,
@@ -1007,11 +1031,17 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         # minimum is not a gate once a profile is active: that plan is sized
         # below with size_for_profile. Leverage and margin-mode reads still
         # refuse, and this method does not write the venue.
+        from app.strategy_brain.dline.live import DlineLiveSpec
         from app.strategy_brain.sfp.contracts import SfpSpec
 
         sfp = isinstance(getattr(policy, "authored_spec", None), SfpSpec)
         if sfp and not self._settings.governed_demo_sfp_enabled:
             return "sfp_execution_plan_not_authorized"
+        dline_spec = getattr(policy, "authored_spec", None)
+        dline = isinstance(dline_spec, DlineLiveSpec)
+        dline_refusal = self._dline_refusal(policy)
+        if dline_refusal is not None:
+            return dline_refusal
         # Read structure with the same ATR floor, without changing the evidence
         # quote. Only the rounded executable demo book sets the final entry.
         terms = _plan_terms(
@@ -1030,6 +1060,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     "min_stop_atr_floor": self._settings.sfp_min_stop_atr_multiple,
                 }
                 if sfp
+                else {"governed_demo_dline": True}
+                if dline
                 else {}
             ),
         )
@@ -1055,6 +1087,21 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             refusal = _sfp_quote_refusal(quote=entry, stop=stop, target=target, is_long=is_long)
             if refusal is not None:
                 return refusal
+        dline_targets: list[Decimal] = []
+        if dline:
+            # Every ladder target on the venue tick, toward the entry; R:R to TP2 at the book.
+            dline_targets = [
+                (t.price.value / snapshot.tick).to_integral_value(
+                    rounding=ROUND_FLOOR if is_long else ROUND_CEILING
+                )
+                * snapshot.tick
+                for t in terms.risk_and_exits.targets
+            ]
+            tp2 = dline_targets[1]
+            risk = (entry - stop) if is_long else (stop - entry)
+            reward = (tp2 - entry) if is_long else (entry - tp2)
+            if reward / risk < dline_spec.parameters.minimum_reward_risk:
+                return "dline_quote_reward_risk_below_minimum"
         # A binding configured leverage is either written after this plan passes
         # (sized at the configured values; the write reads them back exactly) or,
         # without the write, must already read back exactly. Otherwise the plan
@@ -1217,6 +1264,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 if fixed_risk_percent is not None
                 else active_profile.profile.risk_percent(sized.grade)
             )
+        if dline and dline_spec.parameters.entry_mode == "split":
+            # Split entry: only the breakout half is sent now. The retest half (limit at
+            # the line) is not sent; demo entries are market orders only.
+            raw = raw * dline_spec.parameters.breakout_fraction
         quantity = (raw / snapshot.lot).to_integral_value(rounding=ROUND_FLOOR) * snapshot.lot
         if quantity < snapshot.minimum or quantity * snapshot.multiplier * entry < Decimal("5"):
             return "demo_size_below_minimum"
@@ -1362,6 +1413,16 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             if account_margin_mode == "isolated":
                 values["margin_mode"] = "ISOLATED"
         values["risk_and_exits"]["targets"][0]["price"]["value"] = target
+        if dline:
+            from app.services.automated_paper_loop import dline_notes
+            from app.strategy_brain.dline.runtime import current_signal_from_assembly
+
+            for row, price in zip(values["risk_and_exits"]["targets"], dline_targets, strict=True):
+                row["price"]["value"] = price
+            signal = current_signal_from_assembly(assembled, dline_spec)
+            if signal is None:
+                return "setup_not_confirmed"
+            values["presentation_metadata"]["notes"] = dline_notes(signal, dline_spec, demo=True)
         revised = TradePlanRevisionCreate.model_validate(values)
         try:
             planned_reward_risk(revised)

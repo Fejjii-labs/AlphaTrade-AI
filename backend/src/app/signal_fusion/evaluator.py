@@ -128,6 +128,7 @@ def evaluate_setup(
     nested_spec: object | None = None,
     sfp_spec: object | None = None,
     trendpulse_spec: object | None = None,
+    dline_spec: object | None = None,
 ) -> SetupAssessment:
     """Evaluate first-slice setup truth. Account/risk context is ignored.
 
@@ -138,6 +139,18 @@ def evaluate_setup(
     canonical first-slice symbol so existing BTC evaluations stay unchanged.
     """
     del account_context
+    if dline_spec is not None:
+        if nested_spec is not None or sfp_spec is not None or trendpulse_spec is not None:
+            raise ValueError("A setup assessment must bind exactly one family")
+        from app.strategy_brain.dline.runtime import evaluate_dline_setup
+
+        return evaluate_dline_setup(
+            policy=policy,
+            command=command,
+            evidence=evidence,
+            evaluated_at=evaluated_at,
+            spec=dline_spec,
+        )
     if trendpulse_spec is not None:
         if nested_spec is not None or sfp_spec is not None:
             raise ValueError("A setup assessment must bind exactly one family")

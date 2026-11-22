@@ -31,15 +31,18 @@ def access_stream() -> Iterator[io.StringIO]:
         AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False)
     )
     access = logging.getLogger("uvicorn.access")
-    saved = (access.handlers[:], access.filters[:], access.propagate, access.level)
+    saved = (access.handlers[:], access.filters[:], access.propagate, access.level, access.disabled)
     access.handlers = [handler]
     access.filters = []
     access.propagate = False
+    # uvicorn configures this logger explicitly, so it is enabled even after an
+    # earlier fileConfig() (e.g. alembic env.py) disabled pre-existing loggers.
+    access.disabled = False
     access.setLevel(logging.INFO)
     try:
         yield stream
     finally:
-        access.handlers, access.filters, access.propagate, _level = saved
+        access.handlers, access.filters, access.propagate, _level, access.disabled = saved
         access.setLevel(saved[3])
 
 

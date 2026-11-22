@@ -231,7 +231,7 @@ def test_projected_scope_is_not_monitor_polled(session_factory) -> None:
     assert polled == ["ETHUSDT"]
 
 
-# --- C1: only SFP and Nested can be projected ----------------------------------
+# --- C1: only SFP, Nested and D-line can be projected -------------------------
 
 
 def test_first_slice_strategies_are_never_projected(session_factory) -> None:
@@ -240,7 +240,9 @@ def test_first_slice_strategies_are_never_projected(session_factory) -> None:
         executable = resolve_executable_strategy_policy(
             db, organization_id=ORG, strategy_version_id=version_id
         )
-        with pytest.raises(StrategyEvaluationPolicyError, match="Only SFP and Nested") as refused:
+        with pytest.raises(
+            StrategyEvaluationPolicyError, match="Only SFP, Nested and D-line"
+        ) as refused:
             project_executable_to_market(executable, symbol="ETHUSDT", timeframe="1h")
         assert refused.value.reason_code == "market_projection_unsupported"
         targets = list_watchlist_scan_targets(
@@ -255,7 +257,7 @@ def test_trendpulse_is_never_projected() -> None:
     from app.strategy_brain.trendpulse_1r.contracts import TrendPulseSpec
 
     executable = SimpleNamespace(authored_spec=TrendPulseSpec(symbol="BTCUSDT", direction="long"))
-    with pytest.raises(StrategyEvaluationPolicyError, match="Only SFP and Nested"):
+    with pytest.raises(StrategyEvaluationPolicyError, match="Only SFP, Nested and D-line"):
         project_executable_to_market(executable, symbol="ETHUSDT", timeframe="5m")
 
 

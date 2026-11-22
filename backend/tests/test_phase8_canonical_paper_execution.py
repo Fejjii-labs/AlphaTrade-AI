@@ -342,7 +342,7 @@ def test_proposal_service_cannot_use_canonical_plan_root() -> None:
         assert proposal.plan_root_kind == PLAN_ROOT_CANONICAL
         service = ProposalService(session, AuditService(session))
         with pytest.raises(TradingPolicyError) as exc:
-            service.get(envelope.plan.plan_id)
+            service.get(envelope.plan.plan_id, organization_id=envelope.plan.organization_id)
         assert exc.value.details["reason"] == "canonical_plan_root_not_proposal_authority"
         items, total = service.list_proposals(organization_id=ORG_ID)
         assert total == 0
