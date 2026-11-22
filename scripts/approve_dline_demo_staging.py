@@ -63,14 +63,18 @@ def main(argv: list[str] | None = None) -> int:
         {
             "apply": args.apply,
             "environment": settings.environment,
-            "real_trading": settings.enable_real_trading,
+            "real_trading": settings.enable_real_trading or settings.real_trading_enabled,
             "demo_data_mode": settings.governed_demo_data_mode_enabled,
             "risk_model_v2": settings.risk_model_v2_enabled,
             "demo_partial_exits": settings.governed_demo_partial_exits_enabled,
             "watcher_max_scopes_per_cycle": settings.watcher_paper_max_scopes_per_cycle,
         },
     )
-    if settings.enable_real_trading or settings.environment != "staging":
+    if (
+        settings.enable_real_trading
+        or settings.real_trading_enabled
+        or settings.environment != "staging"
+    ):
         out("ABORT", "staging with real trading off only")
         return 1
     org, user = args.organization_id, args.user_id

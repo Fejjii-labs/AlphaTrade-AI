@@ -43,6 +43,20 @@ def test_refuses_outside_staging_or_with_real_trading(monkeypatch, capsys):
     assert "DLINE|ABORT" in capsys.readouterr().out
 
 
+def test_refuses_when_derived_real_trading_flag_is_on(monkeypatch, capsys):
+    from app.core.config import Settings
+
+    module = load()
+    # real_trading_enabled is a fail-closed property (always False today); guard on it too.
+    monkeypatch.setattr(Settings, "real_trading_enabled", property(lambda self: True))
+    monkeypatch.setattr("app.core.config.get_settings", settings)
+    monkeypatch.setattr(
+        "app.db.session.get_session_factory", lambda: (_ for _ in ()).throw(AssertionError)
+    )
+    assert module.main(["--organization-id", str(uuid4()), "--user-id", str(uuid4())]) == 1
+    assert "DLINE|ABORT" in capsys.readouterr().out
+
+
 def test_dry_run_approves_every_combination_then_rolls_back(monkeypatch, capsys):
     from tests.test_watcher_paper_runtime import _sqlite_factory
 
