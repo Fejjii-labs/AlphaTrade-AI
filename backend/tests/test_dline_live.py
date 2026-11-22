@@ -43,12 +43,12 @@ HTF_UP = [
     (104, 110, 103, 108),
     (108, 109, 101, 102),
     (102, 104, 96, 97),
-    (97, 103, "97.5", 102),
+    (98, 103, "97.5", 102),
     (102, 108, 101, 107),
     (107, 115, 106, 113),
     (113, 114, 104, 105),
     (105, 106, 100, 101),
-    (101, 107, "101.5", 106),
+    (102, 107, "101.5", 106),
     (106, 109, 105, 108),
 ]
 HTF_START = START + timedelta(hours=2) - timedelta(hours=len(HTF_UP))
@@ -177,9 +177,7 @@ def test_long_three_touch_body_close_breakout_plan():
         ("tp3", Decimal(115), Decimal(".2")),
     ]
     assert s.runner_fraction == Decimal(".15")
-    assert s.reward_risk == (Decimal(112) - Decimal("103.5")) / (
-        Decimal("103.5") - Decimal("99.9")
-    )
+    assert s.reward_risk == (Decimal(112) - Decimal("103.5")) / (Decimal("103.5") - Decimal("99.9"))
     assert s.htf_trend == "higher_highs_higher_lows"
     assert s.attempt == 1
     assert 30 <= s.angle_degrees <= 60
@@ -256,8 +254,9 @@ def test_reward_risk_below_two_is_rejected():
 
 
 def test_tp3_falls_back_into_tp2_when_no_htf_swing_beyond():
-    flat_top = [(o, min(h, 111), low, min(c, 111)) for o, h, low, c in HTF_UP]
-    flat_top = [(min(o, 111), h, low, c) for o, h, low, c in flat_top]
+    flat_top = list(HTF_UP)
+    flat_top[7] = (107, 111, 106, 110)  # higher high 111 stays below the structure high 112
+    flat_top[8] = (110, "110.5", 104, 105)
     s = only(scan(htf=flat_top))
     assert [(t.label, t.fraction) for t in s.targets] == [
         ("tp1", Decimal(".15")),
@@ -408,7 +407,7 @@ def test_prefix_scans_never_change_earlier_signals():
 
 def test_forming_trigger_candle_is_ignored():
     config = spec()
-    bars, obs = evidence(COIL, timeframe=config.trigger_timeframe)
+    bars, _obs = evidence(COIL, timeframe=config.trigger_timeframe)
     htf_bars, _ = evidence(HTF_UP, start=HTF_START, timeframe=config.htf_timeframe)
     early = detect_dline_live(
         bars,
