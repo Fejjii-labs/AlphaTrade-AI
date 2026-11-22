@@ -52,8 +52,14 @@ def build_internal_paper_terms(
     presentation: dict[str, object],
     leverage: Decimal = Decimal("1"),
     margin_mode: MarginMode = MarginMode.CROSS,
+    ladder: tuple[tuple[Decimal, Decimal, str], ...] | None = None,
+    runner: dict[str, object] | None = None,
 ) -> TradePlanRevisionCreate:
-    """Shared internal paper semantics. No detector, sizing, approval, or execution."""
+    """Shared internal paper semantics. No detector, sizing, approval, or execution.
+
+    ``ladder`` (price, quantity fraction, formula id) and ``runner`` replace the
+    single full-size target for families with partial exits (D-line).
+    """
     is_long = candidate.direction is TradeDirection.LONG
     distance = abs(stop - entry)
     price_loss = quantity * distance
@@ -141,16 +147,17 @@ def build_internal_paper_terms(
                 "stop": {"value": str(stop), "unit": "USDT"},
                 "targets": [
                     {
-                        "order": 1,
-                        "price": {"value": str(target), "unit": "USDT"},
-                        "quantity_fraction": "1",
-                        "derivation": {
-                            "formula_id": target_formula,
-                            "formula_version": "1",
-                        },
+                        "order": order,
+                        "price": {"value": str(price), "unit": "USDT"},
+                        "quantity_fraction": str(fraction),
+                        "derivation": {"formula_id": formula, "formula_version": "1"},
                     }
+                    for order, (price, fraction, formula) in enumerate(
+                        ladder or ((target, Decimal("1"), target_formula),), start=1
+                    )
                 ],
-                "runner": {
+                "runner": runner
+                or {
                     "enabled": False,
                     "activation_target_order": None,
                     "remaining_quantity_fraction": "0",

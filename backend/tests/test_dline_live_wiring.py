@@ -116,20 +116,18 @@ def _scripted_source(trigger_rows, htf_rows):
             return require_closed_series(
                 list(series),
                 identity=identity,
-                instrument=instrument,
                 timeframe=timeframe,
-                min_final_bars=min(min_final_bars, len(series)),
                 evaluated_at=evaluated_at,
+                min_bars=min(min_final_bars, len(series)),
             )
 
     return Source(replay=True, bars_15m=list(bars)), bars, htf
 
 
 def _assemble(session, org, policy, rows=COIL, htf_rows=HTF_UP):
-    from app.strategy_brain.dline.runtime import assemble_dline
-
     from app.evidence_pipeline.assembler import FirstSliceEvidenceAssembler
     from app.evidence_pipeline.watcher_port import AssemblingWatcherScanEvidence
+    from app.strategy_brain.dline.runtime import assemble_dline
 
     source, bars, _ = _scripted_source(rows, htf_rows)
     now = bars[-1].interval_end + timedelta(seconds=5)
@@ -303,9 +301,9 @@ def test_demo_plan_terms_carry_the_ladder_and_runner(short):
         "dline-tp2-structure-extreme",
         "dline-tp3-htf-swing",
     ]
-    meta = terms.presentation_metadata
-    assert meta["dline_entry_mode"] == "split"
-    assert meta["dline_retest_limit"] == ("97" if short else "103")
+    notes = terms.presentation_metadata.notes
+    assert "entry_mode=split" in notes
+    assert f"retest_limit={'97' if short else '103'}" in notes
 
 
 def test_demo_plan_terms_quote_rr_below_two_refused():
@@ -335,9 +333,25 @@ def test_ladder_terms_parse_for_partial_exits():
         Decimal("2"),
     ]
     assert parsed.ladder.runner_leg.quantity == Decimal("1.5")
-    # Break-even after TP1 comes from the shared partial-exit state.
+    # Break-even (plus costs) after a complete TP1 comes from the shared partial exits.
+    from app.services.partial_exits.position import ExitFill, apply_fill, plan_breakeven_move
+
     state = parsed.open_state()
-    assert state.stop == Decimal("99.9")
+    assert state.current_stop == Decimal("99.9")
+    assert plan_breakeven_move(state) is None
+    filled = apply_fill(
+        state,
+        ExitFill(
+            fill_id="tp1",
+            kind="target",
+            leg_order=1,
+            quantity=Decimal("1.5"),
+            price=Decimal("107.7"),
+            occurred_at=kwargs["now"],
+        ),
+    ).state
+    move = plan_breakeven_move(filled)
+    assert move is not None and move.new_stop >= Decimal("103.5")
 
 
 # --- governed BloFin demo --------------------------------------------------------------
@@ -378,6 +392,7 @@ def demo_loop(settings, short=False, price=None):
         venue_equity=Decimal("10000"),
         account_leverage=Decimal("10"),
         margin_mode="isolated",
+        maintenance_tiers=((Decimal("0"), Decimal("0.004")),),
     )
     loop._demo_risk_config = SimpleNamespace(
         grades_gate_entries=False,
@@ -404,8 +419,9 @@ def test_demo_data_mode_plans_half_size_breakout_with_ladder(short):
     )
     assert stop_cash <= Decimal("50")
     assert stop_cash > Decimal("40")
-    assert terms.presentation_metadata["dline_breakout_fraction"] == "0.5"
-    assert terms.presentation_metadata["dline_retest_leg"] == "not_sent_demo_market_entries_only"
+    notes = terms.presentation_metadata.notes
+    assert "breakout_fraction=0.5" in notes
+    assert "retest_leg=not_sent_demo_market_entries_only" in notes
 
 
 def test_demo_breakout_mode_sends_full_size():
