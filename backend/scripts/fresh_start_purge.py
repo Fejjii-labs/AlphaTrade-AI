@@ -11,6 +11,10 @@ single transaction (one ``TRUNCATE ... RESTRICT``, never ``CASCADE``). KEEP
 tables are locked ``IN SHARE MODE`` first. The transaction rolls back if any
 KEEP count changes or any PURGE table is not empty afterwards.
 
+``--execute`` also refuses while ``positions`` or ``journal_trades`` (where
+BloFin demo trades are marked open) has an open row, unless
+``--allow-open-positions`` is given. Dry-run prints those counts.
+
 TRUNCATE bypasses the row-level append-only DELETE guards on canonical
 candidates, plan revisions and demo lifecycle resolutions. That is
 intentional for this one owner-approved reset. Stop the API and workers before
@@ -21,6 +25,7 @@ any host other than the staging database.
 
     uv run python scripts/fresh_start_purge.py                 # dry-run
     uv run python scripts/fresh_start_purge.py --execute --confirm FRESH-START-2026-11-22
+        [--allow-open-positions]
 """
 
 from __future__ import annotations
@@ -115,6 +120,16 @@ PURGE_TABLES: dict[str, str] = {
     "canonical_candidate_creation_keys": "old candidate creation keys",
     "blofin_demo_sync_snapshots": "BloFin demo account/position snapshots",
     "action_eligibility_evaluations": "eligibility verdicts on old candidates",
+    "daily_risk_states": "daily P&L plus lock flag",
+    "account_risk_accounting_states": "exposure ledger, demo equity baseline",
+    "account_safety_epochs": "account safety epochs",
+    "risk_policy_breaker_states": "drawdown/loss breaker latches",
+    "risk_policy_breaker_intervals": "breaker window history",
+    "risk_policy_breaker_resets": "human breaker resets",
+    "risk_policy_calibration_samples": "past-trade R samples for grader",
+    "risk_policy_grade_bindings": "first grade per setup",
+    "watcher_symbol_status": "latest per-symbol watcher status",
+    "market_monitor_snapshots": "latest monitor state",
     "watcher_scan_lineages": "watcher scan lineages",
     "watcher_observability_events": "watcher observability events",
     "watcher_health_snapshots": "watcher health snapshots",
@@ -179,7 +194,6 @@ KEEP_TABLES: dict[str, str] = {
     "market_snapshots": "market data",
     "indicator_snapshots": "market data",
     "public_market_observations": "public OHLCV",
-    "market_monitor_snapshots": "latest monitor state",
     "backtest_datasets": "backtest datasets",
     "documents": "knowledge base",
     "chunks": "knowledge base",
@@ -200,29 +214,23 @@ KEEP_TABLES: dict[str, str] = {
     "agent_saved_entries": "user notes",
     "agent_capture_sources": "capture dedupe",
     "voice_session_reservations": "voice quota",
-    # Kept pending an owner decision (see report): trade-derived, but safety
-    # latches, audit, research or chat. Purging later is possible; undoing is not.
-    "audit_logs": "DECISION: audit trail includes old trade audit rows",
-    "daily_risk_states": "DECISION: daily P&L plus lock flag",
-    "account_risk_accounting_states": "DECISION: exposure ledger, demo equity baseline",
-    "account_safety_epochs": "DECISION: account safety epochs",
-    "risk_policy_breaker_states": "DECISION: drawdown/loss breaker latches",
-    "risk_policy_breaker_intervals": "DECISION: breaker window history",
-    "risk_policy_breaker_resets": "DECISION: human breaker resets",
-    "risk_policy_calibration_samples": "DECISION: past-trade R samples for grader",
-    "risk_policy_grade_bindings": "DECISION: first grade per setup",
-    "blofin_activity_cursors": "DECISION: import cursors (stop re-import)",
-    "watcher_symbol_status": "DECISION: latest per-symbol watcher status",
-    "backtest_runs": "DECISION: backtest research",
-    "backtest_trades": "DECISION: simulated backtest trades",
-    "experiments": "DECISION: experiment definitions",
-    "experiment_versions": "DECISION: experiment configs",
-    "experiment_events": "DECISION: experiment history",
-    "experiment_samples": "DECISION: experiment evidence samples",
-    "trendpulse_screening_runs": "DECISION: research screening evidence",
-    "conversations": "DECISION: agent chat",
-    "conversation_messages": "DECISION: agent chat",
+    # Trade-derived, but kept by owner decision (2026-11-22): audit, import
+    # cursors, research and chat.
+    "audit_logs": "audit trail includes old trade audit rows",
+    "blofin_activity_cursors": "import cursors (stop re-import)",
+    "backtest_runs": "backtest research",
+    "backtest_trades": "simulated backtest trades",
+    "experiments": "experiment definitions",
+    "experiment_versions": "experiment configs",
+    "experiment_events": "experiment history",
+    "experiment_samples": "experiment evidence samples",
+    "trendpulse_screening_runs": "research screening evidence",
+    "conversations": "agent chat",
+    "conversation_messages": "agent chat",
 }
+
+# PURGE tables that track open paper/demo positions. Enums are stored by name.
+OPEN_POSITION_TABLES: tuple[str, ...] = ("positions", "journal_trades")
 
 # Live foreign keys between public tables: (child, parent).
 _FK_SQL = """
@@ -298,6 +306,23 @@ def lock_keep_sql(tables: Sequence[str]) -> str:
     return "LOCK TABLE " + ", ".join(f'"{t}"' for t in tables) + " IN SHARE MODE"
 
 
+def open_positions_sql(table: str) -> str:
+    if table not in OPEN_POSITION_TABLES:
+        raise PurgeRefusedError(f"not an open-position table: {table!r}")
+    return f"SELECT count(*) FROM \"{table}\" WHERE upper(status::text) = 'OPEN'"
+
+
+def open_position_errors(open_counts: Mapping[str, int], *, allow: bool) -> list[str]:
+    """Refuse ``--execute`` while positions are open, unless overridden."""
+    if allow:
+        return []
+    return [
+        f"{t} has {n} open row(s); close them or pass --allow-open-positions"
+        for t, n in open_counts.items()
+        if n
+    ]
+
+
 def count_errors(
     before: Mapping[str, int], after: Mapping[str, int], keep: Sequence[str]
 ) -> list[str]:
@@ -327,7 +352,7 @@ def _print_counts(label: str, tables: Sequence[str], before, after=None) -> None
     print(f"{label} total rows={total}")
 
 
-def run(*, execute: bool) -> int:
+def run(*, execute: bool, allow_open_positions: bool = False) -> int:
     from sqlalchemy import create_engine, text
 
     url = check_staging_url(os.environ.get(URL_ENV))
@@ -349,6 +374,16 @@ def run(*, execute: bool) -> int:
             if execute and not errors:
                 conn.execute(text(lock_keep_sql(keep)))
             before = _counts(conn, purge + keep + unknown)
+            open_counts = {
+                t: int(conn.execute(text(open_positions_sql(t))).scalar_one())
+                for t in OPEN_POSITION_TABLES
+                if t in live
+            }
+            print(
+                "open positions: "
+                + (" ".join(f"{t}={n}" for t, n in open_counts.items()) or "none tracked")
+                + (" (override: --allow-open-positions)" if allow_open_positions else "")
+            )
             if not execute:
                 _print_counts("PURGE", purge, before)
                 _print_counts("KEEP", keep, before)
@@ -361,6 +396,7 @@ def run(*, execute: bool) -> int:
                     print(f"  - {e}")
                 tx.rollback()
                 return 1 if errors else 0
+            errors += open_position_errors(open_counts, allow=allow_open_positions)
             if errors:
                 for e in errors:
                     print(f"REFUSED: {e}")
@@ -387,12 +423,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     mode.add_argument("--dry-run", action="store_true", help="count rows only (default)")
     mode.add_argument("--execute", action="store_true", help="truncate PURGE tables")
     parser.add_argument("--confirm", default="", help=f"must equal {CONFIRM_TOKEN} with --execute")
+    parser.add_argument(
+        "--allow-open-positions",
+        action="store_true",
+        help="with --execute, truncate even if positions/journal_trades have open rows",
+    )
     args = parser.parse_args(argv)
     if args.execute and args.confirm != CONFIRM_TOKEN:
         print(f"REFUSED: --execute requires --confirm {CONFIRM_TOKEN}")
         return 2
     try:
-        return run(execute=args.execute)
+        return run(execute=args.execute, allow_open_positions=args.allow_open_positions)
     except PurgeRefusedError as exc:
         print(f"REFUSED: {exc}")
         return 2

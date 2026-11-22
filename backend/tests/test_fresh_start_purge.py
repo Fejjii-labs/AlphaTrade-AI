@@ -71,6 +71,14 @@ def test_purge_order_is_children_first() -> None:
         "alembic_version",
         "risk_policy_versions",
         "telegram_security_bindings",
+        "audit_logs",
+        "blofin_activity_cursors",
+        "backtest_runs",
+        "backtest_trades",
+        "experiments",
+        "trendpulse_screening_runs",
+        "conversations",
+        "conversation_messages",
     ],
 )
 def test_owner_keep_list_is_kept(keep: str) -> None:
@@ -94,10 +102,43 @@ def test_owner_keep_list_is_kept(keep: str) -> None:
         "blofin_demo_sync_snapshots",
         "telegram_paper_notifications",
         "paper_trades",
+        "telegram_security_outbox",
+        "daily_risk_states",
+        "account_risk_accounting_states",
+        "account_safety_epochs",
+        "risk_policy_breaker_states",
+        "risk_policy_breaker_intervals",
+        "risk_policy_breaker_resets",
+        "risk_policy_calibration_samples",
+        "risk_policy_grade_bindings",
+        "watcher_symbol_status",
+        "market_monitor_snapshots",
     ],
 )
 def test_owner_purge_list_is_purged(gone: str) -> None:
-    assert gone in purge.PURGE_TABLES
+    assert gone in purge.PURGE_TABLES and gone not in purge.KEEP_TABLES
+
+
+def test_open_position_tables_are_orm_purge_tables_with_status() -> None:
+    tables = _metadata().tables
+    for name in purge.OPEN_POSITION_TABLES:
+        assert name in purge.PURGE_TABLES and "status" in tables[name].c
+
+
+def test_open_positions_sql() -> None:
+    assert purge.open_positions_sql("positions") == (
+        "SELECT count(*) FROM \"positions\" WHERE upper(status::text) = 'OPEN'"
+    )
+    with pytest.raises(purge.PurgeRefusedError):
+        purge.open_positions_sql("users")
+
+
+def test_open_position_guard_refuses_unless_allowed() -> None:
+    counts = {"positions": 2, "journal_trades": 0}
+    errors = purge.open_position_errors(counts, allow=False)
+    assert errors == ["positions has 2 open row(s); close them or pass --allow-open-positions"]
+    assert purge.open_position_errors(counts, allow=True) == []
+    assert purge.open_position_errors({"positions": 0}, allow=False) == []
 
 
 def test_guard_rejects_unknown_table_and_keep_to_purge_fk() -> None:
@@ -172,7 +213,15 @@ def test_execute_requires_exact_confirm(monkeypatch, capsys) -> None:  # type: i
     assert purge.main(["--execute"]) == 2
     assert purge.main(["--execute", "--confirm", "fresh-start-2026-11-22"]) == 2
     assert called == []
-    assert purge.main([]) == 0 and called == [{"execute": False}]
+    assert purge.main([]) == 0 and called == [{"execute": False, "allow_open_positions": False}]
+    called.clear()
+    assert purge.main(["--dry-run"]) == 0
+    argv = ["--execute", "--confirm", purge.CONFIRM_TOKEN, "--allow-open-positions"]
+    assert purge.main(argv) == 0
+    assert called == [
+        {"execute": False, "allow_open_positions": False},
+        {"execute": True, "allow_open_positions": True},
+    ]
 
 
 def test_missing_env_refuses_without_connecting(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
