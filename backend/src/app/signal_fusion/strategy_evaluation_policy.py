@@ -37,6 +37,7 @@ from app.signal_fusion.first_slice_adapter import (
 from app.signal_fusion.first_slice_types import FirstSliceEvidenceBundle
 from app.signal_fusion.policy import FusionPolicy
 from app.signal_fusion.types import Sha256Hex, hashed_model
+from app.strategy_brain.dline.live import DlineLiveParameters, DlineLiveSpec
 from app.strategy_brain.sfp.contracts import SfpParameters, SfpSpec
 from app.strategy_brain.trendpulse_1r.contracts import TrendPulseParameters, TrendPulseSpec
 
@@ -66,10 +67,21 @@ class ExecutableStrategyPolicy(CanonicalModel):
         "operational_nested_continuation/v1",
         "swing_failure_pattern/v1",
         "trendpulse_1r/v1",
+        "d_line/v2",
     ] = FIRST_SLICE_ADAPTER_ID
-    authored_spec: FirstSliceAuthoredPatternSpec | NestedContinuationSpec | SfpSpec | TrendPulseSpec
+    authored_spec: (
+        FirstSliceAuthoredPatternSpec
+        | NestedContinuationSpec
+        | SfpSpec
+        | TrendPulseSpec
+        | DlineLiveSpec
+    )
     evaluation_params: (
-        FirstSliceEvaluationParams | NestedParameters | SfpParameters | TrendPulseParameters
+        FirstSliceEvaluationParams
+        | NestedParameters
+        | SfpParameters
+        | TrendPulseParameters
+        | DlineLiveParameters
     )
     content_hash: Sha256Hex
 
@@ -89,7 +101,8 @@ def build_executable_strategy_policy(
     authored_spec: FirstSliceAuthoredPatternSpec
     | NestedContinuationSpec
     | SfpSpec
-    | TrendPulseSpec,
+    | TrendPulseSpec
+    | DlineLiveSpec,
     execution_scope: Literal["paper", "paper_validation"] = "paper",
 ) -> ExecutableStrategyPolicy:
     """Bind an approved compiled version onto the first-slice adapter."""
@@ -105,7 +118,7 @@ def build_executable_strategy_policy(
     spec = authored_spec
     params = (
         spec.parameters
-        if isinstance(spec, (NestedContinuationSpec, SfpSpec, TrendPulseSpec))
+        if isinstance(spec, (NestedContinuationSpec, SfpSpec, TrendPulseSpec, DlineLiveSpec))
         else bind_first_slice_compatibility_adapter(spec)
     )
     draft = ExecutableStrategyPolicy(
@@ -121,7 +134,7 @@ def build_executable_strategy_policy(
         grammar_version=grammar_version,
         fusion_policy=fusion_policy,
         adapter_id=spec.kind
-        if isinstance(spec, (NestedContinuationSpec, SfpSpec, TrendPulseSpec))
+        if isinstance(spec, (NestedContinuationSpec, SfpSpec, TrendPulseSpec, DlineLiveSpec))
         else FIRST_SLICE_ADAPTER_ID,
         authored_spec=spec,
         evaluation_params=params,
@@ -138,7 +151,8 @@ def executable_policy_from_fusion_policy(
     authored_spec: FirstSliceAuthoredPatternSpec
     | NestedContinuationSpec
     | SfpSpec
-    | TrendPulseSpec,
+    | TrendPulseSpec
+    | DlineLiveSpec,
     lifecycle_state: StrategyLifecycleState = StrategyLifecycleState.APPROVED,
     compiler_version: str = COMPILER_VERSION,
     grammar_version: str = GRAMMAR_VERSION,
@@ -209,6 +223,24 @@ def evaluate_canonical_strategy(
             evaluated_at=evaluated_at,
             previous_assessment=previous_assessment,
             nested_spec=executable_policy.authored_spec,
+        )
+    if isinstance(executable_policy.authored_spec, DlineLiveSpec):
+        if (
+            executable_policy.evaluation_params != executable_policy.authored_spec.parameters
+            or executable_policy.adapter_id != executable_policy.authored_spec.kind
+            or hashed_model(executable_policy).content_hash != executable_policy.content_hash
+        ):
+            raise StrategyEvaluationPolicyError(
+                "D-line parameters do not match immutable policy.",
+                reason_code="unsupported_strategy_rule",
+            )
+        return evaluate_setup(
+            policy=executable_policy.fusion_policy,
+            command=command,
+            evidence=evidence,
+            evaluated_at=evaluated_at,
+            previous_assessment=previous_assessment,
+            dline_spec=executable_policy.authored_spec,
         )
     if isinstance(executable_policy.authored_spec, SfpSpec):
         if (

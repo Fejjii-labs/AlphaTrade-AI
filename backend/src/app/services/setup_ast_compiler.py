@@ -832,6 +832,34 @@ def compile_from_authored(
         return compile_pattern(pattern).model_copy(
             update={"strategy_version_id": strategy_version_id, "organization_id": organization_id}
         )
+    from app.strategy_brain.dline.live import DLINE_LIVE_KIND, DlineLiveSpec
+
+    if isinstance(pattern_spec, DlineLiveSpec) or (
+        isinstance(pattern_spec, dict) and pattern_spec.get("kind") == DLINE_LIVE_KIND
+    ):
+        try:
+            dline = DlineLiveSpec.model_validate(pattern_spec)
+        except ValidationError:
+            return CompileResult(
+                status=SetupCompileStatus.NON_EXECUTABLE.value,
+                failures=[_fail("invalid_dline_spec", "Invalid D-line parameters.")],
+            )
+        # Setup truth is evaluated only by the registered D-line adapter in evaluate_setup.
+        pattern = PatternAst(
+            dline_spec=dline,
+            symbols=[dline.symbol],
+            trigger_timeframe=dline.trigger_timeframe.value,
+            context_timeframe=dline.htf_timeframe.value,
+            direction=dline.direction,
+            preconditions=boolean("and", fld("predicate.finality"), fld("predicate.freshness")),
+            sequence=[PatternStep(step_id="d_line_live_v2", predicate=lit_bool(True))],
+            trigger=lit_bool(False),
+            invalidation=[lit_bool(False)],
+            expiration_final_bars=dline.parameters.signal_expiry_bars,
+        )
+        return compile_pattern(pattern).model_copy(
+            update={"strategy_version_id": strategy_version_id, "organization_id": organization_id}
+        )
     # Detection-only research cannot produce any executable AST, including shorts.
     if isinstance(pattern_spec, dict) and pattern_spec.get("kind") == "d_line/v1":
         return CompileResult(
