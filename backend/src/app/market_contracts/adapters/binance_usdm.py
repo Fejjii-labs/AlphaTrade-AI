@@ -17,6 +17,7 @@ from app.market_contracts.adapters.aggtrade_cache import (
     closed_agg_trade_window_key,
 )
 from app.market_contracts.adapters.aggtrades import (
+    datetime_to_ms,
     fetch_complete_agg_trade_rows,
     iter_contiguous_agg_trade_rows,
 )
@@ -150,8 +151,10 @@ class BinanceUsdmPerpetualSource:
         quote_cache: ShortTtlSingleflight | None = None,
         aggtrades_request_cache: ShortTtlSingleflight | None = None,
         closed_kline_cache: ClosedKlineCache | None = None,
+        wall_clock: Callable[[], float] | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._wall_clock = wall_clock or time.time
         self._http = client or ReadOnlyHttpGetClient(
             base_url=self._base_url,
             timeout_seconds=timeout_seconds,
@@ -920,6 +923,17 @@ class BinanceUsdmPerpetualSource:
     ) -> tuple[Any, ...]:
         """Reuse one closed aggTrade window. The key is the window, not the tenant."""
 
+        if datetime_to_ms(end) >= int(self._wall_clock() * 1000) - 1000:
+            # An open window (monitor tick, current quote) still gains trades and
+            # its key never repeats. Caching it only held up to 8 x 4096 raw rows.
+            return tuple(
+                fetch_complete_agg_trade_rows(
+                    get_json=self._get,
+                    symbol=symbol,
+                    start=start,
+                    end=end,
+                )
+            )
         key = closed_agg_trade_window_key(symbol, start, end)
         key_lock = self._trade_cache.lock_for(key)
         try:
