@@ -519,6 +519,39 @@ def test_close_page_failure_never_changes_the_reconcile_outcome(monkeypatch):
         assert kill is None or not kill.active
 
 
+def test_close_page_database_error_fails_the_reconcile_instead_of_a_false_close(monkeypatch):
+    world = open_world(monkeypatch)
+    world.venue.exited = True
+    closed_pages = _spy_close_pages(monkeypatch)
+    module = import_module("app.services.governed_blofin_demo")
+    real_strategy_name = module._strategy_name
+
+    def _aborting_lookup(session, *_args):
+        session.execute(text("select 1/0"))  # aborts the PostgreSQL transaction
+        return ""
+
+    monkeypatch.setattr(module, "_strategy_name", _aborting_lookup)
+    with world.factory() as session:
+        try:
+            result = world.loop.reconcile_command(session, command_id=world.command_id)
+        except DBAPIError:
+            result = None
+        assert result != "demo_closed_reconciled"
+    with world.factory() as session:
+        assert session.scalar(select(GovernedDemoLifecycleResolution)) is None
+        assert session.scalar(select(JournalTrade)).status is not JournalTradeStatus.CLOSED
+    assert closed_pages == []
+    # The next cycle closes the trade and pages once.
+    monkeypatch.setattr(module, "_strategy_name", real_strategy_name)
+    with world.factory() as session:
+        assert (
+            world.loop.reconcile_command(session, command_id=world.command_id)
+            == "demo_closed_reconciled"
+        )
+        assert session.scalar(select(JournalTrade)).status is JournalTradeStatus.CLOSED
+    assert len(closed_pages) == 1
+
+
 def test_close_page_text_uses_the_plan_stop_not_the_editable_journal_stop(monkeypatch):
     world = open_world(monkeypatch)
     pages: list[str] = []

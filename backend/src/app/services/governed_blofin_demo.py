@@ -15,6 +15,7 @@ from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from uuid import UUID, uuid5
 
 from sqlalchemy import String, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import ExchangeMode, ExecutionMode, Settings
@@ -2541,6 +2542,8 @@ def _open_page_not_due(session: Session, settings: Settings, command: ExecutionC
         return True
     try:
         trade = _journal_trade(session, command)
+    except SQLAlchemyError:
+        raise  # an aborted transaction must fail the reconcile, never commit as success
     except Exception:
         logger.warning("demo_trade_telegram_lookup_failed command_id=%s", command.id, exc_info=True)
         return True
@@ -2571,7 +2574,10 @@ def _queue_trade_telegram(
 ) -> None:
     """Queue the opt-in open or final-close page; it sends only after commit.
 
-    Fail-soft: a lookup or formatting error never changes the reconcile outcome.
+    Fail-soft for page errors: a formatting or queue error is logged and never
+    changes the reconcile outcome. A database error is re-raised: it has aborted
+    the trading transaction, so swallowing it would let ``session.commit()``
+    silently roll back the close while the reconcile reports success.
     """
 
     code = DEMO_TRADE_OPENED if opened else DEMO_TRADE_CLOSED
@@ -2597,6 +2603,8 @@ def _queue_trade_telegram(
                 queue_demo_trade_closed_telegram(
                     session, settings, trade, strategy=strategy, stop_price=stop
                 )
+    except SQLAlchemyError:
+        raise
     except Exception:
         logger.warning(
             "demo_trade_telegram_queue_failed command_id=%s code=%s",
