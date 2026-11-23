@@ -12,6 +12,10 @@ Run from backend/ against staging only:
     uv run --frozen python ../scripts/approve_dline_demo_staging.py \
         --organization-id <org uuid> --user-id <user uuid> --apply    # commit
 
+--entry-mode sets DlineLiveParameters.entry_mode on every version (default breakout: full
+size at the breakout; split sends only the breakout half on demo). retest is refused: the
+governed demo sends market entries only.
+
 Refuses when real trading is on or the environment is not staging. Prints no secrets,
 URLs or connection strings. D-line trades only with GOVERNED_DEMO_DATA_MODE_ENABLED,
 RISK_MODEL_V2_ENABLED and GOVERNED_DEMO_PARTIAL_EXITS_ENABLED (see the report).
@@ -27,6 +31,8 @@ import uuid
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "HYPEUSDT", "TAOUSDT", "ZECUSDT")
 TIMEFRAMES = ("15m", "30m", "1h")
 DIRECTIONS = ("long", "short")
+# retest is refused: the governed demo sends market entries only (no retest limit orders).
+ENTRY_MODES = ("split", "breakout")
 MAX_STRATEGY_IDS = 50
 
 
@@ -41,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--symbols", default=",".join(SYMBOLS))
     parser.add_argument("--timeframes", default=",".join(TIMEFRAMES))
     parser.add_argument("--directions", default=",".join(DIRECTIONS))
+    parser.add_argument("--entry-mode", choices=ENTRY_MODES, default="breakout")
     parser.add_argument("--apply", action="store_true", help="commit (default: dry run)")
     args = parser.parse_args(argv)
 
@@ -54,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     from app.services.canonical_strategy_evaluation import resolve_executable_strategy_policy
     from app.services.compiled_setup_service import CompiledSetupService
-    from app.strategy_brain.dline.live import DlineLiveSpec
+    from app.strategy_brain.dline.live import DlineLiveParameters, DlineLiveSpec
     from app.strategy_brain.service import create_template
 
     settings = get_settings()
@@ -62,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         "flags",
         {
             "apply": args.apply,
+            "entry_mode": args.entry_mode,
             "environment": settings.environment,
             "real_trading": settings.enable_real_trading or settings.real_trading_enabled,
             "demo_data_mode": settings.governed_demo_data_mode_enabled,
@@ -89,6 +97,7 @@ def main(argv: list[str] | None = None) -> int:
                         symbol=symbol,
                         trigger_timeframe=Timeframe(timeframe),
                         direction=TradeDirection(direction),
+                        parameters=DlineLiveParameters(entry_mode=args.entry_mode),
                     )
                     template = create_template(
                         session, organization_id=org, user_id=user, spec=spec
@@ -110,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
                             "symbol": symbol,
                             "timeframe": timeframe,
                             "direction": direction,
+                            "entry_mode": spec.parameters.entry_mode,
                             "strategy_id": template["strategy_id"],
                             "version_id": version_id,
                             "lifecycle": policy.lifecycle_state.value,

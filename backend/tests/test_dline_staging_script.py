@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import func, select
 
 from app.db.models import Organization, User, UserStrategy
@@ -80,3 +81,66 @@ def test_dry_run_approves_every_combination_then_rolls_back(monkeypatch, capsys)
     assert "DLINE|DRY_RUN_ROLLED_BACK|true" in printed
     with factory() as session:
         assert session.scalar(select(func.count()).select_from(UserStrategy)) == 0
+
+
+def _dry_run(monkeypatch, capsys, *extra):
+    from tests.test_watcher_paper_runtime import _sqlite_factory
+
+    factory = _sqlite_factory()
+    org, user = uuid4(), uuid4()
+    with factory() as session:
+        session.add_all(
+            [
+                Organization(id=org, name="D-line staging script"),
+                User(id=user, email=f"{user}@example.com", hashed_password="unused"),
+            ]
+        )
+        session.commit()
+    module = load()
+    monkeypatch.setattr("app.core.config.get_settings", settings)
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    argv = ["--organization-id", str(org), "--user-id", str(user), "--symbols", "BTCUSDT"]
+    code = module.main([*argv, "--timeframes", "1h", *extra])
+    printed = capsys.readouterr().out
+    assert code == 0, printed
+    return printed
+
+
+def test_entry_mode_defaults_to_breakout(monkeypatch, capsys):
+    printed = _dry_run(monkeypatch, capsys)
+    assert '"entry_mode": "breakout"' in printed.split("DLINE|approved|", 1)[0]
+    assert printed.count('"entry_mode": "breakout"') == 3  # flags + long + short
+    assert '"entry_mode": "split"' not in printed
+
+
+def test_entry_mode_split_and_breakout_reach_the_spec(monkeypatch, capsys):
+    from app.strategy_brain import service
+
+    seen = []
+    original = service.create_template
+
+    def spy(session, **kwargs):
+        seen.append(kwargs["spec"].parameters.entry_mode)
+        return original(session, **kwargs)
+
+    monkeypatch.setattr(service, "create_template", spy)
+    for mode in ("split", "breakout"):
+        seen.clear()
+        printed = _dry_run(monkeypatch, capsys, "--entry-mode", mode)
+        assert seen == [mode, mode]
+        approved = [line for line in printed.splitlines() if line.startswith("DLINE|approved|")]
+        assert len(approved) == 2
+        assert all(f'"entry_mode": "{mode}"' in line for line in approved)
+        assert "DLINE|DRY_RUN_ROLLED_BACK|true" in printed
+
+
+def test_refuses_retest_entry_mode(monkeypatch, capsys):
+    module = load()
+    monkeypatch.setattr(
+        "app.core.config.get_settings", lambda: (_ for _ in ()).throw(AssertionError)
+    )
+    argv = ["--organization-id", str(uuid4()), "--user-id", str(uuid4())]
+    with pytest.raises(SystemExit) as exc:
+        module.main([*argv, "--entry-mode", "retest"])
+    assert exc.value.code == 2
+    assert "invalid choice: 'retest'" in capsys.readouterr().err
