@@ -468,12 +468,16 @@ def deliver_safety_alert_in_background(
         if key in _PENDING:
             return False
         _PENDING.add(key)
-    _submit_background(settings, alert, pending_key=key)
+    _submit_background(settings, alert, pending_key=key, now=now)
     return True
 
 
 def _submit_background(
-    settings: Settings, alert: ExitMonitorAlert, *, pending_key: str | None = None
+    settings: Settings,
+    alert: ExitMonitorAlert,
+    *,
+    pending_key: str | None = None,
+    now: datetime | None = None,
 ) -> None:
     global _BACKGROUND
     with _LOCK:
@@ -481,17 +485,20 @@ def _submit_background(
             _BACKGROUND = ThreadPoolExecutor(max_workers=1, thread_name_prefix="telegram-alert")
         executor = _BACKGROUND
     try:
-        executor.submit(_deliver_background, settings, alert, pending_key)
+        executor.submit(_deliver_background, settings, alert, pending_key, now)
     except RuntimeError:  # interpreter shutdown
         _forget_pending(pending_key)
         logger.warning("safety_alert_background_unavailable", code=alert.code)
 
 
 def _deliver_background(
-    settings: Settings, alert: ExitMonitorAlert, pending_key: str | None = None
+    settings: Settings,
+    alert: ExitMonitorAlert,
+    pending_key: str | None = None,
+    now: datetime | None = None,
 ) -> None:
     try:
-        deliver_safety_alert(settings, alert)
+        deliver_safety_alert(settings, alert, now=now)
     except Exception as exc:
         logger.warning(
             "safety_alert_telegram_failed",

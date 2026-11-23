@@ -1789,14 +1789,14 @@ class WatcherPaperRuntime:
             replayed=proof.replayed,
             paper_only=True,
         )
-        if proof.stage == "blocked" and proof.reason_code == "daily_loss_limit":
+        if proof.stage == "blocked" and proof.reason_code in {
+            "daily_loss_limit",
+            "insufficient_daily_loss_allocation",
+        }:
             from app.services.daily_loss_alert import page_daily_loss_limit_reached
 
             page_daily_loss_limit_reached(
-                self._session_factory,
-                self._settings,
-                organization_id=target.organization_id,
-                now=self._clock.now(),
+                self._settings, organization_id=target.organization_id, now=self._clock.now()
             )
         return replace(
             report,

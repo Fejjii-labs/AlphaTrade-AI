@@ -375,14 +375,17 @@ waiting when the process is killed is lost. The worker cycle does not wait on
 Telegram.
 
 ``daily_loss_limit_reached`` (a default code) pages once per organization per
-UTC day, the first time the daily loss budget refuses a new entry
-(``daily_loss_limit``: realized loss today plus loss reserved by open entries
-plus the entry's planned loss would exceed ``max_daily_loss``). The page shows
-the budget, the realized and the reserved loss, read for the governed demo
-account in a separate short session. It is sent on the same background thread
-and never changes the scan. ``daily_locked`` stays display only (AT-ADR-152);
-the 10% account equity stop keeps its own kill-switch page. The once-a-day
-dedup is per process, so a worker restart on the same day can page again.
+UTC day, the first time the daily loss budget refuses a new entry: its planned
+loss is larger than what remains of ``max_daily_loss`` after realized and
+reserved loss (``daily_loss_limit`` in the demo pre-check,
+``insufficient_daily_loss_allocation`` in the risk-model-v2 claim). Smaller
+entries can still pass, so the page does not say trading stopped. Like every
+loss-protection page it carries no P&L amount. It reports an observed refusal,
+so it is queued on the background thread without waiting for the scan's
+commit, and it never changes the scan. ``daily_locked`` stays display only
+(AT-ADR-152); the 10% account equity stop keeps its own kill-switch page. The
+once-a-day dedup is per process, so a worker restart on the same day can page
+again.
 
 Telegram safety sends use the existing `telegram_bot_token` and
 `telegram_chat_id`. Kill-switch and loss-protection pages never include a
