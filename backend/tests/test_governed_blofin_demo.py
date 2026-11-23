@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -38,9 +38,14 @@ from app.interactive_agent.paper_execution_explanation import read_paper_executi
 from app.interactive_agent.service import InteractiveAgentService
 from app.providers.exchange.blofin_client import BloFinClient
 from app.providers.exchange.governed_blofin import GovernedBloFinDemoProvider
-from app.schemas.execution_protocol import ClosePaperPlanRequest, VenueSubmitEffectState
+from app.schemas.execution_protocol import (
+    ClosePaperPlanRequest,
+    RiskReservationReleaseState,
+    VenueSubmitEffectState,
+)
 from app.schemas.risk import KillSwitchMutationRequest
 from app.services.audit_service import AuditService
+from app.services.demo_account_history import has_demo_entry_history
 from app.services.execution_service import ExecutionService
 from app.services.governed_blofin_demo import (
     GovernedBloFinDemoLoop,
@@ -141,6 +146,9 @@ class Venue:
         elif path.endswith("books"):
             self.ticker_reads += 1
             quoted = self.price * Decimal("1.01") if self.behavior == "basis" else self.price
+            if self.behavior == "depth_moved" and self.ticker_reads >= 2:
+                # The dispatch-time book left the plan's entry zone (staging, 23 Nov).
+                quoted = self.price * Decimal("1.03")
             if self.behavior == "expiry" and self.ticker_reads == 2:
                 self.clock_delta = 11
             if self.ticker_reads == 2 and self.after_preflight is not None:
@@ -340,6 +348,7 @@ def test_demo_gate_requires_separate_arm_and_exact_principal_pins() -> None:
         "basis",
         "stale",
         "expiry",
+        "depth_moved",
         "protection_wrongid",
         "protection_malformed",
         "protection_unrelated_malformed",
@@ -446,9 +455,40 @@ def test_worker_venue_fills_journal_restart_and_protection(
         assert scan.trade_plan_revision_id is None
         assert venue.post_count == 0
         return
-    if behavior in {"permissions", "basis", "stale", "expiry", "preflight_kill", "preflight_fence"}:
+    if behavior in {
+        "permissions",
+        "basis",
+        "stale",
+        "expiry",
+        "depth_moved",
+        "preflight_kill",
+        "preflight_fence",
+    }:
         assert venue.post_count == 0
         with factory() as session:
+            effect = session.scalar(select(VenueSubmitEffect))
+            blocked = has_demo_entry_history(
+                session,
+                organization_id=ORG,
+                account_id=UUID(settings.governed_blofin_demo_account_id),
+                instrument="BTC-USDT",
+            )
+            if behavior in {"permissions", "basis", "stale"}:
+                assert effect is None  # refused while planning; nothing to send
+            elif behavior == "preflight_fence":
+                # Another fence holder may own the send: stays ambiguous for lookup.
+                assert effect is not None and effect.state is VenueSubmitEffectState.SEND_AMBIGUOUS
+                assert blocked
+                _release_absent_send_after_expiry(session, settings, effect.command_id)
+            else:
+                # Refused before the POST: proven unsent, so the coin is not held.
+                assert effect is not None, scan.paper_loop_reason
+                assert effect.state is VenueSubmitEffectState.PROVEN_UNSENT
+                assert effect.uncertainty is False
+                reservation = session.scalar(select(RiskReservation))
+                assert reservation is not None
+                assert reservation.release_state is RiskReservationReleaseState.RELEASED
+                assert not blocked
             assert session.scalar(select(func.count()).select_from(ExecutionFillFact)) == 0
             assert session.scalar(select(func.count()).select_from(JournalTrade)) == 0
         return
@@ -1036,3 +1076,80 @@ def datetime_from_ms(ms: int):
     from datetime import UTC, datetime
 
     return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=ms)
+
+
+def _release_absent_send_after_expiry(session, settings: Settings, command_id: UUID) -> None:
+    """Operator recovery: refused while the plan is valid, then proven unsent."""
+    from app.core.errors import TradingPolicyError
+    from app.db.models import TradePlanRevision as TradePlanRevisionRow
+    from app.services.risk.settings_service import RiskSettingsService
+    from app.services.safety_epoch import SafetyEpochService
+    from app.services.venue_submit_dispatcher import VenueSubmitDispatcher
+
+    plan = session.get(TradePlanRevisionRow, session.get(ExecutionCommand, command_id).revision_id)
+    dispatcher = VenueSubmitDispatcher(
+        session,
+        SafetyEpochService(session, settings, RiskSettingsService(session, AuditService(session))),
+        clock=lambda: plan.valid_until - timedelta(seconds=1),
+    )
+    with pytest.raises(TradingPolicyError):
+        dispatcher.release_venue_absent_send(
+            command_id=command_id, plan_valid_until=plan.valid_until
+        )
+    session.rollback()
+    dispatcher._clock = lambda: plan.valid_until + timedelta(seconds=1)
+    effect = dispatcher.release_venue_absent_send(
+        command_id=command_id, plan_valid_until=plan.valid_until
+    )
+    session.commit()
+    assert effect.state is VenueSubmitEffectState.PROVEN_UNSENT
+    assert effect.uncertainty is False
+    reservation = session.scalar(
+        select(RiskReservation).where(RiskReservation.command_id == command_id)
+    )
+    assert reservation.release_state is RiskReservationReleaseState.RELEASED
+    assert not has_demo_entry_history(
+        session,
+        organization_id=ORG,
+        account_id=UUID(settings.governed_blofin_demo_account_id),
+        instrument="BTC-USDT",
+    )
+
+
+def test_release_script_keeps_any_order_blofin_has_seen() -> None:
+    """The venue evidence check fails closed on any trace of the client order id."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "release_absent_demo_sends.py"
+    spec = importlib.util.spec_from_file_location("release_absent_demo_sends", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class Client:
+        def __init__(self, detail, pending, history):
+            self.answers = {"order-detail": detail, "orders-pending": pending}
+            self.history = history
+
+        def request(self, method, path, params=None, signed=False, **_):
+            assert method == "GET" and signed
+            name = path.rsplit("/", 1)[-1]
+            if name == "orders-history":
+                return self.history
+            return self.answers[name]
+
+    def check(detail, pending, history):
+        return module._venue_has_order(
+            Client(detail, pending, history), inst_id="BTC-USDT", client_order_id="ATx"
+        )
+
+    other = {"orderId": "1", "clientOrderId": "ATother"}
+    assert check(None, [], [other]) is None
+    assert check([], [], []) is None
+    assert check([{"clientOrderId": "ATx"}], [], []) == "order_detail_found"
+    assert check(None, [{"clientOrderId": "ATx"}], []) == "pending_order_found"
+    assert check(None, None, []) == "pending_orders_unreadable"
+    found = {"orderId": "2", "clientOrderId": "ATx"}
+    assert check(None, [], [other, found]) == "order_history_found"
+    with pytest.raises(ValueError):  # unreadable history never proves absence
+        check(None, [], None)

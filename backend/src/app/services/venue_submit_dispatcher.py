@@ -334,35 +334,89 @@ class VenueSubmitDispatcher:
         self._mark_ambiguous(command_id=command_id, now=_aware(self._clock()))
         self._session.commit()
         require_idle_session_for_provider_io(self._session)
+        # The provider calls before_post only after its read-only preflight
+        # (quote, depth, slippage, basis, permissions), and POSTs only after it
+        # returns. A refusal before that point proves nothing was sent.
+        post_may_start = False
+
+        def before_post() -> None:
+            nonlocal post_may_start
+            self._verify_demo_send_gate(
+                command_id=command_id, owner=owner, fencing_token=fencing_token, plan=plan
+            )
+            post_may_start = True
+
         try:
             provider.submit(
-                plan=plan,
-                client_order_id=snapshot.client_order_id,
-                before_post=lambda: self._verify_demo_send_gate(
-                    command_id=command_id, owner=owner, fencing_token=fencing_token, plan=plan
-                ),
+                plan=plan, client_order_id=snapshot.client_order_id, before_post=before_post
             )
-        except ExchangeRequestError as exc:
+        except Exception as exc:
+            if not post_may_start:
+                return self._mark_refused_before_post(
+                    command_id=command_id, owner=owner, fencing_token=fencing_token, exc=exc
+                )
+            return self._after_incomplete_send(command_id=command_id, exc=exc)
+        ensure_db_transaction(self._session)
+        return self._mark_acknowledged(
+            command_id=command_id, now=_aware(self._clock()), source="blofin_demo"
+        )
+
+    def _after_incomplete_send(self, *, command_id: uuid.UUID, exc: Exception) -> VenueSubmitEffect:
+        """The POST may have started: only a venue rejection or client-id lookup decides."""
+        if isinstance(exc, ExchangeRequestError):
             if exc.details is not None and exc.details.http_status in {400, 401, 403, 422}:
                 ensure_db_transaction(self._session)
                 return self._mark_rejected(
                     command_id=command_id, now=_aware(self._clock()), source="blofin_demo"
                 )
             return self._require_effect(command_id)
-        except Exception as exc:
-            logger.warning(
-                "governed_demo_send_incomplete",
-                command_id=str(command_id),
-                exception_type=type(exc).__name__,
-                reason=redact_text(str(exc))[:180],
-            )
-            # Includes response loss, HTTP failures, and failed protection.
-            # Only client-id lookup can prove what the venue accepted.
-            return self._require_effect(command_id)
-        ensure_db_transaction(self._session)
-        return self._mark_acknowledged(
-            command_id=command_id, now=_aware(self._clock()), source="blofin_demo"
+        logger.warning(
+            "governed_demo_send_incomplete",
+            command_id=str(command_id),
+            exception_type=type(exc).__name__,
+            reason=redact_text(str(exc))[:180],
         )
+        # Includes response loss, HTTP failures, and failed protection.
+        # Only client-id lookup can prove what the venue accepted.
+        return self._require_effect(command_id)
+
+    def _mark_refused_before_post(
+        self, *, command_id: uuid.UUID, owner: str, fencing_token: int, exc: Exception
+    ) -> VenueSubmitEffect:
+        """No POST was made: record proven-unsent and release the reservation.
+
+        Only this lease holder's own SEND_AMBIGUOUS marker is converted; anything
+        else stays ambiguous for client-id reconciliation.
+        """
+        logger.warning(
+            "governed_demo_refused_before_post",
+            command_id=str(command_id),
+            exception_type=type(exc).__name__,
+            reason=redact_text(str(exc))[:180],
+        )
+        self._session.rollback()
+        ensure_db_transaction(self._session)
+        command = self._require_command(command_id)
+        self._epochs.lock_epoch(
+            organization_id=command.organization_id, account_id=command.account_id
+        )
+        effect = self._require_effect_locked(command_id)
+        if (
+            effect.state is not VenueSubmitEffectState.SEND_AMBIGUOUS
+            or effect.lease_owner != owner
+            or effect.dispatch_fencing_token != fencing_token
+        ):
+            self._session.rollback()
+            return self._require_effect(command_id)
+        self._block_before_dispatch(
+            command=command,
+            effect=effect,
+            now=_aware(self._clock()),
+            source_fact="refused_before_post",
+            actor="execution_service",
+        )
+        self._session.commit()
+        return effect
 
     def _verify_demo_send_gate(
         self, *, command_id: uuid.UUID, owner: str, fencing_token: int, plan: TradePlanRevision
@@ -682,6 +736,36 @@ class VenueSubmitDispatcher:
             weighted_price=weighted,
         )
 
+    def release_venue_absent_send(
+        self, *, command_id: uuid.UUID, plan_valid_until: datetime
+    ) -> VenueSubmitEffect:
+        """Operator recovery for one ambiguous governed demo send the venue never saw.
+
+        The caller must already hold venue proof that no order exists for the
+        effect's client id (order lookup and complete order history). This only
+        converts a SEND_AMBIGUOUS effect after its plan expired, so no late
+        dispatch of the same authority is possible; it never sends or resends.
+        """
+        ensure_db_transaction(self._session)
+        now = _aware(self._clock())
+        if _aware(plan_valid_until) >= now:
+            raise TradingPolicyError("Plan still valid; venue absence is not final.")
+        command = self._require_command(command_id)
+        self._epochs.lock_epoch(
+            organization_id=command.organization_id, account_id=command.account_id
+        )
+        effect = self._require_effect_locked(command_id)
+        if effect.state is not VenueSubmitEffectState.SEND_AMBIGUOUS:
+            raise ConflictError("Only an ambiguous send can be released as venue-absent.")
+        self._block_before_dispatch(
+            command=command,
+            effect=effect,
+            now=now,
+            source_fact="venue_absence_proven",
+            actor="operator",
+        )
+        return effect
+
     def _block_before_dispatch(
         self,
         *,
@@ -689,6 +773,8 @@ class VenueSubmitDispatcher:
         effect: VenueSubmitEffect,
         now: datetime,
         release_reservation: bool = True,
+        source_fact: str = "safety_epoch_block_before_dispatch",
+        actor: str = "safety_epoch",
     ) -> None:
         if effect.state is VenueSubmitEffectState.DISPATCH_AUTHORIZED:
             raise ConflictError(
@@ -706,12 +792,12 @@ class VenueSubmitDispatcher:
             receipt=receipt,
             prior_state=projection.state,
             new_state=ExecutionReceiptState.BLOCKED_BEFORE_DISPATCH,
-            source_fact="safety_epoch_block_before_dispatch",
+            source_fact=source_fact,
             source_identity=f"epoch:{int(effect.safety_epoch)}",
             occurred_at=now,
             observed_at=now,
             recorded_at=now,
-            actor="safety_epoch",
+            actor=actor,
         )
         apply_projection_transition(
             self._session,
