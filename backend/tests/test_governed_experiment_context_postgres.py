@@ -387,7 +387,15 @@ def test_final_dispatch_revalidates_after_receipt_commit_and_preflight(world, mo
     effect = world.session.scalar(
         select(VenueSubmitEffect).where(VenueSubmitEffect.command_id == result.execution_command_id)
     )
-    assert effect.uncertainty is True
+    # Nothing was POSTed. A pause or expiry refused by this sender's own final
+    # gate proves the order unsent; an advanced fence may belong to another
+    # sender, so that send stays uncertain for client-id lookup.
+    if change == "fence":
+        assert effect.uncertainty is True
+        assert effect.state is VenueSubmitEffectState.SEND_AMBIGUOUS
+    else:
+        assert effect.uncertainty is False
+        assert effect.state is VenueSubmitEffectState.PROVEN_UNSENT
     assert effect.attempt == 1
 
 
