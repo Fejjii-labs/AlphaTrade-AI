@@ -2547,13 +2547,16 @@ def _open_page_not_due(session: Session, settings: Settings, command: ExecutionC
     return trade is not None and trade.entry_price is not None
 
 
-def _strategy_name(session: Session, plan: PlanRevision) -> str:
+def _strategy_name(session: Session, plan: PlanRevision, organization_id: UUID) -> str:
     if plan.strategy_version_id is None:
         return ""
     row = session.execute(
         select(UserStrategy.name, UserStrategyVersion.version)
         .join(UserStrategyVersion, UserStrategyVersion.strategy_id == UserStrategy.id)
-        .where(UserStrategyVersion.id == plan.strategy_version_id)
+        .where(
+            UserStrategyVersion.id == plan.strategy_version_id,
+            UserStrategy.organization_id == organization_id,
+        )
     ).first()
     return "" if row is None else f"{row.name} v{row.version}"
 
@@ -2579,7 +2582,7 @@ def _queue_trade_telegram(
             trade = _journal_trade(session, command)
             if trade is None:
                 return
-            strategy = _strategy_name(session, plan)
+            strategy = _strategy_name(session, plan, command.organization_id)
             stop = plan.risk_and_exits.stop.value
             if opened:
                 queue_demo_trade_opened_telegram(

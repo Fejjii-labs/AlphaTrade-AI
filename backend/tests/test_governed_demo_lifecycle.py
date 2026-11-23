@@ -519,6 +519,36 @@ def test_close_page_failure_never_changes_the_reconcile_outcome(monkeypatch):
         assert kill is None or not kill.active
 
 
+def test_close_page_text_uses_the_plan_stop_not_the_editable_journal_stop(monkeypatch):
+    world = open_world(monkeypatch)
+    pages: list[str] = []
+    for module in ("governed_blofin_demo", "demo_trade_telegram"):
+        monkeypatch.setattr(f"app.services.{module}.demo_trade_pages_enabled", lambda *_: True)
+    monkeypatch.setattr(
+        "app.services.demo_trade_telegram.queue_safety_alert",
+        lambda _session, _settings, alert: pages.append(alert.message),
+    )
+    with world.factory() as session:
+        trade = session.scalar(select(JournalTrade))
+        # A Journal edit to the stop (zero risk) must not change the paged R.
+        trade.planned_stop_price = trade.entry_price
+        session.commit()
+    world.venue.exited = True
+    with world.factory() as session:
+        assert (
+            world.loop.reconcile_command(session, command_id=world.command_id)
+            == "demo_closed_reconciled"
+        )
+        trade = session.scalar(select(JournalTrade))
+        strategy = _strategy_page_name(session, trade)
+    assert len(pages) == 1
+    assert pages[0].startswith("AlphaTrade DEMO trade closed.")
+    assert f"Strategy: {strategy}" in pages[0]
+    assert f"Symbol: {trade.symbol}" in pages[0]
+    final_r = pages[0].split("Final R (gross, before fees): ", 1)[1].splitlines()[0]
+    assert final_r.endswith("R") and final_r != "unknown"
+
+
 def test_editable_journal_status_never_releases_the_demo_slot(monkeypatch):
     world = open_world(monkeypatch)
     with world.factory() as session:
