@@ -52,6 +52,7 @@ from app.providers.exchange.governed_blofin import (
 )
 from app.providers.exchange.governed_blofin_exit import DemoPositionLineageError
 from app.providers.exchange.mapping import to_blofin_inst_id
+from app.repositories.journal_trades import JournalTradeRepository
 from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.approval import ApprovalDecisionRequest
 from app.schemas.common import (
@@ -103,6 +104,10 @@ from app.services.demo_risk_v2 import (
     demo_stop_sized_contracts,
     enforce_demo_equity_stop,
     valid_demo_equity,
+)
+from app.services.demo_trade_telegram import (
+    queue_demo_trade_closed_telegram,
+    queue_demo_trade_opened_telegram,
 )
 from app.services.execution_claim import ExecutionClaimHooks
 from app.services.execution_service import ExecutionService
@@ -2079,6 +2084,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 for fact in evidence.fills
             )
             cumulative_fees = Decimal("0") if fee_currency_verified else None
+            opened_before = not evidence.fills or _journal_entry_recorded(session, command)
             for fact in sorted(evidence.fills, key=lambda item: (item.occurred_at, item.identity)):
                 if cumulative_fees is not None:
                     cumulative_fees += fact.fee
@@ -2120,6 +2126,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     projection.version = int(projection.version) + 1
                 if evidence.status in {"canceled", "cancelled", "expired"}:
                     self._dispatcher(session).record_demo_terminal(command_id=command_id)
+                if not opened_before:
+                    _queue_trade_telegram(session, self._settings, command, opened=True)
                 # Persist actual entry facts before separate bounded venue reads.
                 # No DB transaction/epoch lock spans the exit provider IO.
                 session.commit()
@@ -2189,6 +2197,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                                 envelope=envelope,
                                 evidence=exit_evidence,
                             )
+                        _queue_trade_telegram(session, self._settings, command, opened=False)
                         session.commit()
                         return self._finish_closed(session, command, "demo_closed_reconciled")
                     except Exception:
@@ -2503,6 +2512,34 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             logger.warning("stale_manual_demo_entry_reconciliation_failed", exc_info=True)
             stale = ()
         return governed + stale
+
+
+def _journal_trade(session: Session, command: ExecutionCommand) -> JournalTrade | None:
+    return JournalTradeRepository(session).find_by_execution_lifecycle(
+        organization_id=command.organization_id, execution_lifecycle_id=command.id
+    )
+
+
+def _journal_entry_recorded(session: Session, command: ExecutionCommand) -> bool:
+    trade = _journal_trade(session, command)
+    return trade is not None and trade.entry_price is not None
+
+
+def _queue_trade_telegram(
+    session: Session, settings: Settings, command: ExecutionCommand, *, opened: bool
+) -> None:
+    """Queue the opt-in open or final-close page; it sends only after commit."""
+
+    try:
+        trade = _journal_trade(session, command)
+        if trade is None:
+            return
+        if opened:
+            queue_demo_trade_opened_telegram(session, settings, trade)
+        else:
+            queue_demo_trade_closed_telegram(session, settings, trade)
+    except Exception:
+        logger.warning("demo_trade_telegram_queue_failed command_id=%s", command.id)
 
 
 def _plan_window(settings: Settings) -> timedelta:

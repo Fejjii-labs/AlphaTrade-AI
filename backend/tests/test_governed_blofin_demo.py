@@ -396,6 +396,11 @@ def test_worker_venue_fills_journal_restart_and_protection(
         client, clock=lambda: EVALUATED_AT + timedelta(seconds=venue.clock_delta)
     )
     monkeypatch.setattr(GovernedBloFinDemoLoop, "_get_provider", lambda _: provider)
+    opened_pages: list[object] = []
+    monkeypatch.setattr(
+        "app.services.governed_blofin_demo.queue_demo_trade_opened_telegram",
+        lambda _session, _settings, trade: opened_pages.append(trade.id),
+    )
     monitor = _monitor(source, replay=False, clock=lambda: EVALUATED_AT)
     held: list = []
     runtime = _runtime_for(factory, source, monitor, replay=False, held=held)
@@ -455,8 +460,13 @@ def test_worker_venue_fills_journal_restart_and_protection(
         trade_count = session.scalar(select(func.count()).select_from(JournalTrade))
         if behavior in {"rejected", "unfilled"}:
             assert fill_count == trade_count == 0
+            assert opened_pages == []
         else:
             assert fill_count == trade_count == 1
+            # One open page, from the reconcile that first journals the entry.
+            assert len(opened_pages) == 1
+            loop.reconcile_pending(session)
+            assert len(opened_pages) == 1
             trade = session.scalar(select(JournalTrade))
             assert trade is not None
             assert trade.entry_time == EVALUATED_AT

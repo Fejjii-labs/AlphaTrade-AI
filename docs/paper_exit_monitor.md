@@ -356,6 +356,15 @@ optional extra codes. ``degraded_repeat``, clock skew, and ``arming_refused``
 stay in structured logs and ``GET /health/paper-worker`` only. Setup
 notifications and policy-controlled paper alerts use the separate outbox path.
 
+Governed BloFin demo trades page on open and on final close only when
+``TELEGRAM_SAFETY_ALERT_ALLOWLIST`` lists ``demo_trade_opened`` and
+``demo_trade_closed``. The open page has symbol, strategy, timeframe,
+direction, actual entry, stop, and R per planned target (before fees). The
+close page has the exit reason, final R, and the stored net P&L. Partial
+take-profit fills are not paged; they stay in the journal. These pages are
+queued with the reconcile commit and sent on a background thread, so the
+worker cycle does not wait on Telegram.
+
 Telegram safety sends use the existing `telegram_bot_token` and
 `telegram_chat_id`. Kill-switch and loss-protection pages never include a
 secret or a P&L amount. Stop and target exit pages include symbol, timeframe,

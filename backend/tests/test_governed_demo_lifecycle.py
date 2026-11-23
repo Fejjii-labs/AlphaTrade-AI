@@ -276,6 +276,11 @@ def test_actual_exit_projects_journal_learning_audit_and_releases_only_owned_exp
         command = session.get(ExecutionCommand, world.command_id)
         assert has_demo_entry_history(session, organization_id=ORG, account_id=command.account_id)
     world.venue.exited = True
+    closed_pages: list[object] = []
+    monkeypatch.setattr(
+        "app.services.governed_blofin_demo.queue_demo_trade_closed_telegram",
+        lambda _session, _settings, trade: closed_pages.append((trade.id, trade.status)),
+    )
     with world.factory() as session:
         assert (
             world.loop.reconcile_command(session, command_id=world.command_id)
@@ -284,6 +289,8 @@ def test_actual_exit_projects_journal_learning_audit_and_releases_only_owned_exp
         trade = session.scalar(select(JournalTrade))
         assert trade.status is JournalTradeStatus.CLOSED
         assert trade.exit_time == EVALUATED_AT + timedelta(seconds=1)
+        # One final-close page, queued with the closed journal trade.
+        assert closed_pages == [(trade.id, JournalTradeStatus.CLOSED)]
         assert trade.fees == Decimal("0.05")
         view = monetary_view(world, session)
         assert view.fees == Decimal("0.05") and view.funding is None
