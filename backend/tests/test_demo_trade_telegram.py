@@ -15,25 +15,32 @@ from app.providers.alert_delivery.base import AlertDeliveryResult
 from app.providers.alert_delivery.telegram import TelegramAlertDeliveryProvider
 from app.schemas.common import AlertDeliveryChannel, TradeDirection
 from app.services.demo_trade_telegram import (
+    demo_trade_pages_enabled,
     format_demo_trade_closed_text,
     format_demo_trade_opened_text,
     queue_demo_trade_closed_telegram,
     queue_demo_trade_opened_telegram,
     target_r_multiples,
 )
-from app.services.safety_alerts import (
-    deliver_queued_safety_alerts,
-    reset_safety_alert_dedup,
-    safety_alert_telegram_allowed,
-)
+from app.services.safety_alerts import deliver_queued_safety_alerts, reset_safety_alert_dedup
 
 _TOKEN = "123456:simulated-token"
 _CHAT = "424242"
+_STOP = Decimal("95")
 _TARGETS = [
     {"label": "TP1", "price": "102.5", "size_fraction": "0.15"},
     {"label": "TP2", "price": "110", "size_fraction": "0.5"},
     {"label": "TP3", "price": "115", "size_fraction": "0.2"},
 ]
+
+
+def _settings(*, on: bool = True) -> Settings:
+    return Settings(
+        _env_file=None,
+        telegram_bot_token=_TOKEN,
+        telegram_chat_id=_CHAT,
+        telegram_safety_alert_allowlist=["demo_trade_opened", "demo_trade_closed"] if on else [],
+    )
 
 
 def _trade(**overrides: object) -> Any:
@@ -42,13 +49,8 @@ def _trade(**overrides: object) -> Any:
         "symbol": "BTCUSDT",
         "timeframe": "15m",
         "direction": TradeDirection.LONG,
-        "strategy_label": "D-line 15m long",
         "entry_price": Decimal("100"),
-        "planned_stop_price": Decimal("95"),
-        "planned_targets": _TARGETS,
-        "planned_risk_amount": Decimal("10"),
         "exit_price": None,
-        "exit_time": None,
         "exit_reason": None,
         "net_pnl": None,
     }
@@ -59,7 +61,7 @@ def _trade(**overrides: object) -> Any:
 def test_open_text_has_coin_strategy_direction_entry_stop_and_r_per_target() -> None:
     text = format_demo_trade_opened_text(
         symbol="BTCUSDT",
-        strategy="D-line 15m long",
+        strategy="D-line BTCUSDT long 15m abc v1",
         timeframe="15m",
         direction=TradeDirection.LONG,
         entry_price=Decimal("100.00"),
@@ -69,12 +71,12 @@ def test_open_text_has_coin_strategy_direction_entry_stop_and_r_per_target() -> 
     assert text.splitlines() == [
         "AlphaTrade DEMO trade opened.",
         "Symbol: BTCUSDT",
-        "Strategy: D-line 15m long",
+        "Strategy: D-line BTCUSDT long 15m abc v1",
         "Timeframe: 15m",
         "Direction: long",
         "Entry: 100",
         "Stop: 95",
-        "R:R: TP1 0.50R, TP2 2.00R, TP3 3.00R",
+        "R:R (before fees): TP1 0.50R, TP2 2.00R, TP3 3.00R",
     ]
 
 
@@ -95,48 +97,82 @@ def test_short_r_uses_the_actual_entry_and_bad_risk_is_unknown() -> None:
     assert inverted == [("TP1", "unknown")]
 
 
-def test_close_text_has_final_r_and_net_pnl() -> None:
+def test_close_text_labels_gross_r_and_shows_net_pnl_only_when_stored() -> None:
     text = format_demo_trade_closed_text(
         symbol="ETHUSDT",
-        strategy="D-line 1h short",
+        strategy="",
         timeframe="1h",
         direction=TradeDirection.SHORT,
         exit_reason="target_hit",
-        r_multiple="1.85",
+        final_r="1.85R",
+        pnl_display=None,
+    )
+    assert "Strategy: unlabeled" in text
+    assert "Exit: target_hit" in text
+    assert "Final R (gross, before fees): 1.85R" in text
+    assert "Net P&L" not in text
+    with_pnl = format_demo_trade_closed_text(
+        symbol="ETHUSDT",
+        strategy="s",
+        timeframe="1h",
+        direction=TradeDirection.SHORT,
+        exit_reason="",
+        final_r="1.85R",
         pnl_display="+18.50 USDT",
     )
-    assert "AlphaTrade DEMO trade closed." in text
-    assert "Exit: target_hit" in text
-    assert "Final R: 1.85 (+18.50 USDT)" in text
+    assert "Exit: closed" in with_pnl
+    assert with_pnl.endswith("Net P&L: +18.50 USDT")
 
 
-def test_demo_trade_codes_are_opt_in() -> None:
-    off = Settings(_env_file=None)
-    on = Settings(
-        _env_file=None,
-        telegram_safety_alert_allowlist=["demo_trade_opened", "demo_trade_closed"],
+def test_free_text_is_redacted() -> None:
+    text = format_demo_trade_opened_text(
+        symbol="BTCUSDT",
+        strategy="api_key=supersecret1",
+        timeframe="15m",
+        direction=TradeDirection.LONG,
+        entry_price=Decimal("100"),
+        stop_price=_STOP,
+        targets=[{"label": "api_key=x", "price": "110"}],
     )
-    for code in ("demo_trade_opened", "demo_trade_closed"):
-        assert not safety_alert_telegram_allowed(off, code)
-        assert safety_alert_telegram_allowed(on, code)
+    assert "supersecret1" not in text
+    assert "api_key=x" not in text
 
 
-def test_queue_refuses_a_trade_without_entry_stop_or_exit() -> None:
+def test_off_by_default_and_nothing_is_queued_when_off() -> None:
     session: Any = SimpleNamespace(info={})
-    settings = Settings(_env_file=None)
-    assert not queue_demo_trade_opened_telegram(session, settings, _trade(entry_price=None))
+    for code in ("demo_trade_opened", "demo_trade_closed"):
+        assert not demo_trade_pages_enabled(Settings(_env_file=None), code)
+        assert not demo_trade_pages_enabled(_settings(on=False), code)
+        assert demo_trade_pages_enabled(_settings(), code)
+    unconfigured = _settings().model_copy(update={"telegram_bot_token": ""})
+    assert not demo_trade_pages_enabled(unconfigured, "demo_trade_opened")
+    closed = _trade(exit_price=Decimal("110"))
     assert not queue_demo_trade_opened_telegram(
-        session, settings, _trade(planned_stop_price=None)
+        session, _settings(on=False), _trade(), strategy="s", stop_price=_STOP, targets=_TARGETS
     )
-    assert not queue_demo_trade_closed_telegram(session, settings, _trade())
+    assert not queue_demo_trade_closed_telegram(
+        session, _settings(on=False), closed, strategy="s", stop_price=_STOP
+    )
     assert session.info.get("alphatrade_safety_alerts", []) == []
 
 
-def test_pages_send_after_commit_on_a_background_thread(
+def test_queue_refuses_a_trade_without_entry_or_exit() -> None:
+    session: Any = SimpleNamespace(info={})
+    settings = _settings()
+    assert not queue_demo_trade_opened_telegram(
+        session, settings, _trade(entry_price=None), strategy="s", stop_price=_STOP, targets=[]
+    )
+    assert not queue_demo_trade_closed_telegram(
+        session, settings, _trade(), strategy="s", stop_price=_STOP
+    )
+    assert session.info.get("alphatrade_safety_alerts", []) == []
+
+
+def test_pages_send_after_commit_on_a_background_thread_once_per_trade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reset_safety_alert_dedup()
-    sent: list[tuple[str, str, bool]] = []
+    sent: list[tuple[str, str]] = []
     done = threading.Event()
 
     def _deliver(
@@ -145,39 +181,29 @@ def test_pages_send_after_commit_on_a_background_thread(
         *,
         bypass_enable_check: bool = False,
     ) -> AlertDeliveryResult:
-        sent.append(
-            (
-                payload.message,  # type: ignore[attr-defined]
-                threading.current_thread().name,
-                bypass_enable_check,
-            )
-        )
-        if len(sent) == 2:
+        sent.append((payload.message, threading.current_thread().name))  # type: ignore[attr-defined]
+        if len(sent) == 3:
             done.set()
         return AlertDeliveryResult(success=True, channel=AlertDeliveryChannel.TELEGRAM)
 
     monkeypatch.setattr(TelegramAlertDeliveryProvider, "deliver", _deliver)
-    settings = Settings(
-        _env_file=None,
-        telegram_bot_token=_TOKEN,
-        telegram_chat_id=_CHAT,
-        telegram_safety_alert_allowlist=["demo_trade_opened", "demo_trade_closed"],
-    )
+    settings = _settings()
     session: Any = SimpleNamespace(info={})
-    opened = _trade()
-    closed = _trade(
-        exit_price=Decimal("110"),
-        exit_time=object(),
-        exit_reason="target_hit",
-        net_pnl=Decimal("18.5"),
+    first, second = _trade(), _trade(symbol="ETHUSDT")
+    closed = _trade(id=first.id, exit_price=Decimal("110"), exit_reason="target_hit")
+    for trade in (first, second):
+        assert queue_demo_trade_opened_telegram(
+            session, settings, trade, strategy="D-line v1", stop_price=_STOP, targets=_TARGETS
+        )
+    assert queue_demo_trade_closed_telegram(
+        session, settings, closed, strategy="D-line v1", stop_price=_STOP
     )
-    assert queue_demo_trade_opened_telegram(session, settings, opened)
-    assert queue_demo_trade_closed_telegram(session, settings, closed)
     assert sent == []  # nothing leaves before commit
     deliver_queued_safety_alerts(session)
     assert done.wait(timeout=5)
-    assert [name.startswith("telegram-alert") for _, name, _ in sent] == [True, True]
-    assert "AlphaTrade DEMO trade opened." in sent[0][0]
-    assert "R:R: TP1 0.50R, TP2 2.00R, TP3 3.00R" in sent[0][0]
-    assert "Final R: 1.85 (+18.50 USDT)" in sent[1][0]
-    assert all(_TOKEN not in message and _CHAT not in message for message, _, _ in sent)
+    assert all(name.startswith("telegram-alert") for _, name in sent)
+    # Two different trades opening together each get a page (per-trade dedup key).
+    assert ["Symbol: BTCUSDT" in sent[0][0], "Symbol: ETHUSDT" in sent[1][0]] == [True, True]
+    assert "R:R (before fees): TP1 0.50R, TP2 2.00R, TP3 3.00R" in sent[0][0]
+    assert "Final R (gross, before fees): 2.00R" in sent[2][0]
+    assert all(_TOKEN not in message and _CHAT not in message for message, _ in sent)

@@ -264,6 +264,17 @@ def seed_band_ledger_headroom(session, account_id, *, max_notional=Decimal("2000
     )
 
 
+def _strategy_page_name(session, trade) -> str:
+    from app.db.models import UserStrategy, UserStrategyVersion
+
+    name, version = session.execute(
+        select(UserStrategy.name, UserStrategyVersion.version)
+        .join(UserStrategyVersion, UserStrategyVersion.strategy_id == UserStrategy.id)
+        .where(UserStrategyVersion.id == trade.strategy_version_id)
+    ).one()
+    return f"{name} v{version}"
+
+
 def demo_settings(account_id: str, **updates: object) -> Settings:
     values = dict(  # noqa: C408
         _env_file=None,
@@ -396,10 +407,24 @@ def test_worker_venue_fills_journal_restart_and_protection(
         client, clock=lambda: EVALUATED_AT + timedelta(seconds=venue.clock_delta)
     )
     monkeypatch.setattr(GovernedBloFinDemoLoop, "_get_provider", lambda _: provider)
-    opened_pages: list[object] = []
+    opened_pages: list[tuple[object, str, int]] = []
+
+    def _open_page(_session: object, _settings: object, trade: JournalTrade, **page: object):
+        # The page is queued inside the entry transaction: no entry is committed yet.
+        with factory() as other:
+            committed = other.scalar(
+                select(func.count())
+                .select_from(JournalTrade)
+                .where(JournalTrade.entry_price.is_not(None))
+            )
+        opened_pages.append((trade.id, str(page["strategy"]), int(committed or 0)))
+        return True
+
     monkeypatch.setattr(
-        "app.services.governed_blofin_demo.queue_demo_trade_opened_telegram",
-        lambda _session, _settings, trade: opened_pages.append(trade.id),
+        "app.services.governed_blofin_demo.demo_trade_pages_enabled", lambda *_: True
+    )
+    monkeypatch.setattr(
+        "app.services.governed_blofin_demo.queue_demo_trade_opened_telegram", _open_page
     )
     monitor = _monitor(source, replay=False, clock=lambda: EVALUATED_AT)
     held: list = []
@@ -463,12 +488,14 @@ def test_worker_venue_fills_journal_restart_and_protection(
             assert opened_pages == []
         else:
             assert fill_count == trade_count == 1
-            # One open page, from the reconcile that first journals the entry.
-            assert len(opened_pages) == 1
+            # One open page, from the reconcile that first journals the entry,
+            # named from the plan's strategy version, queued before that commit.
+            assert [page[2] for page in opened_pages] == [0]
             loop.reconcile_pending(session)
             assert len(opened_pages) == 1
             trade = session.scalar(select(JournalTrade))
             assert trade is not None
+            assert opened_pages[0][:2] == (trade.id, _strategy_page_name(session, trade))
             assert trade.entry_time == EVALUATED_AT
             assert trade.entry_price == price
             assert trade.candidate_id == scan.candidate_ids[0]

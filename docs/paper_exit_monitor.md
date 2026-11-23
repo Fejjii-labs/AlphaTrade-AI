@@ -358,12 +358,21 @@ notifications and policy-controlled paper alerts use the separate outbox path.
 
 Governed BloFin demo trades page on open and on final close only when
 ``TELEGRAM_SAFETY_ALERT_ALLOWLIST`` lists ``demo_trade_opened`` and
-``demo_trade_closed``. The open page has symbol, strategy, timeframe,
-direction, actual entry, stop, and R per planned target (before fees). The
-close page has the exit reason, final R, and the stored net P&L. Partial
-take-profit fills are not paged; they stay in the journal. These pages are
-queued with the reconcile commit and sent on a background thread, so the
-worker cycle does not wait on Telegram.
+``demo_trade_closed`` and the bot token and chat id are set. Like every
+safety-alert code, ``TELEGRAM_ALERTS_ENABLED`` does not gate them; when they
+are not allowlisted nothing is queued. The open page has symbol, strategy
+(name and version from the plan), timeframe, direction, actual entry, plan
+stop, and R per planned target. The close page has the exit reason and the
+final R. Both R values are gross: from prices against the immutable plan
+stop, before fees and funding; the final R uses the size-weighted average
+exit price. Net P&L is shown only when the Journal has stored it (governed
+demo closes do not store it today). Partial take-profit fills are not paged;
+they stay in the journal. Only the reconciler that writes the lifecycle
+resolution queues the close page, so competing reconcilers page once.
+Pages are queued with the reconcile commit and sent at most once on a
+background thread: a failed send is logged and not retried, and a page still
+waiting when the process is killed is lost. The worker cycle does not wait on
+Telegram.
 
 Telegram safety sends use the existing `telegram_bot_token` and
 `telegram_chat_id`. Kill-switch and loss-protection pages never include a
