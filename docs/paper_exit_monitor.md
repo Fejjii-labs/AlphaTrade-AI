@@ -374,6 +374,16 @@ background thread: a failed send is logged and not retried, and a page still
 waiting when the process is killed is lost. The worker cycle does not wait on
 Telegram.
 
+``daily_loss_limit_reached`` (a default code) pages once per organization per
+UTC day, the first time the daily loss budget refuses a new entry
+(``daily_loss_limit``: realized loss today plus loss reserved by open entries
+plus the entry's planned loss would exceed ``max_daily_loss``). The page shows
+the budget, the realized and the reserved loss, read for the governed demo
+account in a separate short session. It is sent on the same background thread
+and never changes the scan. ``daily_locked`` stays display only (AT-ADR-152);
+the 10% account equity stop keeps its own kill-switch page. The once-a-day
+dedup is per process, so a worker restart on the same day can page again.
+
 Telegram safety sends use the existing `telegram_bot_token` and
 `telegram_chat_id`. Kill-switch and loss-protection pages never include a
 secret or a P&L amount. Stop and target exit pages include symbol, timeframe,
