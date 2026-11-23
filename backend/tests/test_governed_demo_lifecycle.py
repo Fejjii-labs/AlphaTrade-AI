@@ -47,6 +47,7 @@ from tests.test_automated_paper_loop import _live_source, _monitor, _runtime_for
 from tests.test_governed_blofin_demo import (
     _TS,
     Venue,
+    _strategy_page_name,
     demo_settings,
     seed_band_ledger_headroom,
 )
@@ -276,6 +277,7 @@ def test_actual_exit_projects_journal_learning_audit_and_releases_only_owned_exp
         command = session.get(ExecutionCommand, world.command_id)
         assert has_demo_entry_history(session, organization_id=ORG, account_id=command.account_id)
     world.venue.exited = True
+    closed_pages = _spy_close_pages(monkeypatch)
     with world.factory() as session:
         assert (
             world.loop.reconcile_command(session, command_id=world.command_id)
@@ -284,6 +286,10 @@ def test_actual_exit_projects_journal_learning_audit_and_releases_only_owned_exp
         trade = session.scalar(select(JournalTrade))
         assert trade.status is JournalTradeStatus.CLOSED
         assert trade.exit_time == EVALUATED_AT + timedelta(seconds=1)
+        # One final-close page, queued with the closed journal trade.
+        assert closed_pages == [
+            (trade.id, JournalTradeStatus.CLOSED, _strategy_page_name(session, trade))
+        ]
         assert trade.fees == Decimal("0.05")
         view = monetary_view(world, session)
         assert view.fees == Decimal("0.05") and view.funding is None
@@ -437,9 +443,24 @@ def test_wrong_principal_cannot_reconcile_or_release_another_account(monkeypatch
         assert session.scalar(select(JournalTrade)).status is JournalTradeStatus.OPEN
 
 
+def _spy_close_pages(monkeypatch) -> list[tuple[object, object, str]]:
+    pages: list[tuple[object, object, str]] = []
+    monkeypatch.setattr(
+        "app.services.governed_blofin_demo.demo_trade_pages_enabled", lambda *_: True
+    )
+    monkeypatch.setattr(
+        "app.services.governed_blofin_demo.queue_demo_trade_closed_telegram",
+        lambda _session, _settings, trade, **page: pages.append(
+            (trade.id, trade.status, page["strategy"])
+        ),
+    )
+    return pages
+
+
 def test_competing_reconcilers_commit_one_close_release_and_audit(monkeypatch):
     world = open_world(monkeypatch)
     world.venue.exited = True
+    closed_pages = _spy_close_pages(monkeypatch)
     barrier = Barrier(2)
 
     def reconcile(_):
@@ -473,6 +494,92 @@ def test_competing_reconcilers_commit_one_close_release_and_audit(monkeypatch):
             "0.00000001"
         )
         assert world.venue.post_count == 1
+    # The reconciler that loses the race finds the resolution and does not page again.
+    assert len(closed_pages) == 1
+
+
+def test_close_page_failure_never_changes_the_reconcile_outcome(monkeypatch):
+    world = open_world(monkeypatch)
+    world.venue.exited = True
+    monkeypatch.setattr(
+        "app.services.governed_blofin_demo.demo_trade_pages_enabled", lambda *_: True
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated page failure")
+
+    monkeypatch.setattr("app.services.governed_blofin_demo.queue_demo_trade_closed_telegram", _boom)
+    with world.factory() as session:
+        assert (
+            world.loop.reconcile_command(session, command_id=world.command_id)
+            == "demo_closed_reconciled"
+        )
+        assert session.scalar(select(JournalTrade)).status is JournalTradeStatus.CLOSED
+        kill = session.scalar(select(KillSwitchState))
+        assert kill is None or not kill.active
+
+
+def test_close_page_database_error_fails_the_reconcile_instead_of_a_false_close(monkeypatch):
+    world = open_world(monkeypatch)
+    world.venue.exited = True
+    closed_pages = _spy_close_pages(monkeypatch)
+    module = import_module("app.services.governed_blofin_demo")
+    real_strategy_name = module._strategy_name
+
+    def _aborting_lookup(session, *_args):
+        session.execute(text("select 1/0"))  # aborts the PostgreSQL transaction
+        return ""
+
+    monkeypatch.setattr(module, "_strategy_name", _aborting_lookup)
+    with world.factory() as session:
+        try:
+            result = world.loop.reconcile_command(session, command_id=world.command_id)
+        except DBAPIError:
+            result = None
+        assert result != "demo_closed_reconciled"
+    with world.factory() as session:
+        assert session.scalar(select(GovernedDemoLifecycleResolution)) is None
+        assert session.scalar(select(JournalTrade)).status is not JournalTradeStatus.CLOSED
+    assert closed_pages == []
+    # The next cycle closes the trade and pages once.
+    monkeypatch.setattr(module, "_strategy_name", real_strategy_name)
+    with world.factory() as session:
+        assert (
+            world.loop.reconcile_command(session, command_id=world.command_id)
+            == "demo_closed_reconciled"
+        )
+        assert session.scalar(select(JournalTrade)).status is JournalTradeStatus.CLOSED
+    assert len(closed_pages) == 1
+
+
+def test_close_page_text_uses_the_plan_stop_not_the_editable_journal_stop(monkeypatch):
+    world = open_world(monkeypatch)
+    pages: list[str] = []
+    for module in ("governed_blofin_demo", "demo_trade_telegram"):
+        monkeypatch.setattr(f"app.services.{module}.demo_trade_pages_enabled", lambda *_: True)
+    monkeypatch.setattr(
+        "app.services.demo_trade_telegram.queue_safety_alert",
+        lambda _session, _settings, alert: pages.append(alert.message),
+    )
+    with world.factory() as session:
+        trade = session.scalar(select(JournalTrade))
+        # A Journal edit to the stop (zero risk) must not change the paged R.
+        trade.planned_stop_price = trade.entry_price
+        session.commit()
+    world.venue.exited = True
+    with world.factory() as session:
+        assert (
+            world.loop.reconcile_command(session, command_id=world.command_id)
+            == "demo_closed_reconciled"
+        )
+        trade = session.scalar(select(JournalTrade))
+        strategy = _strategy_page_name(session, trade)
+    assert len(pages) == 1
+    assert pages[0].startswith("AlphaTrade DEMO trade closed.")
+    assert f"Strategy: {strategy}" in pages[0]
+    assert f"Symbol: {trade.symbol}" in pages[0]
+    final_r = pages[0].split("Final R (gross, before fees): ", 1)[1].splitlines()[0]
+    assert final_r.endswith("R") and final_r != "unknown"
 
 
 def test_editable_journal_status_never_releases_the_demo_slot(monkeypatch):

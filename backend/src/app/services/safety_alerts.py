@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 import threading
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -146,6 +147,8 @@ TELEGRAM_SAFETY_OPTIONAL_CODES: frozenset[str] = frozenset(
     {
         "paper_trade_opened",
         "paper_trade_closed",
+        "demo_trade_opened",
+        "demo_trade_closed",
     }
 )
 TELEGRAM_SAFETY_KNOWN_CODES: frozenset[str] = (
@@ -166,6 +169,8 @@ _LOCK = threading.Lock()
 _SENT: dict[str, datetime] = {}
 _SENT_MAX = 2048
 _SENT_PRUNE_AT = 256
+# One thread keeps background pages in order; each HTTP attempt times out within 5 s.
+_BACKGROUND: ThreadPoolExecutor | None = None
 
 
 def reset_safety_alert_dedup() -> None:
@@ -402,6 +407,9 @@ def deliver_queued_safety_alerts(session: Session) -> None:
         settings, alert = item
         if not isinstance(settings, Settings) or not isinstance(alert, ExitMonitorAlert):
             continue
+        if alert.background:
+            _submit_background(settings, alert)
+            continue
         sent = False
         try:
             sent = deliver_safety_alert(settings, alert, failure_log="error")
@@ -433,6 +441,29 @@ def discard_queued_safety_alerts(session: Session) -> None:
         if not isinstance(alert, ExitMonitorAlert):
             continue
         logger.error("safety_alert_discarded_with_rollback", code=alert.code)
+
+
+def _submit_background(settings: Settings, alert: ExitMonitorAlert) -> None:
+    global _BACKGROUND
+    with _LOCK:
+        if _BACKGROUND is None:
+            _BACKGROUND = ThreadPoolExecutor(max_workers=1, thread_name_prefix="telegram-alert")
+        executor = _BACKGROUND
+    try:
+        executor.submit(_deliver_background, settings, alert)
+    except RuntimeError:  # interpreter shutdown
+        logger.warning("safety_alert_background_unavailable", code=alert.code)
+
+
+def _deliver_background(settings: Settings, alert: ExitMonitorAlert) -> None:
+    try:
+        deliver_safety_alert(settings, alert)
+    except Exception as exc:
+        logger.warning(
+            "safety_alert_telegram_failed",
+            code=alert.code,
+            error=redact_text(str(exc))[:200],
+        )
 
 
 def deliver_observed_alert_outside_transaction(

@@ -15,6 +15,7 @@ from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from uuid import UUID, uuid5
 
 from sqlalchemy import String, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import ExchangeMode, ExecutionMode, Settings
@@ -34,6 +35,8 @@ from app.db.models import (
     KillSwitchState,
     Membership,
     TradePlanRevision,
+    UserStrategy,
+    UserStrategyVersion,
     VenueSubmitEffect,
 )
 from app.evidence_pipeline.types import AssembledCanonicalEvidence
@@ -52,6 +55,7 @@ from app.providers.exchange.governed_blofin import (
 )
 from app.providers.exchange.governed_blofin_exit import DemoPositionLineageError
 from app.providers.exchange.mapping import to_blofin_inst_id
+from app.repositories.journal_trades import JournalTradeRepository
 from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.approval import ApprovalDecisionRequest
 from app.schemas.common import (
@@ -92,6 +96,7 @@ from app.services.automated_paper_loop import (
     _stored_plan_execution_refusal,
 )
 from app.services.autonomous_trading import RiskLimitSnapshot
+from app.services.canonical_execution_journal import canonical_planned_targets
 from app.services.canonical_paper_execution import CanonicalPaperExecutionService
 from app.services.canonical_serialization import canonical_sha256
 from app.services.demo_account_history import has_demo_entry_history
@@ -103,6 +108,13 @@ from app.services.demo_risk_v2 import (
     demo_stop_sized_contracts,
     enforce_demo_equity_stop,
     valid_demo_equity,
+)
+from app.services.demo_trade_telegram import (
+    DEMO_TRADE_CLOSED,
+    DEMO_TRADE_OPENED,
+    demo_trade_pages_enabled,
+    queue_demo_trade_closed_telegram,
+    queue_demo_trade_opened_telegram,
 )
 from app.services.execution_claim import ExecutionClaimHooks
 from app.services.execution_service import ExecutionService
@@ -2079,6 +2091,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 for fact in evidence.fills
             )
             cumulative_fees = Decimal("0") if fee_currency_verified else None
+            opened_before = not evidence.fills or _open_page_not_due(
+                session, self._settings, command
+            )
             for fact in sorted(evidence.fills, key=lambda item: (item.occurred_at, item.identity)):
                 if cumulative_fees is not None:
                     cumulative_fees += fact.fee
@@ -2120,6 +2135,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     projection.version = int(projection.version) + 1
                 if evidence.status in {"canceled", "cancelled", "expired"}:
                     self._dispatcher(session).record_demo_terminal(command_id=command_id)
+                if not opened_before:
+                    _queue_trade_telegram(
+                        session, self._settings, command, envelope.plan, opened=True
+                    )
                 # Persist actual entry facts before separate bounded venue reads.
                 # No DB transaction/epoch lock spans the exit provider IO.
                 session.commit()
@@ -2180,7 +2199,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 if exit_evidence is not None:
                     try:
                         with session.begin_nested():
-                            resolve_verified_demo_exit(
+                            _, created = resolve_verified_demo_exit(
                                 session,
                                 runtime=self._runtime,
                                 settings=self._settings,
@@ -2188,6 +2207,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                                 command=command,
                                 envelope=envelope,
                                 evidence=exit_evidence,
+                            )
+                        if created:  # a competing reconciler that lost does not page again
+                            _queue_trade_telegram(
+                                session, self._settings, command, envelope.plan, opened=False
                             )
                         session.commit()
                         return self._finish_closed(session, command, "demo_closed_reconciled")
@@ -2503,6 +2526,92 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             logger.warning("stale_manual_demo_entry_reconciliation_failed", exc_info=True)
             stale = ()
         return governed + stale
+
+
+def _journal_trade(session: Session, command: ExecutionCommand) -> JournalTrade | None:
+    with session.no_autoflush:
+        return JournalTradeRepository(session).find_by_execution_lifecycle(
+            organization_id=command.organization_id, execution_lifecycle_id=command.id
+        )
+
+
+def _open_page_not_due(session: Session, settings: Settings, command: ExecutionCommand) -> bool:
+    """True unless the open page is on and this command has no journaled entry yet."""
+
+    if not demo_trade_pages_enabled(settings, DEMO_TRADE_OPENED):
+        return True
+    try:
+        trade = _journal_trade(session, command)
+    except SQLAlchemyError:
+        raise  # an aborted transaction must fail the reconcile, never commit as success
+    except Exception:
+        logger.warning("demo_trade_telegram_lookup_failed command_id=%s", command.id, exc_info=True)
+        return True
+    return trade is not None and trade.entry_price is not None
+
+
+def _strategy_name(session: Session, plan: PlanRevision, organization_id: UUID) -> str:
+    if plan.strategy_version_id is None:
+        return ""
+    row = session.execute(
+        select(UserStrategy.name, UserStrategyVersion.version)
+        .join(UserStrategyVersion, UserStrategyVersion.strategy_id == UserStrategy.id)
+        .where(
+            UserStrategyVersion.id == plan.strategy_version_id,
+            UserStrategy.organization_id == organization_id,
+        )
+    ).first()
+    return "" if row is None else f"{row.name} v{row.version}"
+
+
+def _queue_trade_telegram(
+    session: Session,
+    settings: Settings,
+    command: ExecutionCommand,
+    plan: PlanRevision,
+    *,
+    opened: bool,
+) -> None:
+    """Queue the opt-in open or final-close page; it sends only after commit.
+
+    Fail-soft for page errors: a formatting or queue error is logged and never
+    changes the reconcile outcome. A database error is re-raised: it has aborted
+    the trading transaction, so swallowing it would let ``session.commit()``
+    silently roll back the close while the reconcile reports success.
+    """
+
+    code = DEMO_TRADE_OPENED if opened else DEMO_TRADE_CLOSED
+    if not demo_trade_pages_enabled(settings, code):
+        return
+    try:
+        with session.no_autoflush:
+            trade = _journal_trade(session, command)
+            if trade is None:
+                return
+            strategy = _strategy_name(session, plan, command.organization_id)
+            stop = plan.risk_and_exits.stop.value
+            if opened:
+                queue_demo_trade_opened_telegram(
+                    session,
+                    settings,
+                    trade,
+                    strategy=strategy,
+                    stop_price=stop,
+                    targets=canonical_planned_targets(plan),
+                )
+            else:
+                queue_demo_trade_closed_telegram(
+                    session, settings, trade, strategy=strategy, stop_price=stop
+                )
+    except SQLAlchemyError:
+        raise
+    except Exception:
+        logger.warning(
+            "demo_trade_telegram_queue_failed command_id=%s code=%s",
+            command.id,
+            code,
+            exc_info=True,
+        )
 
 
 def _plan_window(settings: Settings) -> timedelta:

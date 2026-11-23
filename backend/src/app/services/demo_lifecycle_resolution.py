@@ -128,7 +128,8 @@ def resolve_verified_demo_exit(
     command: ExecutionCommand,
     envelope: CanonicalTradePlanRevision,
     evidence: VerifiedDemoExit,
-) -> GovernedDemoLifecycleResolution:
+) -> tuple[GovernedDemoLifecycleResolution, bool]:
+    """Resolve once. ``created`` is True only for the call that wrote the resolution."""
     assert_write_allowed(PersistenceKind.EXECUTION)
     plan = envelope.plan
     authorization = session.get(ApprovalAuthorization, command.authorization_id)
@@ -217,7 +218,7 @@ def resolve_verified_demo_exit(
     if existing is not None:
         if existing.content_hash != digest:
             raise ValidationAppError("Demo exit conflicts with immutable lifecycle resolution.")
-        return existing
+        return existing, False
     effect = session.scalar(
         select(VenueSubmitEffect)
         .where(VenueSubmitEffect.command_id == command.id)
@@ -503,4 +504,4 @@ def resolve_verified_demo_exit(
                 account_id=str(command.account_id),
                 consecutive_losses=_streak,
             )
-    return resolution
+    return resolution, True

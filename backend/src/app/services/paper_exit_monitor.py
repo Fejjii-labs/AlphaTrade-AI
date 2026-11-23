@@ -189,6 +189,8 @@ class ExitMonitorAlert:
     fields: dict[str, str]
     # Informational paper trade exits use ``message`` as the full Telegram body.
     telegram_verbatim: bool = False
+    # Sent on a background thread after commit, so the caller never waits on Telegram.
+    background: bool = False
 
     def as_log(self) -> dict[str, str]:
         payload = {"code": self.code, "severity": self.severity, "message": self.message}
