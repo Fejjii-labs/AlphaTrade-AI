@@ -7,7 +7,10 @@ then stayed blocked by demo_prior_entry_requires_reconciliation. New sends are n
 recorded as proven unsent; this releases the ones recorded before that fix.
 
 An effect is released only when every check passes, otherwise it is left untouched:
-  - the plan expired, so the same dispatch authority can never be used again;
+  - it belongs to a governed (worker) demo plan, not a manual demo plan;
+  - the BloFin reads start more than 5 minutes after the plan expired, so any POST
+    that passed its final gate before expiry is already visible at the venue;
+  - the demo connection has read/trade-only permissions (native UID is printed);
   - order-detail for its clientOrderId returns no order;
   - its clientOrderId is not among the coin's pending orders;
   - its clientOrderId is not in the coin's complete order history (bounded, fail closed).
@@ -27,6 +30,7 @@ import argparse
 import json
 import sys
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -47,10 +51,13 @@ def _venue_has_order(client: Any, *, inst_id: str, client_order_id: str) -> str 
     if detail not in (None, [], {}):
         return "order_detail_found"
     pending = client.request(
-        "GET", "/api/v1/trade/orders-pending", params={"instId": inst_id}, signed=True
+        "GET",
+        "/api/v1/trade/orders-pending",
+        params={"instId": inst_id, "limit": "100"},
+        signed=True,
     )
-    if not isinstance(pending, list):
-        return "pending_orders_unreadable"
+    if not isinstance(pending, list) or len(pending) >= 100:
+        return "pending_orders_unreadable"  # a full page never proves absence
     if any(isinstance(r, dict) and r.get("clientOrderId") == client_order_id for r in pending):
         return "pending_order_found"
     history = history_rows(
@@ -77,11 +84,14 @@ def main(argv: list[str] | None = None) -> int:
     from app.db.models import TradePlanRevision as PlanRow
     from app.db.session import get_session_factory
     from app.providers.exchange.factory import build_blofin_client
+    from app.providers.exchange.governed_blofin import GovernedBloFinDemoProvider
+    from app.schemas.audit import AuditRecordCreate
+    from app.schemas.common import AuditEventType
     from app.schemas.execution_protocol import VenueSubmitEffectState
     from app.services.audit_service import AuditService
     from app.services.risk.settings_service import RiskSettingsService
     from app.services.safety_epoch import SafetyEpochService
-    from app.services.venue_submit_dispatcher import VenueSubmitDispatcher
+    from app.services.venue_submit_dispatcher import VENUE_ABSENCE_MARGIN, VenueSubmitDispatcher
 
     settings = get_settings()
     out(
@@ -97,15 +107,26 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     account_id = uuid.UUID(settings.governed_blofin_demo_account_id)
     client = build_blofin_client(settings)
+    provider = GovernedBloFinDemoProvider(client)
+    provider.verify_permissions()  # read/trade-only, no withdraw or transfer
+    native_uid = str(provider._account.native_account_uid or "")
+    out("venue_account", {"native_uid_suffix": native_uid[-4:] or None, "permissions": "ok"})
     released = 0
     with get_session_factory()() as session:
         query = (
-            select(ExecutionCommand.id, VenueSubmitEffect.client_order_id, PlanRow)
+            select(
+                ExecutionCommand.id,
+                ExecutionCommand.user_id,
+                ExecutionCommand.organization_id,
+                VenueSubmitEffect.client_order_id,
+                PlanRow,
+            )
             .join(VenueSubmitEffect, VenueSubmitEffect.command_id == ExecutionCommand.id)
             .join(PlanRow, PlanRow.id == ExecutionCommand.revision_id)
             .where(
                 ExecutionCommand.account_id == account_id,
                 PlanRow.execution_venue == "BLOFIN_DEMO",
+                PlanRow.execution_policy_version == "governed-blofin-demo/v1",
                 VenueSubmitEffect.state == VenueSubmitEffectState.SEND_AMBIGUOUS,
             )
             .order_by(ExecutionCommand.created_at)
@@ -121,12 +142,16 @@ def main(argv: list[str] | None = None) -> int:
                 session, settings, RiskSettingsService(session, AuditService(session))
             ),
         )
-        for command_id, client_order_id, plan in rows:
+        for command_id, user_id, organization_id, client_order_id, plan in rows:
             row = {
                 "command_id": str(command_id),
                 "instrument": plan.execution_instrument,
                 "valid_until": plan.valid_until,
             }
+            checked_at = datetime.now(UTC)
+            if checked_at <= plan.valid_until + VENUE_ABSENCE_MARGIN:
+                out("kept", {**row, "reason": "plan_expiry_too_recent"})
+                continue
             try:
                 found = _venue_has_order(
                     client, inst_id=plan.execution_instrument, client_order_id=client_order_id
@@ -139,7 +164,30 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             try:
                 dispatcher.release_venue_absent_send(
-                    command_id=command_id, plan_valid_until=plan.valid_until
+                    command_id=command_id, venue_checked_at=checked_at
+                )
+                AuditService(session).record(
+                    AuditRecordCreate(
+                        request_id=f"release-absent-{command_id}",
+                        trace_id=f"release-absent-{command_id}",
+                        event_type=AuditEventType.DEMO_LIFECYCLE_RECONCILED,
+                        resource_type="venue_submit_effect",
+                        action="release_venue_absent_send",
+                        user_id=user_id,
+                        organization_id=organization_id,
+                        resource_id=str(command_id),
+                        metadata={
+                            "operator_job": "scripts/release_absent_demo_sends.py",
+                            "venue_checked_at": checked_at.isoformat(),
+                            "plan_valid_until": plan.valid_until.isoformat(),
+                            "native_uid_suffix": native_uid[-4:] or None,
+                            "evidence": [
+                                "GET /api/v1/trade/order-detail: none",
+                                "GET /api/v1/trade/orders-pending: absent",
+                                "GET /api/v1/trade/orders-history: absent (complete)",
+                            ],
+                        },
+                    )
                 )
             except Exception as exc:
                 session.rollback()

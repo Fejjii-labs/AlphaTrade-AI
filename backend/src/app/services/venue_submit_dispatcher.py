@@ -88,6 +88,10 @@ def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
+# A venue read must start this long after plan expiry to prove an order absent.
+VENUE_ABSENCE_MARGIN = timedelta(minutes=5)
+
+
 class VenueSubmitDispatcher:
     def __init__(
         self,
@@ -336,8 +340,9 @@ class VenueSubmitDispatcher:
         require_idle_session_for_provider_io(self._session)
         # The provider calls before_post only after its read-only preflight
         # (quote, depth, slippage, basis, permissions), and POSTs only after it
-        # returns. A refusal before that point proves nothing was sent.
-        post_may_start = False
+        # returns. A refusal before that point proves nothing was sent. Manual
+        # demo plans keep their own operator recovery (flat, idle account).
+        post_may_start = plan.schema_version == "ManualDemoTradePlanV1"
 
         def before_post() -> None:
             nonlocal post_may_start
@@ -386,7 +391,8 @@ class VenueSubmitDispatcher:
         """No POST was made: record proven-unsent and release the reservation.
 
         Only this lease holder's own SEND_AMBIGUOUS marker is converted; anything
-        else stays ambiguous for client-id reconciliation.
+        else, including a failure while converting, stays ambiguous for
+        client-id reconciliation.
         """
         logger.warning(
             "governed_demo_refused_before_post",
@@ -394,6 +400,22 @@ class VenueSubmitDispatcher:
             exception_type=type(exc).__name__,
             reason=redact_text(str(exc))[:180],
         )
+        try:
+            return self._convert_refused_before_post(
+                command_id=command_id, owner=owner, fencing_token=fencing_token
+            )
+        except Exception:
+            self._session.rollback()
+            logger.warning(
+                "governed_demo_refused_before_post_kept_ambiguous",
+                command_id=str(command_id),
+                exc_info=True,
+            )
+            return self._require_effect(command_id)
+
+    def _convert_refused_before_post(
+        self, *, command_id: uuid.UUID, owner: str, fencing_token: int
+    ) -> VenueSubmitEffect:
         self._session.rollback()
         ensure_db_transaction(self._session)
         command = self._require_command(command_id)
@@ -737,20 +759,27 @@ class VenueSubmitDispatcher:
         )
 
     def release_venue_absent_send(
-        self, *, command_id: uuid.UUID, plan_valid_until: datetime
+        self, *, command_id: uuid.UUID, venue_checked_at: datetime
     ) -> VenueSubmitEffect:
         """Operator recovery for one ambiguous governed demo send the venue never saw.
 
-        The caller must already hold venue proof that no order exists for the
-        effect's client id (order lookup and complete order history). This only
-        converts a SEND_AMBIGUOUS effect after its plan expired, so no late
-        dispatch of the same authority is possible; it never sends or resends.
+        The caller must hold venue proof that no order exists for the effect's
+        client id (order lookup, pending orders and complete order history), read
+        starting at ``venue_checked_at``. That read must start more than
+        ``VENUE_ABSENCE_MARGIN`` after the plan expired: a POST passes its final
+        gate only before expiry and the venue answers within its timeout, so a
+        later read sees any order that was accepted. It never sends or resends.
         """
         ensure_db_transaction(self._session)
-        now = _aware(self._clock())
-        if _aware(plan_valid_until) >= now:
-            raise TradingPolicyError("Plan still valid; venue absence is not final.")
         command = self._require_command(command_id)
+        plan = self._session.get(PlanRow, command.revision_id)
+        if plan is None or plan.execution_policy_version != "governed-blofin-demo/v1":
+            raise TradingPolicyError("Only a governed demo plan can be released as venue-absent.")
+        if _aware(venue_checked_at) <= _aware(plan.valid_until) + VENUE_ABSENCE_MARGIN:
+            raise TradingPolicyError("Venue absence read too close to plan expiry.")
+        if _aware(venue_checked_at) > _aware(self._clock()):
+            raise TradingPolicyError("Venue absence read time is in the future.")
+        now = _aware(self._clock())
         self._epochs.lock_epoch(
             organization_id=command.organization_id, account_id=command.account_id
         )

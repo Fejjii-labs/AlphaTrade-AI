@@ -1079,28 +1079,29 @@ def datetime_from_ms(ms: int):
 
 
 def _release_absent_send_after_expiry(session, settings: Settings, command_id: UUID) -> None:
-    """Operator recovery: refused while the plan is valid, then proven unsent."""
+    """Operator recovery: refused until the venue read starts past expiry plus margin."""
     from app.core.errors import TradingPolicyError
     from app.db.models import TradePlanRevision as TradePlanRevisionRow
     from app.services.risk.settings_service import RiskSettingsService
     from app.services.safety_epoch import SafetyEpochService
-    from app.services.venue_submit_dispatcher import VenueSubmitDispatcher
+    from app.services.venue_submit_dispatcher import VENUE_ABSENCE_MARGIN, VenueSubmitDispatcher
 
     plan = session.get(TradePlanRevisionRow, session.get(ExecutionCommand, command_id).revision_id)
+    late = plan.valid_until + VENUE_ABSENCE_MARGIN + timedelta(minutes=1)
     dispatcher = VenueSubmitDispatcher(
         session,
         SafetyEpochService(session, settings, RiskSettingsService(session, AuditService(session))),
-        clock=lambda: plan.valid_until - timedelta(seconds=1),
+        clock=lambda: late,
     )
-    with pytest.raises(TradingPolicyError):
-        dispatcher.release_venue_absent_send(
-            command_id=command_id, plan_valid_until=plan.valid_until
-        )
-    session.rollback()
-    dispatcher._clock = lambda: plan.valid_until + timedelta(seconds=1)
-    effect = dispatcher.release_venue_absent_send(
-        command_id=command_id, plan_valid_until=plan.valid_until
-    )
+    for checked_at in (
+        plan.valid_until - timedelta(seconds=1),  # still valid
+        plan.valid_until + timedelta(minutes=1),  # a POST at expiry may still land
+        late + timedelta(seconds=1),  # read time in the future
+    ):
+        with pytest.raises(TradingPolicyError):
+            dispatcher.release_venue_absent_send(command_id=command_id, venue_checked_at=checked_at)
+        session.rollback()
+    effect = dispatcher.release_venue_absent_send(command_id=command_id, venue_checked_at=late)
     session.commit()
     assert effect.state is VenueSubmitEffectState.PROVEN_UNSENT
     assert effect.uncertainty is False
@@ -1149,6 +1150,8 @@ def test_release_script_keeps_any_order_blofin_has_seen() -> None:
     assert check([{"clientOrderId": "ATx"}], [], []) == "order_detail_found"
     assert check(None, [{"clientOrderId": "ATx"}], []) == "pending_order_found"
     assert check(None, None, []) == "pending_orders_unreadable"
+    full_page = [{"clientOrderId": f"AT{n}"} for n in range(100)]
+    assert check(None, full_page, []) == "pending_orders_unreadable"
     found = {"orderId": "2", "clientOrderId": "ATx"}
     assert check(None, [], [other, found]) == "order_history_found"
     with pytest.raises(ValueError):  # unreadable history never proves absence
