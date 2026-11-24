@@ -717,7 +717,8 @@ def test_demo_plan_terms_risk_override(monkeypatch: pytest.MonkeyPatch) -> None:
                     update={
                         "quantity_fraction": Decimal("1"),
                         "price": drafted.risk_and_exits.targets[0].price.model_copy(
-                            update={"value": entry + distance}
+                            # 2R: still above 1R at the entry zone's widened (worst) edge.
+                            update={"value": entry + 2 * distance}
                         ),
                     }
                 ),

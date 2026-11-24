@@ -1050,7 +1050,10 @@ def _instrument_payload(plan: TradePlanRevision) -> dict[str, object]:
         "timeframe": plan.timeframe,
         "direction": direction.value,
         "thesis": "Canonical paper execution of an approved TradePlanRevision.",
-        "planned_entry_price": str(plan.entry_zone.lower),
+        # The intended entry (limit, else the quote the plan was priced at), not a
+        # zone edge: a demo zone carries the slippage allowance, and its edge would
+        # tag a perfect fill as slippage. Internal paper zones are exact: same value.
+        "planned_entry_price": str((plan.limit_price or plan.basis_policy.execution_price).value),
         "planned_stop_price": str(plan.risk_and_exits.stop.value),
         "planned_targets": canonical_planned_targets(plan),
         "planned_risk_amount": str(plan.risk_and_exits.risk_budget.value),
