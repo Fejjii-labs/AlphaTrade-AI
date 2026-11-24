@@ -45,7 +45,7 @@ from app.watcher.fusion_evaluation import (
     BoundEvaluationClock,
     WatcherFusionEvaluationService,
 )
-from tests.support.phase5_market import EVALUATED_AT
+from tests.support.phase5_market import EVALUATED_AT, RECORDED_FIXTURE_GRACE
 from tests.support.phase6_fusion import ORG_ID
 from tests.test_live_evidence_pipeline import (
     _evaluation_command,
@@ -421,7 +421,9 @@ def test_binance_primary_complete_and_controlled_bybit_failover_refuses_missing_
         return httpx.Response(200, json={"retCode": 0, "result": result})
 
     transport = httpx.MockTransport(handler)
-    primary = BinanceUsdmPerpetualSource(transport=transport, max_retries=0)
+    primary = BinanceUsdmPerpetualSource(
+        transport=transport, max_retries=0, settlement_grace=RECORDED_FIXTURE_GRACE
+    )
     secondary = BybitUsdtPerpetualSource(transport=transport, max_retries=0)
     source = FailoverPerpetualSource(
         primary,

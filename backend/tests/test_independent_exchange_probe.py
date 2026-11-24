@@ -6,7 +6,7 @@ from app.evidence_pipeline.probe import probe_exchange
 from app.market_contracts.adapters.binance_usdm import BinanceUsdmPerpetualSource
 from app.market_contracts.derivatives import DerivativeMetric
 from app.market_contracts.enums import VenueId
-from tests.support.phase5_market import EVALUATED_AT
+from tests.support.phase5_market import EVALUATED_AT, RECORDED_FIXTURE_GRACE
 from tests.test_live_evidence_pipeline import _fixture_usdm_handler
 from tests.test_market_intelligence_cvd_orderflow import NOW, provider
 from tests.test_market_intelligence_oi_funding import contract_payload, payload
@@ -36,7 +36,11 @@ def test_binance_probe_proves_all_components_with_exact_identity():
             )
         return base.handle_request(request)
 
-    source = BinanceUsdmPerpetualSource(transport=httpx.MockTransport(handle), max_retries=0)
+    source = BinanceUsdmPerpetualSource(
+        transport=httpx.MockTransport(handle),
+        max_retries=0,
+        settlement_grace=RECORDED_FIXTURE_GRACE,
+    )
     result = probe_exchange(source, clock=lambda: EVALUATED_AT)
     assert result["canonical_market_window_complete"]
     assert result["all_requested_components_available"]

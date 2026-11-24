@@ -304,7 +304,7 @@ def test_separate_factories_reuse_confirmed_closed_candles(monkeypatch) -> None:
         for factory in factories:
             monkeypatch.setattr(factory.discovery, "require", lambda *_args: None)
             source = factory.composition("BTCUSDT")[3][0]
-            series = _fetch(source, BOUNDARY + timedelta(seconds=20), 100)
+            series = _fetch(source, BOUNDARY + timedelta(seconds=70), 100)
             assert series.bars[-1].interval_end == BOUNDARY
         assert len(calls) == 2  # One confirmation pair across both compositions.
     finally:
@@ -315,12 +315,13 @@ def test_separate_factories_reuse_confirmed_closed_candles(monkeypatch) -> None:
 
 def test_many_scopes_on_one_symbol_timeframe_share_one_kline_read() -> None:
     source, calls = _kline_source()
-    first = BOUNDARY + timedelta(seconds=20)
+    # v3 admits the just-closed bar 60 s after its close.
+    first = BOUNDARY + timedelta(seconds=70)
     try:
         # SFP + Nested + monitor + more scopes over a whole bar: one confirmation pair.
         series = [
             _fetch(source, first + timedelta(seconds=offset), bars)
-            for offset, bars in ((0, 256), (1, 256), (15, 100), (300, 30), (870, 256))
+            for offset, bars in ((0, 256), (1, 256), (15, 100), (300, 30), (820, 256))
         ]
         assert len(calls) == 2
         assert all(s.bars[-1].interval_end == BOUNDARY for s in series)
@@ -332,16 +333,16 @@ def test_many_scopes_on_one_symbol_timeframe_share_one_kline_read() -> None:
 def test_kline_cache_refetches_only_after_the_next_close() -> None:
     source, calls = _kline_source()
     try:
-        _fetch(source, BOUNDARY + timedelta(seconds=20), 100)
+        _fetch(source, BOUNDARY + timedelta(seconds=70), 100)
         _fetch(source, BOUNDARY + timedelta(minutes=14, seconds=59), 100)
         assert len(calls) == 2
         nxt = BOUNDARY + timedelta(minutes=15)
-        series = _fetch(source, nxt + timedelta(seconds=20), 100)
+        series = _fetch(source, nxt + timedelta(seconds=70), 100)
         assert len(calls) == 4
         assert series.bars[-1].interval_end == nxt
         # A larger request than the cached payload is a real read, then shared.
-        _fetch(source, nxt + timedelta(seconds=30), 256)
-        _fetch(source, nxt + timedelta(seconds=40), 256)
+        _fetch(source, nxt + timedelta(seconds=80), 256)
+        _fetch(source, nxt + timedelta(seconds=90), 256)
         assert len(calls) == 6
     finally:
         source.close()
@@ -358,11 +359,46 @@ def test_payload_without_the_rolled_forming_candle_is_not_cached() -> None:
 
     source = BinanceUsdmPerpetualSource(transport=httpx.MockTransport(handler))
     try:
-        _fetch(source, BOUNDARY + timedelta(seconds=20), 30)
-        _fetch(source, BOUNDARY + timedelta(seconds=40), 30)
+        _fetch(source, BOUNDARY + timedelta(seconds=70), 30)
+        _fetch(source, BOUNDARY + timedelta(seconds=90), 30)
         assert len(calls) == 4
     finally:
         source.close()
+
+
+def test_fast_exit_reads_never_seed_the_60s_evidence_cache() -> None:
+    """A payload confirmed at close+10 s by a 5 s exit source must not be served
+    to a 60 s evidence source that shares the process kline caches."""
+    from app.market_contracts.adapters.binance_usdm import BINANCE_REST_FAST_READ_GRACE
+    from app.market_contracts.adapters.closed_kline_cache import ClosedKlineCache
+    from app.market_contracts.adapters.public_read_cache import ShortTtlSingleflight
+    from app.market_contracts.errors import SettlementGuardError
+
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=_kline_rows(BOUNDARY, 102))
+
+    shared = {
+        "transport": httpx.MockTransport(handler),
+        "closed_kline_cache": ClosedKlineCache(),
+        "kline_cache": ShortTtlSingleflight(ttl_seconds=10.0, max_entries=64),
+    }
+    exit_source = BinanceUsdmPerpetualSource(
+        **shared, settlement_grace=BINANCE_REST_FAST_READ_GRACE
+    )
+    evidence = BinanceUsdmPerpetualSource(**shared)
+    try:
+        assert _fetch(exit_source, BOUNDARY + timedelta(seconds=10), 100).bars[-1].interval_end
+        assert len(calls) == 2
+        with pytest.raises(SettlementGuardError):
+            _fetch(evidence, BOUNDARY + timedelta(seconds=10), 100)
+        _fetch(evidence, BOUNDARY + timedelta(seconds=70), 100)
+        assert len(calls) == 5  # Its own reads (guarded GET + pair), not the exit payload.
+    finally:
+        exit_source.close()
+        evidence.close()
 
 
 # --- Problem 2: 418/429 process-wide backoff -----------------------------------

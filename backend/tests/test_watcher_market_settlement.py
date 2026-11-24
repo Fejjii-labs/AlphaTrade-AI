@@ -43,35 +43,40 @@ def _frozen(moment: datetime):
     return clock, sleeper, sleeps
 
 
-def test_settlement_wait_sleeps_only_inside_the_five_second_window(monkeypatch) -> None:
+def test_settlement_wait_sleeps_only_in_the_last_five_seconds_of_the_window(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.workers.watcher_market.sleep",
         lambda _seconds: pytest.fail("injected clock must not call time.sleep"),
     )
-    inside = datetime(2026, 10, 16, 0, 0, 3, tzinfo=UTC)
+    # Inside the 60 s window but more than 5 s from its end: no sleep (not yet due).
+    for second in (0, 3, 30, 54):
+        early = datetime(2026, 10, 16, 0, 0, second, tzinfo=UTC)
+        clock, sleeper, sleeps = _frozen(early)
+        assert _wait_for_binance_rest_settlement(early, now=clock, sleeper=sleeper) is False
+        assert sleeps == []
+
+    inside = datetime(2026, 10, 16, 0, 0, 57, tzinfo=UTC)
     clock, sleeper, sleeps = _frozen(inside)
     assert _wait_for_binance_rest_settlement(inside, now=clock, sleeper=sleeper) is True
-    assert sleeps == [2.0]
-    assert clock() == datetime(2026, 10, 16, 0, 0, 5, tzinfo=UTC)
+    assert sleeps == [3.0]
+    assert clock() == datetime(2026, 10, 16, 0, 1, 0, tzinfo=UTC)
 
-    at_close = datetime(2026, 10, 16, 0, 15, 0, tzinfo=UTC)
-    clock, sleeper, sleeps = _frozen(at_close)
-    assert _wait_for_binance_rest_settlement(at_close, now=clock, sleeper=sleeper) is True
+    edge = datetime(2026, 10, 16, 0, 15, 55, tzinfo=UTC)
+    clock, sleeper, sleeps = _frozen(edge)
+    assert _wait_for_binance_rest_settlement(edge, now=clock, sleeper=sleeper) is True
     assert sleeps == [5.0]
 
-    settled = datetime(2026, 10, 16, 0, 0, 5, tzinfo=UTC)
-    clock, sleeper, sleeps = _frozen(settled)
-    assert _wait_for_binance_rest_settlement(settled, now=clock, sleeper=sleeper) is False
-    assert sleeps == []
-
-    later = datetime(2026, 10, 16, 0, 0, 30, tzinfo=UTC)
-    clock, sleeper, sleeps = _frozen(later)
-    assert _wait_for_binance_rest_settlement(later, now=clock, sleeper=sleeper) is False
-    assert sleeps == []
+    for settled in (
+        datetime(2026, 10, 16, 0, 1, 0, tzinfo=UTC),
+        datetime(2026, 10, 16, 0, 1, 30, tzinfo=UTC),
+    ):
+        clock, sleeper, sleeps = _frozen(settled)
+        assert _wait_for_binance_rest_settlement(settled, now=clock, sleeper=sleeper) is False
+        assert sleeps == []
 
 
 def test_default_settlement_wait_uses_the_wall_clock(monkeypatch) -> None:
-    fixed = datetime(2026, 10, 16, 0, 0, 3, tzinfo=UTC)
+    fixed = datetime(2026, 10, 16, 0, 0, 58, tzinfo=UTC)
     slept: list[float] = []
 
     class Frozen(datetime):
@@ -86,7 +91,7 @@ def test_default_settlement_wait_uses_the_wall_clock(monkeypatch) -> None:
 
 
 def test_probe_waits_for_binance_only_inside_the_window(monkeypatch) -> None:
-    moment = datetime(2026, 10, 16, 0, 0, 3, tzinfo=UTC)
+    moment = datetime(2026, 10, 16, 0, 0, 57, tzinfo=UTC)
     monkeypatch.setattr(
         "app.workers.watcher_market.sleep",
         lambda _seconds: pytest.fail("probe must not block on the real grace period"),
@@ -116,9 +121,43 @@ def test_probe_waits_for_binance_only_inside_the_window(monkeypatch) -> None:
         return sleeps, state["at"]
 
     binance_sleeps, binance_at = probe(BinanceUsdmPerpetualSource())
-    assert binance_sleeps == [2.0]
-    assert binance_at == datetime(2026, 10, 16, 0, 0, 5, tzinfo=UTC)
+    assert binance_sleeps == [3.0]
+    assert binance_at == datetime(2026, 10, 16, 0, 1, 0, tzinfo=UTC)
 
     bybit_sleeps, bybit_at = probe(BybitUsdtPerpetualSource())
     assert bybit_sleeps == []
     assert bybit_at == moment
+
+
+@pytest.mark.parametrize(
+    ("second", "evaluated"),
+    [
+        (3, datetime(2026, 10, 15, 23, 59, 3, tzinfo=UTC)),
+        (59, datetime(2026, 10, 15, 23, 59, 59, tzinfo=UTC)),
+        (60, datetime(2026, 10, 16, 0, 1, 0, tzinfo=UTC)),
+    ],
+)
+def test_probe_inside_the_window_checks_the_previous_settled_close(
+    monkeypatch, second: int, evaluated: datetime
+) -> None:
+    from app.market_contracts.identity import binance_usdm_perpetual
+
+    seen: list[datetime] = []
+
+    class Capturing(BinanceUsdmPerpetualSource):
+        def fetch_closed_ohlcv(self, **kwargs):
+            seen.append(kwargs["evaluated_at"])
+            raise RuntimeError("read started")
+
+    moment = datetime(2026, 10, 16, tzinfo=UTC) + timedelta(seconds=second)
+    monkeypatch.setattr(
+        "app.workers.watcher_market.instrument_for_source",
+        lambda *_args: binance_usdm_perpetual("ETHUSDT"),
+    )
+    factory = SymbolMarketFactory(_settings(), clock=lambda: moment, sleeper=lambda _s: None)
+    monkeypatch.setattr(factory.discovery, "require", lambda *_args: None)
+    source = _EligibleSource(Capturing(), lambda: None, lambda: None)
+    monkeypatch.setattr(factory, "composition", lambda _symbol: (source, object(), None, ()))
+    with pytest.raises(RuntimeError, match="read started"):
+        factory.probe("ETHUSDT")
+    assert seen == [evaluated]

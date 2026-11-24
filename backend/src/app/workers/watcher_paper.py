@@ -20,7 +20,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from math import ceil
 from types import FrameType
 from typing import TYPE_CHECKING, Any
@@ -1238,6 +1238,8 @@ class WatcherPaperRuntime:
             )
         read_count = getattr(self._evidence_factory, "read_count", lambda _symbol: 0)
         reads_before = read_count(target.symbol)
+        # Before the key: a bounded wait can make the just-closed bar due.
+        self._wait_for_closed_bar(target.symbol)
         policy = self._materialize_policy(target)
         request = ScanRequest(
             organization_id=target.organization_id,
@@ -1250,7 +1252,6 @@ class WatcherPaperRuntime:
             timeframe=target.timeframe,
             idempotency_key=self._idempotency_key(target),
         )
-        self._wait_for_closed_bar(target.symbol)
         evidence = self._build_evidence(session, target.symbol)
         persistence_fence = self._persistence_fence
         if target.configuration_revision is not None and session is not None:
@@ -1539,7 +1540,13 @@ class WatcherPaperRuntime:
         from app.schemas.common import Timeframe
 
         seconds = int(interval_timedelta(Timeframe(target.timeframe)).total_seconds())
-        closed = last_closed_interval_end(self._clock.now(), interval_seconds=seconds)
+        # A bar inside its source's admission window is not yet due: the key stays
+        # on the previous bar, which replays, instead of failing every poll.
+        delay = getattr(self._evidence_factory, "bar_close_settle_delay", None)
+        settle = delay(target.symbol, Timeframe(target.timeframe)) if callable(delay) else None
+        if not isinstance(settle, timedelta):
+            settle = timedelta(0)
+        closed = last_closed_interval_end(self._clock.now() - settle, interval_seconds=seconds)
         stamp = closed.strftime("%Y%m%dT%H%M%SZ")
         return f"watcher-paper:{target.policy_id}:{target.symbol}:{stamp}"
 

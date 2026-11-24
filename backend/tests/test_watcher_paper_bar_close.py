@@ -67,10 +67,16 @@ def test_configured_boundary_wait_sleeps_only_inside_delay_window() -> None:
     assert sleeps == []
 
 
-def test_ensure_bar_close_ready_waits_for_binance_at_boundary(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("second", "slept"),
+    [(0, []), (3, []), (54.999, []), (55, [5.0]), (57, [3.0]), (60, []), (75, [])],
+)
+def test_ensure_bar_close_ready_sleeps_at_most_five_seconds_for_binance(
+    monkeypatch: pytest.MonkeyPatch, second: float, slept: list[float]
 ) -> None:
-    moment = datetime(2026, 10, 21, 18, 15, 0, tzinfo=UTC)
+    # The v3 admission window is 60 s, but the single worker loop never sleeps
+    # more than 5 s: earlier in the window the new bar is simply not yet due.
+    moment = datetime(2026, 10, 21, 18, 15, tzinfo=UTC) + timedelta(seconds=second)
     monkeypatch.setattr(
         "app.workers.watcher_market.sleep",
         lambda _seconds: pytest.fail("injected clock must not call time.sleep"),
@@ -82,9 +88,17 @@ def test_ensure_bar_close_ready_waits_for_binance_at_boundary(
         "composition",
         lambda _symbol: (BinanceUsdmPerpetualSource(), object(), None, ()),
     )
-    assert factory.ensure_bar_close_ready("BTCUSDT") is True
-    assert sleeps == [5.0]
-    assert clock() == moment + timedelta(seconds=5)
+    assert factory.ensure_bar_close_ready("BTCUSDT") is bool(slept)
+    assert sleeps == pytest.approx(slept)
+    assert factory.bar_close_settle_delay("BTCUSDT") == timedelta(seconds=60)
+
+
+def test_bar_close_settle_delay_is_zero_for_other_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = SymbolMarketFactory(_settings())
+    monkeypatch.setattr(factory, "composition", lambda _symbol: (object(), object(), None, ()))
+    assert factory.bar_close_settle_delay("BTCUSDT") == timedelta(0)
 
 
 def test_ensure_bar_close_ready_honors_configured_delay(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -203,6 +217,50 @@ def test_idempotency_key_uses_last_closed_interval_end() -> None:
     )
     closed = last_closed_interval_end(moment, interval_seconds=900)
     assert runtime._idempotency_key(target).endswith(closed.strftime("%Y%m%dT%H%M%SZ"))
+
+
+@pytest.mark.parametrize(
+    ("second", "due"),
+    [(0, "181500"), (59.999, "181500"), (60, "183000"), (75, "183000")],
+)
+def test_bar_inside_binance_admission_window_is_not_yet_due(second: float, due: str) -> None:
+    """Inside the 60 s window the key stays on the previous bar (it replays)
+    instead of opening a failed forming-candle attempt on every 15 s poll."""
+    from app.signal_fusion.lifecycle import CandidateLifecycleService
+    from app.signal_fusion.memory import InMemoryCandidateRepository
+    from app.watcher.fusion_evaluation import BoundEvaluationClock
+    from app.watcher.memory import FakeClock, InMemoryWatcherStore
+
+    class _BinanceFactory:
+        def __call__(self, *_args: object) -> object:
+            pytest.fail("unused")
+
+        def bar_close_settle_delay(self, symbol: str, timeframe: object) -> timedelta:
+            assert (symbol, getattr(timeframe, "value", None)) == ("BTCUSDT", "15m")
+            return timedelta(seconds=60)
+
+    moment = datetime(2026, 10, 21, 18, 30, tzinfo=UTC) + timedelta(seconds=second)
+    runtime = WatcherPaperRuntime(
+        store=InMemoryWatcherStore(),
+        lifecycle=CandidateLifecycleService(
+            repository=InMemoryCandidateRepository(), clock=BoundEvaluationClock()
+        ),
+        clock=FakeClock(moment),
+        enabled=False,
+        evidence_factory=_BinanceFactory(),
+    )
+    target = PaperScanTarget(
+        organization_id=ORG,
+        user_id=USER,
+        strategy_id=STRATEGY,
+        strategy_version_id=VERSION,
+        compiled_setup_definition_id=COMPILED,
+        compiled_content_hash=COMPILED_HASH,
+        fusion_policy_version="first_slice_v1",
+        symbol="BTCUSDT",
+        timeframe="15m",
+    )
+    assert runtime._idempotency_key(target).endswith(f"20261021T{due}Z")
 
 
 def test_wait_for_closed_bar_delegates_to_factory() -> None:

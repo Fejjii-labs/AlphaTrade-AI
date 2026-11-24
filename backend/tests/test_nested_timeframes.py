@@ -117,7 +117,8 @@ def native_source(timeframe, *, bybit=False):
     """Exercise real adapter parsing over native-shaped HTTP fixtures, including a forming bar."""
     step = interval_timedelta(timeframe)
     prices = [*([105] * 243), *PRICES[:13], 999]
-    now = START + step * 256 + timedelta(seconds=5)
+    # v3 admits a bar 60 s after close (half a bar for 1m).
+    now = START + step * 256 + min(timedelta(seconds=60), step / 2)
     requests = []
 
     def handler(request):

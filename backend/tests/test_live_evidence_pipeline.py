@@ -72,6 +72,7 @@ from app.watcher.hashing import evaluation_input_hash as hash_evaluation_input
 from app.watcher.hashing import scan_request_hash
 from tests.support.phase5_market import (
     EVALUATED_AT,
+    RECORDED_FIXTURE_GRACE,
     TRIGGER_OPEN,
     eth_instrument,
     identity,
@@ -393,6 +394,7 @@ def test_recorded_usdm_fixture_assembles_live_identity() -> None:
     source = BinanceUsdmPerpetualSource(
         base_url="https://fapi.binance.com",
         transport=_fixture_usdm_handler(),
+        settlement_grace=RECORDED_FIXTURE_GRACE,
     )
     assembled = FirstSliceEvidenceAssembler(source, replay=False).assemble(
         organization_id=ORG_ID,
@@ -450,6 +452,7 @@ def test_live_adapter_accepts_eth_only_when_catalog_is_extended() -> None:
         base_url="https://fapi.binance.com",
         transport=_fixture_usdm_handler(),
         catalog=catalog,
+        settlement_grace=RECORDED_FIXTURE_GRACE,
     )
     eth = binance_usdm_perpetual("ETHUSDT")
     eth_identity = first_slice_identity(

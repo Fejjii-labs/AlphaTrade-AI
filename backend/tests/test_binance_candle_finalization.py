@@ -35,7 +35,8 @@ ReceiptStore = tuple[Session, UUID, UUID, str]
 START = datetime(2026, 10, 5, 21, 15, tzinfo=UTC)
 END = START + timedelta(minutes=15)
 EARLY = END + timedelta(microseconds=614496)
-SETTLED = END + timedelta(seconds=15)
+# Past the v3 60 s admission window (v2 used 5 s; 15 s was settled then).
+SETTLED = END + timedelta(seconds=75)
 OBSERVATION_ID = UUID("55121195-4489-5d6e-b733-6c23c2f4e618")
 
 
@@ -82,14 +83,14 @@ def fetch(source: BinanceUsdmPerpetualSource, *, at: datetime = SETTLED) -> Clos
     )
 
 
-def legacy() -> tuple[OhlcvBar, PublicMarketObservation]:
+def legacy(
+    version: str = ADAPTER_VERSION, at: datetime = EARLY
+) -> tuple[OhlcvBar, PublicMarketObservation]:
     identity = first_slice_identity(timeframe=Timeframe.M15, replay=False, is_live=True)
     identity = identity.model_copy(
         update={
-            "source": identity.source.model_copy(update={"adapter_version": ADAPTER_VERSION}),
-            "provenance": identity.provenance.model_copy(
-                update={"adapter_version": ADAPTER_VERSION}
-            ),
+            "source": identity.source.model_copy(update={"adapter_version": version}),
+            "provenance": identity.provenance.model_copy(update={"adapter_version": version}),
         }
     )
     bar = build_ohlcv_bar(
@@ -103,15 +104,15 @@ def legacy() -> tuple[OhlcvBar, PublicMarketObservation]:
         base_volume=Decimal("238.970"),
         quote_volume=Decimal("20494228.80890"),
         trade_count=8528,
-        evaluated_at=EARLY,
+        evaluated_at=at,
         grace=timedelta(0),
-        adapter_version=ADAPTER_VERSION,
+        adapter_version=version,
     )
     observation = observation_from_ohlcv(
         bar,
         identity=identity,
-        observed_at=EARLY,
-        receive_time=EARLY,
+        observed_at=at,
+        receive_time=at,
         freshness_state=FreshnessState.FRESH,
     )
     assert observation.observation_id == OBSERVATION_ID
@@ -119,7 +120,8 @@ def legacy() -> tuple[OhlcvBar, PublicMarketObservation]:
     return bar, observation
 
 
-@pytest.mark.parametrize("seconds", [0, 0.614496, 4.999999])
+# 6 s is the staging BTC 11:45-12:00 receipt (23 Nov) that v2 admitted.
+@pytest.mark.parametrize("seconds", [0, 0.614496, 4.999999, 5, 6, 59, 59.999999])
 def test_early_rest_receipt_cannot_claim_final_even_with_sufficient_older_bars(
     seconds: float,
 ) -> None:
@@ -141,7 +143,7 @@ def test_closed_candle_that_changes_between_confirmation_reads_is_refused() -> N
         source.close()
 
 
-@pytest.mark.parametrize("seconds", [5, 15, 900])
+@pytest.mark.parametrize("seconds", [60, 75, 900])
 def test_confirmed_reads_are_bounded_pinned_and_keep_provider_revision_one(seconds: float) -> None:
     source, calls = source_for([[row()], [row()]])
     at = END + timedelta(seconds=seconds)
@@ -150,8 +152,8 @@ def test_confirmed_reads_are_bounded_pinned_and_keep_provider_revision_one(secon
         assert len(calls) == 2
         assert calls[0].url.params == calls[1].url.params
         assert calls[0].url.params["endTime"] == str(int(at.timestamp() * 1000))
-        assert series.identity.source.adapter_version == "binance-usdm-perpetual/v2"
-        assert series.bars[0].adapter_version == "binance-usdm-perpetual/v2"
+        assert series.identity.source.adapter_version == "binance-usdm-perpetual/v3"
+        assert series.bars[0].adapter_version == "binance-usdm-perpetual/v3"
         assert series.bars[0].revision == 1
     finally:
         source.close()
@@ -371,7 +373,7 @@ def test_both_sfp_scopes_resume_with_actual_post_confirmation_receipt_clocks(
                     assert result is not None
                     active.commit()
                     trigger = result.assessment_command.public_observations[0]
-                    assert trigger.identity.source.adapter_version == "binance-usdm-perpetual/v2"
+                    assert trigger.identity.source.adapter_version == "binance-usdm-perpetual/v3"
                     assert trigger.revision == 1
                     assert trigger.receive_time >= SETTLED + timedelta(seconds=2)
                     assert trigger.observed_at == trigger.receive_time
@@ -391,3 +393,41 @@ def test_both_sfp_scopes_resume_with_actual_post_confirmation_receipt_clocks(
     finally:
         source.close()
         engine.dispose()
+
+
+def test_v3_receipt_appends_beside_a_stuck_v2_receipt_for_the_same_bar(
+    receipt_store: ReceiptStore,
+) -> None:
+    """The staging BTC/ZEC case: v2 stored a bar at close+6 s that Binance later
+    changed. v3 has its own identity hash, so the corrected bar is stored beside
+    it (same natural observation UUID) instead of failing every SFP scan."""
+    from app.services.canonical_serialization import canonical_sha256
+
+    session, _org, _user, _url = receipt_store
+    old_bar, stuck = legacy("binance-usdm-perpetual/v2", END + timedelta(seconds=6))
+    remember_observation(session, stuck, bar=old_bar)
+    session.commit()
+    before = snapshot(session)
+    source, _calls = source_for([[row(increased=True)], [row(increased=True)]])
+    try:
+        series = fetch(source)
+        new_bar = series.bars[0]
+        fresh = observation_from_ohlcv(
+            new_bar,
+            identity=series.identity,
+            observed_at=SETTLED,
+            receive_time=SETTLED,
+            freshness_state=FreshnessState.FRESH,
+        )
+        assert fresh.observation_id == stuck.observation_id == OBSERVATION_ID
+        assert canonical_sha256(fresh.identity) != canonical_sha256(stuck.identity)
+        assert new_bar.content_hash != old_bar.content_hash
+        remember_observation(session, fresh, bar=new_bar)
+        session.commit()
+        current = snapshot(session)
+        assert len(current) == 2 and all(current[key] == value for key, value in before.items())
+        assert observed_ohlcv_history(
+            session, identity=series.identity, since=START, evaluated_at=SETTLED, limit=2
+        ) == ((new_bar, fresh),)
+    finally:
+        source.close()

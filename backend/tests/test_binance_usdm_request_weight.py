@@ -31,7 +31,13 @@ from app.market_contracts.identity import (
 )
 from app.providers.base import ProviderHealth, ProviderKind, ProviderStatus
 from app.schemas.common import Timeframe
-from tests.support.phase5_market import CONNECTION, EVALUATED_AT, TRIGGER_OPEN, trade
+from tests.support.phase5_market import (
+    CONNECTION,
+    EVALUATED_AT,
+    RECORDED_FIXTURE_GRACE,
+    TRIGGER_OPEN,
+    trade,
+)
 
 
 def _kline_row(open_time: object) -> list[object]:
@@ -208,6 +214,7 @@ def test_klines_are_cached_per_symbol_timeframe_and_concurrent_loads_share_one_r
         base_url="https://fapi.binance.com",
         transport=httpx.MockTransport(handler),
         max_retries=0,
+        settlement_grace=RECORDED_FIXTURE_GRACE,
     )
     identity = first_slice_identity(
         timeframe=Timeframe.M15, replay=False, is_live=True, instrument=binance_usdm_btcusdt()
@@ -247,6 +254,7 @@ def test_klines_are_cached_per_symbol_timeframe_and_concurrent_loads_share_one_r
         base_url="https://fapi.binance.com",
         transport=httpx.MockTransport(slow),
         max_retries=0,
+        settlement_grace=RECORDED_FIXTURE_GRACE,
     )
     found: list[str] = []
 
