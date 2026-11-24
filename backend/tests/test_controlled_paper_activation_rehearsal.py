@@ -482,7 +482,8 @@ def test_rehearsal_projects_live_evidence_through_paper_and_telegram() -> None:
         assert settings.real_trading_enabled is False
         with factory() as fresh:
             texts = "\n".join(fresh.scalars(select(TelegramOutboxRow.text)).all())
-        assert "activate=false" in texts
+        assert "(not active)" in texts
+        assert "facts_hash" not in texts and "I confirm" not in texts
         for needle in (
             "cannot place an order",
             "BLOCK remains final",

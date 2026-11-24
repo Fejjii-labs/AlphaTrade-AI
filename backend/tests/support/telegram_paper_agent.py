@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -18,6 +19,15 @@ from app.telegram_security.protocol import TelegramSecurityProtocol
 from app.telegram_security.transport import FakeTelegramTransport
 from tests.support.candidate_alerts import enabled_alert_world
 from tests.support.phase6_fusion import ACCOUNT_ID
+
+# A UUID or a 64-hex hash: never shown in end-user Telegram text.
+INTERNAL_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\b[0-9a-f]{64}\b", re.I
+)
+
+
+def assert_no_internal_ids(text: str) -> None:
+    assert INTERNAL_ID.search(text) is None, text
 
 
 @dataclass

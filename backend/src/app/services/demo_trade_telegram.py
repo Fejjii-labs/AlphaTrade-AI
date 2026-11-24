@@ -100,6 +100,13 @@ def target_r_multiples(
     return rows
 
 
+def _exit_text(exit_reason: str) -> str:
+    """``target_hit`` -> ``Target hit``: the page shows words, not exit codes."""
+
+    words = _text(exit_reason, 60).replace("_", " ").replace(":", ": ").strip() or "closed"
+    return words[:1].upper() + words[1:]
+
+
 def format_demo_trade_opened_text(
     *,
     symbol: str,
@@ -144,7 +151,7 @@ def format_demo_trade_closed_text(
         f"Strategy: {_text(strategy, 120) or 'unlabeled'}",
         f"Timeframe: {timeframe}",
         f"Direction: {direction.value}",
-        f"Exit: {_text(exit_reason, 60) or 'closed'}",
+        f"Exit: {_exit_text(exit_reason)}",
         f"Final R (gross, before fees): {final_r}",
     ]
     if pnl_display:
