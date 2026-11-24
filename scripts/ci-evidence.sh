@@ -3,11 +3,12 @@
 # `make ci-full` run (see docs/ci-local.md).
 set -euo pipefail
 
-# The pytest summary line ("== N passed, M skipped ... in Xs =="), without colour
-# codes. Log lines from background threads can follow it, so never use the last line.
+# The pytest summary line ("== N passed, M skipped ... in Xs ==", or undecorated
+# under -q), without colour codes. Log lines from background threads can follow
+# it, so never use the last line.
 pytest_summary() {
   sed -E 's/\x1b\[[0-9;]*m//g' "$1" \
-    | grep -E '^=+ .*[0-9]+ (passed|failed|errors?|skipped).* in [0-9.]+s.* =+$' \
+    | grep -E '^(=+ )?[0-9]+ (passed|failed|errors?|skipped)[^=]* in [0-9.]+s( \([0-9:]+\))?( =+)?$' \
     | tail -n 1 | sed -E 's/^=+ //; s/ =+$//' || true
 }
 if [[ "${1:-}" == --summary ]]; then
