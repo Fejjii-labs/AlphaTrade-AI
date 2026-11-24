@@ -1704,6 +1704,7 @@ class WatcherPaperRuntime:
         from app.services.autonomous_trading import AutonomousMode
 
         candidate = discussion.candidate
+        mode: AutonomousMode | None = None
         if report.kill_switch_active or self._settings.global_kill_switch_active:
             proof = _proof(candidate, "blocked", "kill_switch_active")
         else:
@@ -1712,6 +1713,7 @@ class WatcherPaperRuntime:
                 session,
                 target.organization_id,
             )
+            mode = resolution.mode
             if resolution.refusal is not None:
                 proof = _proof(candidate, "blocked", resolution.refusal)
             elif resolution.mode is AutonomousMode.OFF:
@@ -1789,10 +1791,12 @@ class WatcherPaperRuntime:
             replayed=proof.replayed,
             paper_only=True,
         )
-        if proof.stage == "blocked" and proof.reason_code in {
-            "daily_loss_limit",
-            "insufficient_daily_loss_allocation",
-        }:
+        if (
+            mode is AutonomousMode.BLOFIN_DEMO
+            and proof.stage == "blocked"
+            and proof.reason_code in {"daily_loss_limit", "insufficient_daily_loss_allocation"}
+        ):
+            # The page says DEMO: internal paper refusals of the same budget are not paged.
             from app.services.daily_loss_alert import page_daily_loss_limit_reached
 
             page_daily_loss_limit_reached(

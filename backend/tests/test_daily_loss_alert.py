@@ -100,9 +100,10 @@ def test_one_page_per_organization_per_utc_day(telegram: _Telegram) -> None:
     # Same UTC day, after the send: the 24 h dedup holds.
     later = NOW + timedelta(hours=9)
     assert not page_daily_loss_limit_reached(settings, organization_id=ORG, now=later)
-    # A non-UTC clock on the same UTC day keys the same day.
-    local = NOW.astimezone(timezone(timedelta(hours=-5)))
-    assert not page_daily_loss_limit_reached(settings, organization_id=ORG, now=local)
+    # 03:00 UTC is still 22:00 the previous local day at UTC-5: the UTC day keys it.
+    early = datetime(2026, 11, 23, 3, 0, tzinfo=UTC).astimezone(timezone(timedelta(hours=-5)))
+    assert early.date().isoformat() == "2026-11-22"
+    assert not page_daily_loss_limit_reached(settings, organization_id=ORG, now=early)
     # Next UTC day pages again; another organization pages on its own.
     tomorrow = NOW + timedelta(days=1)
     assert page_daily_loss_limit_reached(settings, organization_id=ORG, now=tomorrow)
@@ -113,14 +114,23 @@ def test_one_page_per_organization_per_utc_day(telegram: _Telegram) -> None:
     assert "2026-11-24 (UTC)" in telegram.messages[1]
 
 
-@pytest.mark.parametrize("reason", ["daily_loss_limit", "insufficient_daily_loss_allocation"])
-def test_watcher_pages_when_the_daily_loss_budget_blocks_an_entry(
-    monkeypatch: pytest.MonkeyPatch, reason: str
+@pytest.mark.parametrize(
+    ("reason", "mode"),
+    [
+        ("daily_loss_limit", "demo"),
+        ("insufficient_daily_loss_allocation", "demo"),
+        ("insufficient_daily_loss_allocation", "internal_paper"),
+    ],
+)
+def test_watcher_pages_when_the_daily_loss_budget_blocks_a_demo_entry(
+    monkeypatch: pytest.MonkeyPatch, reason: str, mode: str
 ) -> None:
     from sqlalchemy import select
 
     from app.db.models import ExecutionAccount
-    from app.services.automated_paper_loop import _proof
+    from app.services import autonomous_paper_switch
+    from app.services.automated_paper_loop import AutomatedPaperLoop, _proof
+    from app.services.autonomous_trading import AutonomousMode
     from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
     from tests.support.phase5_market import EVALUATED_AT
     from tests.support.postgres_persistence import phase7_plan_session_factory
@@ -135,11 +145,18 @@ def test_watcher_pages_when_the_daily_loss_budget_blocks_an_entry(
         assert account is not None
         settings = demo_settings(str(account.id))
         session.commit()
-    monkeypatch.setattr(
-        GovernedBloFinDemoLoop,
-        "continue_confirmed_setup",
-        lambda self, session, *, candidate, **_: _proof(candidate, "blocked", reason),
-    )
+    blocked = lambda self, session, *, candidate, **_: _proof(candidate, "blocked", reason)  # noqa: E731
+    monkeypatch.setattr(GovernedBloFinDemoLoop, "continue_confirmed_setup", blocked)
+    monkeypatch.setattr(AutomatedPaperLoop, "continue_confirmed_setup", blocked)
+    if mode == "internal_paper":
+        resolution = autonomous_paper_switch.AutonomousModeResolution(
+            AutonomousMode.INTERNAL_PAPER, None
+        )
+        monkeypatch.setattr(
+            autonomous_paper_switch,
+            "resolve_worker_autonomous_mode",
+            lambda *_args, **_kw: resolution,
+        )
     pages: list[dict[str, object]] = []
     monkeypatch.setattr(
         "app.services.daily_loss_alert.page_daily_loss_limit_reached",
@@ -151,4 +168,6 @@ def test_watcher_pages_when_the_daily_loss_budget_blocks_an_entry(
     runtime._settings = settings
     cycle = runtime.run_cycle()
     assert cycle.scans and cycle.scans[0].paper_loop_reason == reason
-    assert [page["organization_id"] for page in pages] == [WATCH_ORG]
+    # The page says DEMO, so an internal paper refusal of the same budget is not paged.
+    expected = [WATCH_ORG] if mode == "demo" else []
+    assert [page["organization_id"] for page in pages] == expected
