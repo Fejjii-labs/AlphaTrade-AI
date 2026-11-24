@@ -1462,10 +1462,11 @@ class WatcherPaperRuntime:
             worker_id=self._worker_id,
             held_fencing_token=held,
         )
+        key_before_wait = self._idempotency_key(target)
         if self._should_retry_after_forming_candle(result) and self._wait_for_closed_bar(
             target.symbol
         ):
-            if self._idempotency_key(target) != request.idempotency_key:
+            if self._idempotency_key(target) != key_before_wait:
                 # The wait crossed into the new bar's admission window: rerunning this
                 # request would evaluate the new bar under the previous bar's key, and
                 # the next poll would evaluate it again under its own key.

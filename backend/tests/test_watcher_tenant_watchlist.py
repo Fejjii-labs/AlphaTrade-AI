@@ -36,6 +36,21 @@ ORG = UUID(int=101)
 OTHER = UUID(int=102)
 
 
+@pytest.fixture(autouse=True, scope="module")
+def _outside_the_bar_admission_window():
+    """These tests read the wall clock. For 60 s after a 15m close the worker treats
+    the new bar as not yet due (adapter v3) and a cycle is idle, so wait that window
+    out once (at most 75 s, about 7% of runs) instead of flaking."""
+
+    import time
+
+    now = datetime.now(UTC)
+    since_close = timedelta(minutes=now.minute % 15, seconds=now.second)
+    if since_close < timedelta(seconds=75):
+        time.sleep((timedelta(seconds=75) - since_close).total_seconds())
+    yield
+
+
 class _InstantClock:
     """Wall start time that jumps forward only when a test asks to sleep."""
 
