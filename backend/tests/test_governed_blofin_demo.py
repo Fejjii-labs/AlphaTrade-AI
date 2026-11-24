@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import Decimal
+from fractions import Fraction
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -146,6 +147,10 @@ class Venue:
         elif path.endswith("books"):
             self.ticker_reads += 1
             quoted = self.price * Decimal("1.01") if self.behavior == "basis" else self.price
+            if self.behavior.startswith("tick_moved") and self.ticker_reads >= 2:
+                # One tick against the short between planning and the send (staging,
+                # 23-24 Nov: every governed send was refused for moves like this).
+                quoted = self.price - Decimal("0.1")
             if self.behavior == "depth_moved" and self.ticker_reads >= 2:
                 # The dispatch-time book left the plan's entry zone (staging, 23 Nov).
                 quoted = self.price * Decimal("1.03")
@@ -354,6 +359,8 @@ def test_demo_gate_requires_separate_arm_and_exact_principal_pins() -> None:
         "protection_unrelated_malformed",
         "preflight_kill",
         "preflight_fence",
+        "tick_moved",
+        "tick_moved_exact",
         "leverage_above_ceiling",
         "autonomous_off",
     ],
@@ -361,6 +368,15 @@ def test_demo_gate_requires_separate_arm_and_exact_principal_pins() -> None:
 def test_worker_venue_fills_journal_restart_and_protection(
     monkeypatch: pytest.MonkeyPatch, behavior: str
 ) -> None:
+    # The shared SFP fixture is exactly 1R at a 0.145% stop, so any entry-zone
+    # allowance fails its planned R:R by design. The lifecycle cases keep an exact
+    # zone; the tick_moved case checks the allowance with the R:R minimum lifted.
+    allowance = Decimal("10") if behavior == "tick_moved" else Decimal("0")
+    monkeypatch.setattr(
+        "app.services.governed_blofin_demo.DEMO_ENTRY_ZONE_ALLOWANCE_BPS", allowance
+    )
+    if behavior == "tick_moved":
+        monkeypatch.setattr("app.services.planned_reward_risk.MINIMUM_REWARD_RISK", Fraction(0))
     factory = phase7_plan_session_factory()
     with factory() as session:
         _seed(session)
@@ -461,6 +477,7 @@ def test_worker_venue_fills_journal_restart_and_protection(
         "stale",
         "expiry",
         "depth_moved",
+        "tick_moved_exact",
         "preflight_kill",
         "preflight_fence",
     }:

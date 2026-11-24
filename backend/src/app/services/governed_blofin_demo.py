@@ -153,6 +153,9 @@ from app.workers.watcher_paper_targets import PaperScanTarget
 
 logger = logging.getLogger(__name__)
 DEMO_POLICY = "governed-blofin-demo/v1"
+# Slippage allowance (bps) added on both sides of the authorized entry zone; equal to
+# the plan's send-time quote bound (slippage_policy.maximum_bps).
+DEMO_ENTRY_ZONE_ALLOWANCE_BPS = Decimal("10")
 _NAMESPACE = UUID("c44ea7de-0008-4000-8000-a070e1100001")
 # Demo book quotes are action evidence for 10 seconds.
 _DEMO_QUOTE_TTL = timedelta(seconds=10)
@@ -1355,7 +1358,18 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 "instrument_mapping_version": "blofin-linear-usdt/v1",
                 "quantity": {"value": quantity, "unit": "CONTRACTS"},
                 "quantity_unit": "CONTRACTS",
-                "entry_zone": {"lower": lower, "upper": upper, "price_unit": "USDT"},
+                # The authorized zone adds the slippage allowance on both sides of
+                # the quote and the expected fill. Without it the zone was a single
+                # price whenever the top of book covered the size, so the send-time
+                # check refused any one-tick move (every staging send, 23-24 Nov).
+                # Sizing above keeps the observed prices; the slippage cost is
+                # already reserved (_DEMO_SLIPPAGE_ALLOWANCE_RATE), and the send
+                # re-checks the live quote against the same bps bound.
+                "entry_zone": {
+                    "lower": lower * (1 - DEMO_ENTRY_ZONE_ALLOWANCE_BPS / Decimal("10000")),
+                    "upper": upper * (1 + DEMO_ENTRY_ZONE_ALLOWANCE_BPS / Decimal("10000")),
+                    "price_unit": "USDT",
+                },
                 "slippage_policy": {
                     "policy_id": "blofin-demo-conservative",
                     "policy_version": "1",
