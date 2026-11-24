@@ -384,6 +384,22 @@ background thread: a failed send is logged and not retried, and a page still
 waiting when the process is killed is lost. The worker cycle does not wait on
 Telegram.
 
+``daily_loss_limit_reached`` (a default code) pages once per organization per
+UTC day, the first time the daily loss budget refuses a new BloFin demo entry:
+its planned loss is larger than what remains of the budget after realized and
+reserved loss (``daily_loss_limit`` in the demo pre-check, budget
+``max_daily_loss``; ``insufficient_daily_loss_allocation`` in the risk-model-v2
+check, budget ``equity * daily_stop_pct``). Internal paper refusals do not page.
+The page cannot tell whether any budget remains, so it says neither that trading
+stopped nor that smaller entries will pass. Like every
+loss-protection page it carries no P&L amount. It reports an observed refusal,
+so it is queued on the background thread without waiting for the scan's
+commit, and it never changes the scan. ``daily_locked`` stays display only
+(AT-ADR-152); the 10% account equity stop keeps its own kill-switch page. The
+once-a-day dedup is per process, so a worker restart on the same day can page
+again. A failed send is not remembered, so the next refusal that day tries
+again.
+
 Telegram safety sends use the existing `telegram_bot_token` and
 `telegram_chat_id`. Kill-switch and loss-protection pages never include a
 secret or a P&L amount. Stop and target exit pages include symbol, timeframe,
