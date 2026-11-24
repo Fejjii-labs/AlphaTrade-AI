@@ -131,7 +131,8 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
         "description": "Run the complete backend suite for final release acceptance",
         "type": "boolean",
         "required": "true",
-        "default": "true",
+        # A dispatch for e2e_smoke alone must not also start the 2 h full suite.
+        "default": "false",
     }
     jobs = workflow["jobs"]
     assert set(jobs) == {
@@ -181,7 +182,8 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     assert "pull/${CI_SCOPE_PR_NUMBER}/head" in scope_script
     concurrency = workflow["concurrency"]
     assert concurrency == {
-        "group": "${{ github.workflow }}-${{ github.ref }}",
+        "group": "${{ github.workflow }}-${{ github.event_name == 'pull_request' "
+        "&& github.ref || github.run_id }}",
         "cancel-in-progress": "true",
     }
     backend = jobs["backend"]
@@ -190,8 +192,16 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     paths = steps["Select checks by path"]
     # The Full-Backend trailer is local evidence only: no commit message can
     # start the hosted full suite (Rule 11), only workflow_dispatch can.
-    assert "trailers" not in paths["run"] and "%B" not in paths["run"]
-    assert 'full_backend="$DISPATCH_FULL"' in paths["run"]
+    run = paths["run"]
+    for step in (s for job in jobs.values() for s in job.get("steps", [])):
+        script = step.get("run", "")
+        assert "Full-Backend" not in script.replace("# The Full-Backend trailer", "")
+        assert "trailers" not in script and "git log" not in script
+    # full_backend is assigned only from the dispatch input, inside the dispatch branch.
+    assert run.count("full_backend=") == 2  # the false default and the dispatch value
+    dispatch_branch = run.split('if [[ "$CI_SCOPE_EVENT_NAME" == workflow_dispatch ]]; then', 1)[1]
+    assert dispatch_branch.split("else", 1)[0].strip() == 'full_backend="$DISPATCH_FULL"'
+    assert "full_backend=true" not in run
     assert paths["env"]["DISPATCH_FULL"] == "${{ inputs.full_backend }}"
     assert backend["outputs"]["full_backend"] == "${{ steps.paths.outputs.full_backend }}"
     assert steps["Ruff check"]["run"] == "uv run ruff check . ../scripts/run_backend_focused.py"

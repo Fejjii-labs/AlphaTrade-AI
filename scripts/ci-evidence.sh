@@ -11,6 +11,10 @@ pytest_summary() {
     | tail -n 1 | sed -E 's/^=+ //; s/ =+$//' || true
 }
 if [[ "${1:-}" == --summary ]]; then
+  if [[ $# -ne 2 || ! -r "$2" ]]; then
+    printf 'Usage: %s --summary <readable pytest log>\n' "$0" >&2
+    exit 2
+  fi
   pytest_summary "$2"
   exit 0
 fi
@@ -28,6 +32,14 @@ if [[ "$ran" != "$head" ]]; then
   exit 1
 fi
 summary=$(pytest_summary "$log")
+if [[ -z "$summary" ]]; then
+  printf 'No pytest summary line in %s.\n' "$log" >&2
+  exit 1
+fi
+if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+  printf 'The working tree has changes; the evidence certifies a clean HEAD.\n' >&2
+  exit 1
+fi
 printf '## Local full gate\n'
 printf -- '- Head SHA: `%s`\n' "$ran"
 printf -- '- Command: `make ci-full` (`scripts/ci-local.sh --full`, PostgreSQL 16 `alphatrade_test`)\n'

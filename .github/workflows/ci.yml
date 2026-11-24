@@ -9,14 +9,16 @@ on:
         description: Run the complete backend suite for final release acceptance
         type: boolean
         required: true
-        default: true
+        default: false
       e2e_smoke:
         description: Run the non-blocking Chromium smoke suite
         type: boolean
         default: false
 
+# A newer PR commit cancels the older PR run. Manual dispatches never cancel
+# each other (or a PR run): each keeps its own group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -79,7 +81,7 @@ jobs:
                   frontend/*) frontend=true ;;
                   evaluation/*) evaluation=true ;;
                   scripts/run_backend_focused.py) backend=true ;;
-                  scripts/*|deploy/*|render.yaml|docker-compose.yml) deployment=true ;;
+                  scripts/*|deploy/*|render.yaml|docker-compose.yml|.env*) deployment=true ;;
                 esac
               done <<< "$paths"
             fi

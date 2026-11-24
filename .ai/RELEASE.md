@@ -53,16 +53,19 @@ classified with `git diff --name-only --no-renames`, so a move into `docs/` or
 
 On a pull request, `docs/**`, `.ai/**`, and root-level markdown-only changes
 skip backend, frontend, Docker, evaluation, and browser work. Those jobs still
-finish successfully, so a required check is not left pending. A push to `main`
-or `master` always runs the heavy jobs, including when that push is docs-only.
-`workflow_dispatch` ignores that path filter and the draft filter. The
-`full_backend` input selects the complete backend pytest step. A git trailer
-`Full-Backend: true` on the head commit selects that same step for a pull
-request or push, and skips the focused selection. There is no cron.
+finish successfully, so a required check is not left pending. Hosted CI no
+longer runs on pushes to `main` or `master`; the local gate (`make ci`,
+`make ci-full`, see `docs/ci-local.md`) is the default (Standing Rule 11).
+`workflow_dispatch` ignores that path filter and the draft filter. Its
+`full_backend` input (default off) selects the complete backend suite in the
+separate `backend-full` job. A `Full-Backend: true` commit trailer records that
+the local full gate passed on that commit; it never starts a hosted job. There
+is no cron.
 
-The backend job uses one PostgreSQL 16 service (`alphatrade_test`) and a
-150-minute job timeout. On an ordinary push or pull request, and on a manual
-dispatch with `full_backend` false, it runs `scripts/run_backend_focused.py` as
+The focused `backend` job has a 30-minute timeout and no database; the
+`backend-full` job uses one PostgreSQL 16 service (`alphatrade_test`) and a
+120-minute timeout. On a pull request, and on a manual dispatch with
+`full_backend` false, the focused job runs `scripts/run_backend_focused.py` as
 one pytest process. That selector always includes `tests/test_config.py`,
 `tests/test_deployment_safety.py`, and `tests/test_backend_ci_scope.py`. It also
 includes a changed `backend/tests/test_*.py` file, every
@@ -81,20 +84,22 @@ The frontend job runs `npm ci`, `npm run lint`, `npm run typecheck`,
 `npm run test`, and `npm run build` on every push, and on a pull request whose
 change is not docs-only or `.ai`-only. It does not run
 `scripts/run_frontend_focused.py`. The evaluation,
-Docker build, and Playwright smoke jobs run for the same non-draft code events
-as the heavy backend steps. They are not gated by a second manual flag.
+and Docker build jobs run for the same non-draft code events as the heavy
+backend steps. Playwright smoke (`e2e-smoke`) is manual-only (`e2e_smoke`
+dispatch input) and non-blocking.
 No branch-protection settings are changed by this policy. A green required
 check on a draft or a docs-only pull request means that heavy work was
-skipped, not that the suite passed. A docs-only push still runs the heavy
-jobs. Complete acceptance is one manual `full_backend=true`
-dispatch on the integration batch SHA, not a nightly run.
+skipped, not that the suite passed. Complete acceptance is the local
+`make ci-full` on the PR head (or one manual `full_backend=true` dispatch on an
+integration batch SHA), not a nightly run.
 
 ## Final consolidated release acceptance
 
-Pull requests get the quick focused checks unless the head commit carries
-`Full-Backend: true`. That trailer runs the complete backend suite once. The
-suite does not run on a schedule, and an ordinary push without the trailer
-stays focused.
+Pull requests get the quick focused hosted checks. The complete backend suite
+runs locally with `make ci-full` before merge; paste `make ci-evidence` into the
+PR body and add the `Full-Backend: true` trailer as the record. The hosted
+`backend-full` job runs only on a manual `full_backend` dispatch. Nothing runs
+on a schedule.
 
 When a batch of pull requests is ready, stack them on an integration branch
 named like `integration/<date>`. Dispatch `full_backend` **once** on that

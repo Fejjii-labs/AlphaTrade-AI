@@ -26,6 +26,11 @@ case "$#:${1:-}" in
         exit 2
       fi
     done
+    # The evidence certifies HEAD, so the tested tree must be exactly HEAD.
+    if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+      printf 'Commit or stash every change before the full gate; it certifies HEAD.\n' >&2
+      exit 2
+    fi
     # test_pr237_migration_aware_rollback archives these historical trees; a
     # shallow clone must fetch them or the gate cannot pass honestly.
     for sha in a7a843f7c27e8bdcea5f89c802c808472477a969 \
@@ -72,7 +77,7 @@ with psycopg.connect(url) as conn:
     log=../.ci-local/backend-full.log
     git rev-parse HEAD > ../.ci-local/backend-full.head
     set +e
-    uv run --no-sync pytest -o addopts= --timeout=300 --timeout-method=thread -rfE --durations=50 2>&1 | tee "$log"
+    uv run --no-sync pytest -o addopts= --timeout=300 --timeout-method=thread -rfEs --durations=50 2>&1 | tee "$log"
     status=${PIPESTATUS[0]}
     set -e
     [[ "$status" == 0 ]] || exit "$status"
@@ -104,6 +109,12 @@ with psycopg.connect(url) as conn:
 )
 
 if [[ "${1:-}" == --full ]]; then
-  # Written only after every step above passed; scripts/ci-evidence.sh needs it.
+  # Written only after every step above passed, on an unchanged clean HEAD;
+  # scripts/ci-evidence.sh needs it.
+  if [[ "$(git rev-parse HEAD)" != "$(cat .ci-local/backend-full.head)" ]] \
+    || [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+    printf 'HEAD or the working tree changed during the full gate; no evidence written.\n' >&2
+    exit 1
+  fi
   cp .ci-local/backend-full.head .ci-local/full-gate.passed
 fi

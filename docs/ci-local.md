@@ -32,7 +32,7 @@ Disable the hook installed by this script with
 
 ## Full backend gate
 
-The full suite is about 8,700 tests and takes about 1 h 45 min single-process
+The full suite is about 8,700 tests and takes about 1 h 55 min single-process
 on Linux. It needs a disposable PostgreSQL 16 server on loopback with a
 superuser role `alphatrade`/`alphatrade` (the suite drops and recreates
 schemas) and a database named `alphatrade_test`. Some tests assert that exact
@@ -79,10 +79,14 @@ runs the other local checks. The focused target skips PostgreSQL fixtures.
 
 Guards in `--full`:
 
+- **Clean HEAD.** The evidence certifies HEAD, so the gate refuses to start with
+  uncommitted or untracked changes and writes no evidence if HEAD or the tree
+  changes while it runs.
 - **Fixture URLs.** A PostgreSQL fixture whose URL is unset skips instead of
   failing, so a forgotten variable would look green. The gate fails when more
-  tests are skipped than `CI_FULL_SKIP_BASELINE` (default 1, the count on
-  `main`).
+  tests are skipped than `CI_FULL_SKIP_BASELINE` (default 1, the count measured on
+  this branch on 24 Nov). The log lists skipped tests (`-rs`), so a swapped
+  skip can be spotted.
 - **One run per database.** Each test's fixture truncates tables and ends other
   sessions on the database. A second run on the same `alphatrade_test` fails
   with `psycopg.errors.AdminShutdown` setup errors. The gate refuses to start
