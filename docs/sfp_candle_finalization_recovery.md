@@ -151,21 +151,37 @@ deleted. The stuck SFP scopes start clean on v3 receipts after deployment.
 Provider revision stays 1; no repair SQL, revision bump or allowlist was added.
 A same-policy conflict under v3 still fails closed.
 
-**Scope of the 60 s value.** It applies to the Watcher's strategy evidence reads,
-the only path that stores SFP receipts. To keep the worker loop free, the worker
-never sleeps more than 5 s for it. Earlier in the window a new bar is *not yet
-due*: the scan's idempotency key stays on the previous bar, which replays, so no
-failed `forming_candle` attempt or degraded health is recorded on each poll. The
-next 15 s poll scans the new bar once it is admitted. Symbol probes check the
-previous settled close inside the window. Reads that are never stored as
-receipts keep the v2 five-second floor (`BINANCE_REST_FAST_READ_GRACE`): the
-paper exit monitor (so stops and targets react as quickly as before) and
-TrendPulse screening (whose trigger expires 60 s after close). Shared kline
+**Scope of the 60 s value.** It applies to the Watcher's strategy evidence reads
+(the path that stores SFP receipts), the live monitor and symbol probes. To keep
+the worker loop free, the worker never sleeps more than 5 s for it. Earlier in
+the window a new bar is *not yet due*: the scan's idempotency key stays on the
+previous bar, which replays, and the next 15 s poll scans the new bar once it is
+admitted. If the previous bar's attempt had failed (as the stuck scopes had at
+deploy), that replay can still record a `forming_candle` failure in the first
+window. A forming-candle retry whose wait crosses into the new bar's window is
+skipped rather than rerun under the previous bar's key. Symbol probes check the
+previous settled close inside the window.
+
+Two readers keep the v2 five-second floor (`BINANCE_REST_FAST_READ_GRACE`), as
+before this change: the paper exit monitor (so stops and targets react as
+quickly as before) and TrendPulse screening (whose trigger expires 60 s after
+close). TrendPulse screening rows do store the bars they read
+(`TrendPulseScreeningRow.evidence`), labelled with the v3 adapter, so a v3 label
+covers both a 60 s and a 5 s admission; those rows are screening evidence, not
+SFP Watcher receipts. Bars shorter than two minutes are admitted after half a
+bar (30 s for 1m), because a 60 s guard would refuse every 1m read. Shared kline
 caches are keyed by grace, so a five-second read is never reused as a 60 s
-evidence read. Bars shorter than two minutes are admitted after half a bar
-(30 s for 1m), because a 60 s guard would refuse every 1m read. Trade-off: new 15m strategy evaluations, including Nested and
-D-line, now start about 60–75 s after close instead of 5–20 s. The live monitor's
-OHLCV block may show `SettlementGuardError` during that minute.
+evidence read; the exit monitor and evidence reads therefore no longer share a
+closed-kline payload (one extra confirmation pair of Binance reads per symbol,
+interval and close).
+
+Trade-offs: new 15m strategy evaluations, including Nested and D-line, start
+about 60–75 s after close instead of 5–20 s. Other 60 s readers (the evidence
+pipeline API, the `probe_exchange` CLI and paper validation) fail closed for the
+first minute after each close; paper validation records that as a blocker on
+the run. The live monitor's OHLCV block shows `SettlementGuardError` during that
+minute. The v3 identity changes evidence-window hashes, so a Nested or D-line
+setup that spans the deploy gets a new candidate id.
 
 **Stronger later fix (option C, not done here).** A time grace is still only a
 heuristic. A trade-count consistency check is stronger: before admitting a bar,

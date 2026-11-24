@@ -1465,6 +1465,11 @@ class WatcherPaperRuntime:
         if self._should_retry_after_forming_candle(result) and self._wait_for_closed_bar(
             target.symbol
         ):
+            if self._idempotency_key(target) != request.idempotency_key:
+                # The wait crossed into the new bar's admission window: rerunning this
+                # request would evaluate the new bar under the previous bar's key, and
+                # the next poll would evaluate it again under its own key.
+                return result
             observe_forming_candle_retry()
             logger.info(
                 "watcher_paper_forming_candle_retry",

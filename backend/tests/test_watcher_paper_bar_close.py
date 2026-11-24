@@ -13,7 +13,11 @@ from app.market_contracts.adapters.binance_usdm import BinanceUsdmPerpetualSourc
 from app.market_contracts.errors import FormingCandleError
 from app.watcher.contracts import EvaluationOutcome, EvaluationStatus, WorkerCycleStatus
 from app.watcher.errors import WatcherEvidenceUnavailableError
-from app.workers.watcher_market import SymbolMarketFactory, _wait_past_configured_boundary
+from app.workers.watcher_market import (
+    SymbolMarketFactory,
+    _wait_for_binance_rest_settlement,
+    _wait_past_configured_boundary,
+)
 from app.workers.watcher_paper import WatcherPaperRuntime, last_closed_interval_end
 from app.workers.watcher_paper_targets import PaperScanTarget
 
@@ -434,3 +438,76 @@ def test_second_forming_candle_stays_failed_without_third_attempt() -> None:
     )
     assert orchestrator.calls == 2
     assert result.reason_code == "forming_candle"
+
+
+def test_forming_retry_never_reruns_under_the_previous_bar_key() -> None:
+    # A scan just before close+60 s fails as forming; the wait crosses into the new
+    # bar's window. Rerunning would evaluate the new bar under the old key and the
+    # next poll would evaluate it again, so the retry is skipped instead.
+    from app.signal_fusion.lifecycle import CandidateLifecycleService
+    from app.signal_fusion.memory import InMemoryCandidateRepository
+    from app.watcher.contracts import ScanRequest
+    from app.watcher.fusion_evaluation import BoundEvaluationClock
+    from app.watcher.memory import InMemoryWatcherStore
+
+    state = {"now": datetime(2026, 10, 21, 18, 30, 54, 900000, tzinfo=UTC)}
+
+    class Clock:
+        def now(self) -> datetime:
+            return state["now"]
+
+    def sleeper(s: float) -> None:
+        state["now"] += timedelta(seconds=s)
+
+    class Factory:
+        def ensure_bar_close_ready(self, symbol: str) -> bool:
+            return _wait_for_binance_rest_settlement(
+                state["now"], now=lambda: state["now"], sleeper=sleeper
+            )
+
+        def bar_close_settle_delay(self, symbol, timeframe):
+            return timedelta(seconds=60)
+
+        def __call__(self, *_a):
+            raise AssertionError
+
+    runtime = WatcherPaperRuntime(
+        store=InMemoryWatcherStore(),
+        lifecycle=CandidateLifecycleService(
+            repository=InMemoryCandidateRepository(), clock=BoundEvaluationClock()
+        ),
+        clock=Clock(),
+        enabled=False,
+        evidence_factory=Factory(),
+        worker_id="w",
+    )
+    target = _paper_target()
+    assert runtime._wait_for_closed_bar("BTCUSDT") is False  # 5.1 s left: no sleep
+    key = runtime._idempotency_key(target)
+    assert key.endswith("181500Z")  # previous bar
+
+    seen: list[tuple[str, datetime]] = []
+    outcomes = [_forming_cycle_result(), _ok_cycle_result()]
+
+    class Orch:
+        def run_worker(self, request, *, worker_id, held_fencing_token):
+            seen.append((request.idempotency_key, state["now"]))
+            state["now"] += timedelta(milliseconds=600)  # acquisition takes 0.6 s
+            return outcomes[len(seen) - 1]
+
+    request = ScanRequest(
+        organization_id=target.organization_id,
+        principal_id=None,
+        scan_scope="s",
+        policy_id=uuid4(),
+        policy_version=1,
+        policy_content_hash="c" * 64,
+        watchlist_item_ids=(uuid4(),),
+        timeframe="15m",
+        idempotency_key=key,
+    )
+    result = runtime._run_worker_with_forming_retry(Orch(), request=request, target=target)
+    assert len(seen) == 1 and result is outcomes[0]
+    assert state["now"] >= datetime(2026, 10, 21, 18, 31, tzinfo=UTC)
+    # The next poll scans the 18:30 bar once, under its own key.
+    assert runtime._idempotency_key(target).endswith("183000Z")
