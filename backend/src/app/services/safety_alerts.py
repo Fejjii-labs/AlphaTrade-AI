@@ -87,6 +87,7 @@ _KILL_SWITCH_SOURCES = frozenset(
     }
 )
 _COOLDOWN_SECONDS = {
+    "daily_loss_limit_reached": 86400,
     "backfill_loss": 86400,
     "stale_live_loss": 86400,
     "degraded_repeat": 900,
@@ -130,6 +131,7 @@ TELEGRAM_SAFETY_DEFAULT_CODES: frozenset[str] = frozenset(
         "market_data_banned",
         "worker_memory_watchdog_repeat",
         "worker_unclean_exit",
+        "daily_loss_limit_reached",
         "blofin_demo_mirror_page_cap",
         "stop_hit",
         "tp_hit",
@@ -171,6 +173,8 @@ _SENT_MAX = 2048
 _SENT_PRUNE_AT = 256
 # One thread keeps background pages in order; each HTTP attempt times out within 5 s.
 _BACKGROUND: ThreadPoolExecutor | None = None
+# Dedup keys queued on the background thread and not yet finished.
+_PENDING: set[str] = set()
 
 
 def reset_safety_alert_dedup() -> None:
@@ -178,6 +182,7 @@ def reset_safety_alert_dedup() -> None:
 
     with _LOCK:
         _SENT.clear()
+        _PENDING.clear()
     from app.services.risk.kill_switch import reset_kill_switch_retry_window
 
     reset_kill_switch_retry_window()
@@ -443,27 +448,72 @@ def discard_queued_safety_alerts(session: Session) -> None:
         logger.error("safety_alert_discarded_with_rollback", code=alert.code)
 
 
-def _submit_background(settings: Settings, alert: ExitMonitorAlert) -> None:
+def deliver_safety_alert_in_background(
+    settings: Settings, alert: ExitMonitorAlert, *, now: datetime | None = None
+) -> bool:
+    """Queue one alert on the background thread, outside any transaction.
+
+    False when it is refused, unconfigured, recently sent, or already queued for
+    its dedup key, so a burst of identical events queues one send.
+    """
+
+    key = str(alert.fields.get("dedup_key") or alert.code)
+    if not safety_alert_telegram_allowed(settings, alert.code):
+        return False
+    if not telegram_safety_configured(settings):
+        return False
+    if _recently_sent(key, now or datetime.now(UTC), _cooldown(alert.code)):
+        return False
+    with _LOCK:
+        if key in _PENDING:
+            return False
+        _PENDING.add(key)
+    _submit_background(settings, alert, pending_key=key, now=now)
+    return True
+
+
+def _submit_background(
+    settings: Settings,
+    alert: ExitMonitorAlert,
+    *,
+    pending_key: str | None = None,
+    now: datetime | None = None,
+) -> None:
     global _BACKGROUND
     with _LOCK:
         if _BACKGROUND is None:
             _BACKGROUND = ThreadPoolExecutor(max_workers=1, thread_name_prefix="telegram-alert")
         executor = _BACKGROUND
     try:
-        executor.submit(_deliver_background, settings, alert)
+        executor.submit(_deliver_background, settings, alert, pending_key, now)
     except RuntimeError:  # interpreter shutdown
+        _forget_pending(pending_key)
         logger.warning("safety_alert_background_unavailable", code=alert.code)
 
 
-def _deliver_background(settings: Settings, alert: ExitMonitorAlert) -> None:
+def _deliver_background(
+    settings: Settings,
+    alert: ExitMonitorAlert,
+    pending_key: str | None = None,
+    now: datetime | None = None,
+) -> None:
     try:
-        deliver_safety_alert(settings, alert)
+        deliver_safety_alert(settings, alert, now=now)
     except Exception as exc:
         logger.warning(
             "safety_alert_telegram_failed",
             code=alert.code,
             error=redact_text(str(exc))[:200],
         )
+    finally:
+        _forget_pending(pending_key)
+
+
+def _forget_pending(key: str | None) -> None:
+    if key is None:
+        return
+    with _LOCK:
+        _PENDING.discard(key)
 
 
 def deliver_observed_alert_outside_transaction(
