@@ -160,7 +160,8 @@ admitted. If the previous bar's attempt had failed (as the stuck scopes had at
 deploy), that replay can still record a `forming_candle` failure in the first
 window. A forming-candle retry whose wait crosses into the new bar's window is
 skipped rather than rerun under the previous bar's key. Symbol probes check the
-previous settled close inside the window.
+previous settled close inside the window. A provider stuck one bar behind therefore still passes
+the probe for up to that minute (a 60 s detection gap).
 
 Two readers keep the v2 five-second floor (`BINANCE_REST_FAST_READ_GRACE`), as
 before this change: the paper exit monitor (so stops and targets react as
