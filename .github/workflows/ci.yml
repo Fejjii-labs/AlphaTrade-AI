@@ -64,12 +64,8 @@ jobs:
           if [[ "$CI_SCOPE_EVENT_NAME" == workflow_dispatch ]]; then
             full_backend="$DISPATCH_FULL"
           else
-            if git cat-file -e "${CI_SCOPE_HEAD_SHA}^{commit}" 2>/dev/null; then
-              trailer=$(git log -1 --format='%(trailers:key=Full-Backend,valueonly)' "$CI_SCOPE_HEAD_SHA")
-              if grep -qx 'true' <<< "$trailer" || git log -1 --format=%B "$CI_SCOPE_HEAD_SHA" | grep -x 'Full-Backend: true' >/dev/null; then
-                full_backend=true
-              fi
-            fi
+            # The Full-Backend trailer records a local full run (docs/ci-local.md).
+            # It never starts the hosted backend-full job; only dispatch does.
             # A failed diff leaves all checks enabled.
             if paths=$(git diff --name-only --no-renames "$CI_SCOPE_BASE_SHA...$CI_SCOPE_HEAD_SHA"); then
               backend=false frontend=false evaluation=false docker=false deployment=false

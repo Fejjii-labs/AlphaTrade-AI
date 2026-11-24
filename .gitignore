@@ -57,3 +57,6 @@ CHANGELOG_SESSION.md
 .ai/local/
 .ai/private/
 *.local.md
+
+# Local CI gate logs (scripts/ci-local.sh --full)
+.ci-local/

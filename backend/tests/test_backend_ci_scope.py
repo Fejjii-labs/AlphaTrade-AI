@@ -188,7 +188,10 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     steps = {step.get("name"): step for step in backend["steps"]}
     assert "bash .github/workflows/ci-scope.sh" in steps["Decide CI scope"]["run"]
     paths = steps["Select checks by path"]
-    assert "Full-Backend" in paths["run"]
+    # The Full-Backend trailer is local evidence only: no commit message can
+    # start the hosted full suite (Rule 11), only workflow_dispatch can.
+    assert "trailers" not in paths["run"] and "%B" not in paths["run"]
+    assert 'full_backend="$DISPATCH_FULL"' in paths["run"]
     assert paths["env"]["DISPATCH_FULL"] == "${{ inputs.full_backend }}"
     assert backend["outputs"]["full_backend"] == "${{ steps.paths.outputs.full_backend }}"
     assert steps["Ruff check"]["run"] == "uv run ruff check . ../scripts/run_backend_focused.py"

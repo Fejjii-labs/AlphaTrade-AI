@@ -32,8 +32,13 @@ Disable the hook installed by this script with
 
 ## Full backend gate
 
-Start a disposable PostgreSQL 16 server on loopback. The test suite can drop
-and recreate its database. The values below are for this temporary container.
+The full suite is about 8,700 tests and takes about 1 h 45 min single-process
+on Linux. It needs a disposable PostgreSQL 16 server on loopback with a
+superuser role `alphatrade`/`alphatrade` (the suite drops and recreates
+schemas) and a database named `alphatrade_test`. Some tests assert that exact
+name, so the script refuses any other database.
+
+With Docker:
 
 ```sh
 docker run --detach --rm --name alphatrade-ci-postgres \
@@ -43,7 +48,23 @@ docker run --detach --rm --name alphatrade-ci-postgres \
 
 # Run this check before the suite. Retry it if Postgres is still starting.
 docker exec alphatrade-ci-postgres pg_isready -U alphatrade -d alphatrade_test
+```
 
+With a local PostgreSQL 16 instead (Linux package or Homebrew), as a superuser:
+
+```sh
+psql -d postgres -c "CREATE ROLE alphatrade LOGIN SUPERUSER PASSWORD 'alphatrade'"
+psql -d postgres -c "CREATE DATABASE alphatrade_test OWNER alphatrade ENCODING 'UTF8' TEMPLATE template0"
+```
+
+The database must be UTF-8. A cluster created with the `C`/`POSIX` locale
+defaults to `SQL_ASCII`, and psycopg then cannot connect (`TypeError: cannot
+use a string pattern on a bytes-like object`).
+
+Then point every fixture URL at it (use port 5432 for a local server) and run
+the gate:
+
+```sh
 ci_postgres_url=postgresql+psycopg://alphatrade:alphatrade@127.0.0.1:5433/alphatrade_test
 export AT028_POSTGRES_URL="$ci_postgres_url"
 export EXPERIMENT_TEST_POSTGRES_URL="$ci_postgres_url"
@@ -51,21 +72,48 @@ export BLOFIN_ACTIVITY_TEST_POSTGRES_URL="$ci_postgres_url"
 export PR237_ROLLBACK_POSTGRES_URL="$ci_postgres_url"
 make ci-full
 # Equivalent without make: bash scripts/ci-local.sh --full
-
-docker stop alphatrade-ci-postgres
 ```
 
 The full target replaces focused pytest with the full backend suite and also
 runs the other local checks. The focused target skips PostgreSQL fixtures.
 
+Guards in `--full`:
+
+- **Fixture URLs.** A PostgreSQL fixture whose URL is unset skips instead of
+  failing, so a forgotten variable would look green. The gate fails when more
+  tests are skipped than `CI_FULL_SKIP_BASELINE` (default 1, the count on
+  `main`).
+- **One run per database.** Each test's fixture truncates tables and ends other
+  sessions on the database. A second run on the same `alphatrade_test` fails
+  with `psycopg.errors.AdminShutdown` setup errors. The gate refuses to start
+  while another session is connected (`CI_LOCAL_ALLOW_SHARED_DB=1` overrides).
+  To run two gates at once, give each its own PostgreSQL server.
+- **Shallow clones.** `tests/test_pr237_migration_aware_rollback.py` archives
+  three historical commits. The gate fetches any that are missing and stops if
+  it cannot.
+
+Dependencies come from `uv sync --locked --extra dev`, the only extra the
+backend defines. If your network needs the system certificate store, set
+`UV_SYSTEM_CERTS=1` (`UV_NATIVE_TLS` is deprecated).
+
+### Evidence in the PR body
+
+The pytest output is saved to `.ci-local/backend-full.log`. A marker is written
+only when every step passed. `make ci-evidence` prints the block to paste into
+the PR body: head SHA, command and the pass/fail/skip summary. It refuses when
+the last passing run was on another commit.
+
+The `Full-Backend: true` commit trailer records that this local full gate
+passed on that commit. It does not start any hosted job.
+
 ## Hosted CI
 
 The workflow runs on PR activity and manual dispatch. Jobs use their
 relevant paths so an unrelated PR can still receive the existing check
-contexts. A push to a branch with an open PR can still trigger a PR synchronize run. Full backend runs only when selected on dispatch or requested by
-a `Full-Backend: true` trailer on the PR head commit. Before requesting that
-trailer, run the full gate locally. The only new check name is
-`backend-full`.
+contexts. A push to a branch with an open PR can still trigger a PR synchronize
+run. The hosted full backend job (`backend-full`, the only new check name) runs
+only when `full_backend` is selected on a manual dispatch. A commit trailer
+never starts it, so recording local evidence spends no Actions minutes.
 
 Hosted PR and manual runs can consume included Actions minutes. A zero-dollar
 Actions budget with usage stopped at the limit is an organization billing
