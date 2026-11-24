@@ -486,10 +486,10 @@ def test_rehearsal_projects_live_evidence_through_paper_and_telegram() -> None:
         assert "facts_hash" not in texts and "I confirm" not in texts
         for needle in (
             "cannot place an order",
-            "BLOCK remains final",
-            "cannot override SetupAssessment",
+            "A risk block is final",
+            "cannot change whether a setup is confirmed",
             "cannot approve or activate",
-            "cannot mint a Candidate",
+            "cannot create a setup",
             "cannot enable live trading",
         ):
             assert needle in texts

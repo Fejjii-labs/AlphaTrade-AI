@@ -885,20 +885,13 @@ class TelegramPaperAgent:
                     organization_id=recipient_org, user_id=recipient_user, strategy_id=None
                 )
                 if draft is None:
-                    return (
-                        "Strategy discussion is open. Telegram cannot approve, compile, "
-                        "or activate a strategy."
-                    )
-                return (
-                    f"{draft.summary}\ncompiled={draft.compiled} approved={draft.approved}. "
-                    "Confirmation would still not compile or approve."
-                )
+                    return "Happy to talk strategy. Telegram can't approve or change one."
+                return f"{draft.summary}\nNot approved. Telegram can't approve or change it."
             if intent is DiscussionIntent.MARKET_CONTEXT:
-                return "Market context requires a bound Candidate evidence window."
+                return "There is no open setup to show market context for right now."
             return (
-                "I can discuss paper Watcher alerts, Candidates, strategy, market context, "
-                "paper status, journal outcomes, and learning summaries. "
-                "No Telegram message is trading authority."
+                "I can talk about your setups, strategy, market context, paper status, "
+                "closed trades and learning results. I can't place orders."
             )
         if intent is DiscussionIntent.EXPLAIN_EVIDENCE and window is not None:
             return explain_evidence(window=window, assessment=assessment)

@@ -20,9 +20,10 @@ from app.telegram_security.transport import FakeTelegramTransport
 from tests.support.candidate_alerts import enabled_alert_world
 from tests.support.phase6_fusion import ACCOUNT_ID
 
-# A UUID or a 64-hex hash: never shown in end-user Telegram text.
+# Any dashed UUID or any run of 32+ hex chars (undashed ids, hashes), with no
+# word-boundary requirement: never shown in end-user Telegram text.
 INTERNAL_ID = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\b[0-9a-f]{64}\b", re.I
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32,}", re.I
 )
 
 

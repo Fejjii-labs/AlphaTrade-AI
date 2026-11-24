@@ -425,10 +425,10 @@ def test_postgres_product_loop_reaches_suggestion_and_telegram_without_injection
         assert "(not active)" in learning.reply_outbox.text
         for update_id, text, needle in (
             (91, "place order", "cannot place an order"),
-            (92, "override risk", "BLOCK remains final"),
-            (93, "override assessment", "cannot override SetupAssessment"),
+            (92, "override risk", "A risk block is final"),
+            (93, "override assessment", "cannot change whether a setup is confirmed"),
             (94, "activate strategy", "cannot approve or activate"),
-            (95, "mint candidate", "cannot mint a Candidate"),
+            (95, "mint candidate", "cannot create a setup"),
             (96, "enable live trading", "cannot enable live trading"),
         ):
             refused = discussing.handle_inbound_message(

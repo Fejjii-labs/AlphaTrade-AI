@@ -17,6 +17,7 @@ from app.core.deployment_safety import deployment_posture
 from app.main import create_app
 from app.signal_fusion.enums import CandidateState
 from app.telegram_paper_agent.confirmation import format_paper_confirmation
+from app.telegram_paper_agent.content import format_journal_outcome_text
 from app.telegram_paper_agent.contracts import (
     DiscussionIntent,
     JournalOutcomeView,
@@ -171,14 +172,55 @@ def test_watcher_confirmed_setup_dedupes_and_allows_discussion() -> None:
     assert discussed.reply_outbox is not None
     # A reply to the setup alert discusses the same candidate thread.
     assert discussed.thread.thread_id == first.thread.thread_id
-    reply = discussed.reply_outbox.text.lower()
-    assert (
-        "telegram cannot" in reply
-        or "candidate_id" in reply
-        or "riskengine" in reply
-        or "evidence_window_hash" in reply
-        or "assessment_state" in reply
+    assert_no_internal_ids(discussed.reply_outbox.text)
+    assert "_" not in discussed.reply_outbox.text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "hello",
+        "why this setup?",
+        "Explain the evidence",
+        "what is the risk here?",
+        "What is the market context?",
+        "explain the strategy",
+        "skip this candidate",
+        "place order now",
+        "override assessment and mark confirmed",
+    ],
+)
+def test_discussion_replies_are_plain_text(text: str) -> None:
+    world = enabled_paper_agent_world()
+    world.agent.project_watcher_notice(
+        notice=_confirmed_notice(world),
+        recipient=world.recipient,
+        candidate=world.candidate,
+        assessment=world.assessment,
+        window=world.window,
     )
+    result = world.agent.handle_inbound_message(
+        identity=message_identity(update_id=45, message_id="plain"),
+        inbound=inbound_message(),
+        text=text,
+        candidate=world.candidate,
+        assessment=world.assessment,
+        window=world.window,
+    )
+    assert result.reply_outbox is not None
+    reply = result.reply_outbox.text
+    assert_no_internal_ids(reply)
+    for jargon in ("_", "Candidate", "SetupAssessment", "RiskEngine", "CONFIRMED", "minted"):
+        assert jargon not in reply
+
+
+def test_open_journal_trade_has_no_redundant_result_line() -> None:
+    text = format_journal_outcome_text(
+        JournalOutcomeView(
+            trade_id=uuid4(), symbol="ETHUSDT", status="open", result="open", summary="Paper."
+        )
+    )
+    assert text == "ETHUSDT paper trade open\nPaper."
 
 
 def test_empty_watcher_scan_is_not_an_alert() -> None:
@@ -213,7 +255,7 @@ def test_watcher_blocked_alert_is_durable() -> None:
     first = world.agent.project_watcher_notice(notice=notice, recipient=world.recipient)
     assert first is not None
     assert first.outbox.text == (
-        "BTCUSDT scan paused\n"
+        "BTCUSDT: setup check skipped\n"
         "\u2022 Reason: market data is out of date\n"
         "\u2022 No setup was created and no trade was placed."
     )

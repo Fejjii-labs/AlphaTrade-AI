@@ -359,7 +359,7 @@ def test_journal_attribution_learning_keeps_facts_apart_from_narrative() -> None
     assert "-1.25" in journal_reply.reply_outbox.text
     for update_id, text, needle in (
         (72, "place order", "cannot place an order"),
-        (73, "override risk", "BLOCK remains final"),
+        (73, "override risk", "A risk block is final"),
         (74, "activate strategy", "cannot approve or activate"),
         (75, "enable live trading", "cannot enable live trading"),
     ):

@@ -41,7 +41,7 @@ def format_watcher_blocked_text(notice: WatcherScanNotice) -> str:
     reason = _BLOCKED_REASON_TEXT.get(notice.reason_code) or humanize(notice.reason_code).lower()
     text = "\n".join(
         (
-            f"{notice.symbol} scan paused",
+            f"{notice.symbol}: setup check skipped",
             f"{_BULLET}Reason: {reason}",
             f"{_BULLET}No setup was created and no trade was placed.",
         )
@@ -55,7 +55,7 @@ def format_confirmed_setup_footer() -> str:
 
 def format_journal_outcome_text(view: JournalOutcomeView) -> str:
     lines = [f"{view.symbol} paper trade {humanize(view.status).lower()}"]
-    if view.result:
+    if view.result and view.result.lower() != view.status.lower():
         lines.append(f"{_BULLET}Result: {humanize(view.result)}")
     if view.net_pnl is not None:
         lines.append(f"{_BULLET}Net P&L: {view.net_pnl}")
