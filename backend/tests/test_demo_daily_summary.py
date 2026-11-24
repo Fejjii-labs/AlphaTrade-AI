@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import threading
 import time
@@ -26,7 +27,7 @@ from app.schemas import common
 from app.services.safety_alerts import reset_safety_alert_dedup
 
 D = Decimal
-DUE = datetime(2026, 11, 24, 0, 6, tzinfo=UTC)
+DUE = datetime(2026, 11, 24, 0, 16, tzinfo=UTC)
 LONG, SHORT = common.TradeDirection.LONG, common.TradeDirection.SHORT
 OPEN, CLOSED = common.JournalTradeStatus.OPEN, common.JournalTradeStatus.CLOSED
 
@@ -86,7 +87,7 @@ def _no_db() -> Any:
     raise AssertionError("the database must not be read")
 
 
-def test_off_unscoped_or_before_00_05_reads_nothing() -> None:
+def test_off_unscoped_or_before_00_15_reads_nothing() -> None:
     org, account, factory = uuid4(), uuid4(), _no_db
     TOUCHED.clear()
     summary.reset_demo_daily_summary_memo()
@@ -182,6 +183,7 @@ def test_seeded_day_with_an_open_a_tp_fill_and_closes(world: SimpleNamespace) ->
     btc.exit_time, btc.exit_price = _at(23, 18), D("109.25")
     xrp = _trade(world, "XRPUSDT", _at(22, 9), entry_price=D("1"), planned_stop_price=D("0.9"))
     xrp.status, xrp.exit_time, xrp.exit_price = CLOSED, _at(23, 1), D("0.95")
+    ada = _trade(world, "ADAUSDT", _at(23, 5), account_id=uuid4())  # another account
     with world.factory() as session:
         session.add_all(
             [
@@ -192,7 +194,7 @@ def test_seeded_day_with_an_open_a_tp_fill_and_closes(world: SimpleNamespace) ->
                        entry_price=D("200"), planned_stop_price=D("204")),
                 # Closed after midnight: still open at the end of the day.
                 _trade(world, "DOGEUSDT", _at(23, 23), exit_time=_at(24, 0), **done),
-                _trade(world, "ADAUSDT", _at(23, 5), account_id=uuid4()),  # another account
+                ada,
                 _trade(world, "BNBUSDT", _at(21, 1), exit_time=_at(22, 1), **done),  # day before
             ]
         )  # fmt: skip
@@ -204,6 +206,7 @@ def test_seeded_day_with_an_open_a_tp_fill_and_closes(world: SimpleNamespace) ->
                 _tp(world, btc.execution_lifecycle_id, 2, _at(23, 14)),
                 _tp(world, btc.execution_lifecycle_id, 3, _at(22, 14)),  # previous day
                 _tp(world, btc.execution_lifecycle_id, 3, _at(23, 15), "PAPER_INTERNAL"),
+                _tp(world, ada.execution_lifecycle_id, 4, _at(23, 16)),  # another account
             ]
         )
         session.commit()
@@ -240,18 +243,70 @@ def test_sent_once_per_day_across_a_restart_and_again_the_next_day(world: Simple
     assert "2026-11-24 (UTC)" in _delivered(world) and _audit_rows(world) == 2
 
 
-def test_worker_reconcile_hook_does_not_wait_on_telegram(world: SimpleNamespace) -> None:
+def _reconcile(world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, reasons: Any) -> Any:
+    """Run the worker hook with a fake venue reconcile that records a 23:58 close late."""
     from app.workers.watcher_paper import reconcile_governed_demo_once
 
-    world.release.clear()
+    def _reconcile_pending(_self: Any, session: Any) -> tuple[str, ...]:
+        late = _trade(world, "BTCUSDT", _at(23, 3), status=CLOSED, exit_price=D("110"))
+        late.exit_time = _at(23, 23, 58)
+        session.add(late)
+        session.commit()
+        return tuple(reasons)
+
+    loop = type("Loop", (), {"__init__": lambda *_a: None, "reconcile_pending": _reconcile_pending})
+    monkeypatch.setattr("app.services.governed_blofin_demo.GovernedBloFinDemoLoop", loop)
+    monkeypatch.setattr("app.runtime.canonical.ProductionCanonicalRuntime", object)
     settings = _settings(world.org, world.account).model_copy(
         update={"governed_blofin_demo_enabled": True}
     )
-    started = time.monotonic()
-    # Not a production runtime: the venue reconcile is skipped, the summary is not.
     clock: Any = SimpleNamespace(now=lambda: DUE)
-    assert reconcile_governed_demo_once(settings, world.factory, clock, object()) == ()
+    return reconcile_governed_demo_once(settings, world.factory, clock, object())
+
+
+def test_worker_hook_runs_after_reconcile_and_does_not_wait_on_telegram(
+    world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.release.clear()
+    started = time.monotonic()
+    assert _reconcile(world, monkeypatch, ["demo_closed_reconciled"]) == ("demo_closed_reconciled",)
     assert time.monotonic() - started < 2
     assert world.entered.wait(timeout=5) and world.sent == []  # still inside the HTTP send
     world.release.set()
-    assert "2026-11-23" in _delivered(world) and _audit_rows(world) == 1
+    text = _delivered(world)
+    assert "- BTCUSDT (unlabeled): +2.00R" in text and "Still open: 0" in text
+
+
+def test_worker_hook_waits_while_the_venue_was_not_read(
+    world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _reconcile(world, monkeypatch, ["demo_closed_reconciled", "demo_reconciliation_unavailable"])
+    time.sleep(0.2)
+    assert world.sent == [] and _audit_rows(world) == 0
+
+
+def test_racing_workers_queue_one_summary(
+    world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    both, collect = threading.Barrier(2), summary.collect_demo_day_summary
+
+    def _slow_collect(*args: Any, **kwargs: Any) -> Any:
+        # Without the lock both workers get here together; with it, one waits 1 s.
+        with contextlib.suppress(threading.BrokenBarrierError):
+            both.wait(timeout=1)
+        return collect(*args, **kwargs)
+
+    monkeypatch.setattr(summary, "collect_demo_day_summary", _slow_collect)
+    settings, results = _settings(world.org, world.account), []
+
+    def _worker() -> None:
+        results.append(summary.send_demo_daily_summary_if_due(settings, world.factory, now=DUE))
+
+    threads = [threading.Thread(target=_worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    _delivered(world)
+    time.sleep(0.2)
+    assert sorted(results) == [False, True] and len(world.sent) == 1 and _audit_rows(world) == 1

@@ -357,13 +357,20 @@ stay in structured logs and ``GET /health/paper-worker`` only. Setup
 notifications and policy-controlled paper alerts use the separate outbox path.
 
 The governed BloFin demo daily summary (``demo_daily_summary``, opt-in like the
-open and close pages) is queued once per organization per UTC day from 00:05 UTC
-by the worker's governed demo reconcile. Read from the database only, it lists
-the previous day's opens, take-profit legs filled per level, final closes with
-gross R and net R, and positions open at the end of the day; no currency amount.
-A quiet day still sends. An audit row per day (`demo_daily_telegram_summary`)
-keeps a restart from sending it again; a failed send is logged, not retried.
-See `app/services/demo_daily_summary.py`.
+open and close pages) is queued once per organization per UTC day by the
+worker's governed demo reconcile: only after a reconcile that started at or
+after 00:15 UTC and read the venue for every pending command (no reason code
+containing ``unavailable`` or ``unreadable``), so closes and take-profit fills
+from just before midnight are recorded first. Read from the database only, it
+lists the previous day's opens, take-profit legs filled per level, final closes
+with gross R and net R, and positions open at the end of the day; no currency
+amount. A quiet day still sends. An audit row per day
+(`demo_daily_telegram_summary`), written under a PostgreSQL advisory lock with
+a 5 second `lock_timeout`, keeps a restart or an overlapping worker from
+sending it again. Venue events for that day that are recorded after the summary
+was queued are not re-sent. A day that gets no summary during the next UTC day
+(worker down, or the venue unreadable all day) is skipped, not sent later. A
+failed send is logged and not retried. See `app/services/demo_daily_summary.py`.
 
 Governed BloFin demo trades page on open and on final close only when
 ``TELEGRAM_SAFETY_ALERT_ALLOWLIST`` lists ``demo_trade_opened`` and

@@ -3,23 +3,27 @@
 Opt-in like the open and close pages: it sends only when
 ``TELEGRAM_SAFETY_ALERT_ALLOWLIST`` lists ``demo_daily_summary`` and the existing
 bot token and chat id are set (``TELEGRAM_ALERTS_ENABLED`` does not gate it).
-From 00:05 UTC the paper worker summarizes the previous UTC day for the
-configured demo organization and account, from the database only (no venue
+From 00:15 UTC, right after a governed demo reconcile that reached the venue
+for every pending command, the paper worker summarizes the previous UTC day for
+the configured demo organization and account, from the database only (no venue
 call): opens, take-profit legs filled (``position_exit_events``), final closes
 with R and the day's net R, and positions open at the end of the day. R is
 gross, against the Journal's planned stop (projected from the approved plan),
 before fees; no currency amount is shown. A quiet day still sends.
 
 Once per organization per day: an audit row (``AUDIT_RESOURCE``, id = the day)
-is written in the transaction that queues the send, under a lock on the
-organization row, so a restart or a second worker does not send it again. The
-send runs after commit on the safety-alert background thread (5 s HTTP
-timeout), so the worker cycle never waits on Telegram. A failed send is logged
-and not retried.
+is written in the transaction that queues the send, under a PostgreSQL advisory
+lock on (organization, day) with a short ``lock_timeout``, so a restart or a
+second worker does not send it again. The send runs after commit on the
+safety-alert background thread (5 s HTTP timeout), so the worker cycle never
+waits on Telegram. A failed send is logged and not retried. Events recorded
+after the summary is queued are not re-sent, and a day that gets no summary on
+the next UTC day is skipped.
 """
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from collections import Counter
 from collections.abc import Iterable
@@ -29,7 +33,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import structlog
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
@@ -53,10 +57,13 @@ logger = structlog.get_logger(__name__)
 
 DEMO_DAILY_SUMMARY = "demo_daily_summary"
 AUDIT_RESOURCE = "demo_daily_telegram_summary"
-SEND_AFTER = timedelta(minutes=5)  # lets the reconciler record closes from just before 00:00
+SEND_AFTER = timedelta(minutes=15)  # late venue events from just before 00:00 get recorded first
+# Reconcile reasons that mean a pending command's venue state was not read this cycle.
+VENUE_MISS_MARKERS = ("unavailable", "unreadable")
 _MAX_ITEMS = 15
 _LOCK = threading.Lock()
 _DONE: dict[UUID, date] = {}  # per-process shortcut; the audit row is the real guard
+_MISSING_LOGGED: set[UUID] = set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +184,12 @@ def collect_demo_day_summary(
         select(PositionExitEventRow.execution_lifecycle_id, PositionExitEventRow.leg_order).where(
             PositionExitEventRow.organization_id == organization_id,
             PositionExitEventRow.venue == BLOFIN_DEMO_VENUE,
+            PositionExitEventRow.execution_lifecycle_id.in_(
+                select(JournalTrade.execution_lifecycle_id).where(
+                    JournalTrade.organization_id == organization_id,
+                    JournalTrade.account_id == account_id,
+                )
+            ),
             PositionExitEventRow.event_kind == "fill",
             PositionExitEventRow.fill_kind == "target",
             PositionExitEventRow.leg_order.is_not(None),
@@ -187,7 +200,7 @@ def collect_demo_day_summary(
     return DemoDaySummary(
         day,
         tuple(opened),
-        count_tp_fills(row.tuple() for row in legs),
+        count_tp_fills((lifecycle, leg) for lifecycle, leg in legs),
         tuple(closed),
         tuple(still_open),
     )
@@ -220,10 +233,18 @@ def _send_if_due(settings: Settings, factory: sessionmaker[Session], *, now: dat
         if _DONE.get(organization_id) == day:
             return False
     with factory() as session:
-        # A second worker (deploy overlap) waits here, then sees the first one's row.
-        session.execute(
-            select(Organization.id).where(Organization.id == organization_id).with_for_update()
-        )
+        if session.get(Organization, organization_id) is None:
+            if organization_id not in _MISSING_LOGGED:
+                _MISSING_LOGGED.add(organization_id)
+                logger.warning("demo_daily_summary_organization_missing")
+            return False
+        if session.get_bind().dialect.name == "postgresql":
+            # A second worker (deploy overlap) waits here, then sees the first one's row.
+            digest = hashlib.sha256(f"{AUDIT_RESOURCE}:{organization_id}:{day}".encode()).digest()
+            session.execute(text("SET LOCAL lock_timeout = '5s'"))
+            session.execute(
+                select(func.pg_advisory_xact_lock(int.from_bytes(digest[:8], "big", signed=True)))
+            )
         claimed = session.scalar(
             select(AuditLog.id).where(
                 AuditLog.organization_id == organization_id,
