@@ -566,7 +566,9 @@ def _widened_zone(low: Decimal, high: Decimal, tick: Decimal) -> tuple[Decimal, 
     rate = DEMO_ENTRY_ZONE_ALLOWANCE_BPS / Decimal("10000")
     lower = (low * (1 - rate) / tick).to_integral_value(rounding=ROUND_CEILING) * tick
     upper = (high * (1 + rate) / tick).to_integral_value(rounding=ROUND_FLOOR) * tick
-    return lower, upper
+    # Book levels are on the tick, so this never binds today; an off-tick input
+    # must still never shrink the zone below the observed prices.
+    return min(lower, low), max(upper, high)
 
 
 def demo_action_evidence(
@@ -1321,6 +1323,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         lower, upper = _widened_zone(
             min(entry, worst_entry), max(entry, worst_entry), snapshot.tick
         )
+        if base * lower < Decimal("5"):
+            # A fill at the zone's low edge must still meet the 5 USDT venue minimum.
+            return "demo_size_below_minimum"
         adverse_entry = upper if is_long else lower
         nearest_entry = lower if is_long else upper
         from app.services.demo_leverage_config import demo_liquidation_refusal

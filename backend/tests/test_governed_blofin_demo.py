@@ -404,12 +404,14 @@ def _assert_sized_at_the_widened_zone(session, command, trade, learning, price) 
         "moved_11bps",
         "leverage_above_ceiling",
         "autonomous_off",
+        "first_slice_1r",
     ],
 )
 def test_worker_venue_fills_journal_restart_and_protection(
     monkeypatch: pytest.MonkeyPatch, behavior: str
 ) -> None:
-    wide_first_slice_target(monkeypatch)
+    if behavior != "first_slice_1r":
+        wide_first_slice_target(monkeypatch)
     factory = phase7_plan_session_factory()
     with factory() as session:
         _seed(session)
@@ -495,6 +497,13 @@ def test_worker_venue_fills_journal_restart_and_protection(
     if behavior == "leverage_above_ceiling":
         # 25x demo account above the 20x ceiling: refused before any plan or POST.
         assert scan.paper_loop_reason == "demo_leverage_above_ceiling"
+        assert scan.trade_plan_revision_id is None
+        assert venue.post_count == 0
+        return
+    if behavior == "first_slice_1r":
+        # Owner decision (24 Nov): planned R:R is judged at the worst entry the zone
+        # authorizes, so an exactly-1R first-slice target is refused at planning.
+        assert scan.paper_loop_reason == "planned_reward_risk_below_minimum"
         assert scan.trade_plan_revision_id is None
         assert venue.post_count == 0
         return
@@ -1208,3 +1217,24 @@ def test_release_script_keeps_any_order_blofin_has_seen() -> None:
     assert check(None, [], [other, found]) == "order_history_found"
     with pytest.raises(ValueError):  # unreadable history never proves absence
         check(None, [], None)
+
+
+@pytest.mark.parametrize(
+    ("low", "high", "tick", "expected"),
+    [
+        # On-tick quote: 10 bps each side, rounded inward to the tick.
+        (Decimal("725.67"), Decimal("725.67"), Decimal("0.01"), ("724.95", "726.39")),
+        # A tick wider than the allowance leaves the observed range.
+        (Decimal("64.6"), Decimal("64.6"), Decimal("0.1"), ("64.6", "64.6")),
+        # Off-tick inputs never shrink the zone below the observed prices.
+        (Decimal("0.1234"), Decimal("0.1236"), Decimal("0.001"), ("0.1234", "0.1236")),
+    ],
+)
+def test_widened_zone_rounds_inward_and_keeps_the_observed_prices(
+    low: Decimal, high: Decimal, tick: Decimal, expected: tuple[str, str]
+) -> None:
+    from app.services.governed_blofin_demo import _widened_zone
+
+    lower, upper = _widened_zone(low, high, tick)
+    assert (lower, upper) == (Decimal(expected[0]), Decimal(expected[1]))
+    assert lower <= low <= high <= upper
