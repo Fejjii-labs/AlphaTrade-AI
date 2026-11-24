@@ -76,8 +76,14 @@ with psycopg.connect(url) as conn:
     status=${PIPESTATUS[0]}
     set -e
     [[ "$status" == 0 ]] || exit "$status"
+    # Background threads can log after pytest's summary, so find the summary line.
+    summary=$(bash ../scripts/ci-evidence.sh --summary "$log")
+    if [[ -z "$summary" ]]; then
+      printf 'No pytest summary line in %s.\n' "$log" >&2
+      exit 1
+    fi
     # A missing PostgreSQL URL skips fixtures instead of failing them.
-    skipped=$(tail -n 1 "$log" | grep -oE '[0-9]+ skipped' | grep -oE '[0-9]+' || echo 0)
+    skipped=$(grep -oE '[0-9]+ skipped' <<< "$summary" | grep -oE '[0-9]+' || echo 0)
     if (( skipped > ${CI_FULL_SKIP_BASELINE:-1} )); then
       printf '%s tests skipped; the baseline is %s. Check the PostgreSQL URLs.\n' "$skipped" "${CI_FULL_SKIP_BASELINE:-1}" >&2
       exit 1
