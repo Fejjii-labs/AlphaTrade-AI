@@ -356,6 +356,15 @@ optional extra codes. ``degraded_repeat``, clock skew, and ``arming_refused``
 stay in structured logs and ``GET /health/paper-worker`` only. Setup
 notifications and policy-controlled paper alerts use the separate outbox path.
 
+The governed BloFin demo daily summary (``demo_daily_summary``, opt-in like the
+open and close pages) is queued once per organization per UTC day from 00:05 UTC
+by the worker's governed demo reconcile. Read from the database only, it lists
+the previous day's opens, take-profit legs filled per level, final closes with
+gross R and net R, and positions open at the end of the day; no currency amount.
+A quiet day still sends. An audit row per day (`demo_daily_telegram_summary`)
+keeps a restart from sending it again; a failed send is logged, not retried.
+See `app/services/demo_daily_summary.py`.
+
 Governed BloFin demo trades page on open and on final close only when
 ``TELEGRAM_SAFETY_ALERT_ALLOWLIST`` lists ``demo_trade_opened`` and
 ``demo_trade_closed`` and the bot token and chat id are set. Like every
@@ -367,7 +376,8 @@ final R. Both R values are gross: from prices against the immutable plan
 stop, before fees and funding; the final R uses the size-weighted average
 exit price. Net P&L is shown only when the Journal has stored it (governed
 demo closes do not store it today). Partial take-profit fills are not paged;
-they stay in the journal. Only the reconciler that writes the lifecycle
+each is recorded in `position_exit_events` (not as a Journal lifecycle event)
+and counted in the daily summary. Only the reconciler that writes the lifecycle
 resolution queues the close page, so competing reconcilers page once.
 Pages are queued with the reconcile commit and sent at most once on a
 background thread: a failed send is logged and not retried, and a page still

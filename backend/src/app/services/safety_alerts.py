@@ -149,6 +149,7 @@ TELEGRAM_SAFETY_OPTIONAL_CODES: frozenset[str] = frozenset(
         "paper_trade_closed",
         "demo_trade_opened",
         "demo_trade_closed",
+        "demo_daily_summary",
     }
 )
 TELEGRAM_SAFETY_KNOWN_CODES: frozenset[str] = (

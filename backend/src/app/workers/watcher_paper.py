@@ -2248,10 +2248,15 @@ def reconcile_governed_demo_once(
     recovering after a boot refusal, from the idle cycle (M7), so open demo
     positions keep their journal/lifecycle rows current either way. It reads
     the demo venue and writes lifecycle rows; it never places an order.
+    Before that it queues the opt-in daily demo summary once per UTC day
+    (database reads only; sent on a background thread, never raises).
     """
 
     if not settings.governed_blofin_demo_enabled:
         return ()
+    from app.services.demo_daily_summary import send_demo_daily_summary_if_due
+
+    send_demo_daily_summary_if_due(settings, session_factory, now=clock.now())
     from app.runtime.canonical import (
         ProductionCanonicalRuntime,
         build_production_canonical_runtime,
