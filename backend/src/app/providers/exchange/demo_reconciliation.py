@@ -145,7 +145,7 @@ def occurrence(value: Any, *, earliest: datetime, now: datetime) -> datetime:
 ATTACHED_TPSL_WINDOW = timedelta(seconds=10)
 
 
-def _order_attached_terms(order: dict[str, Any], plan: TradePlanRevision) -> bool:
+def order_attests_plan_exits(order: dict[str, Any], plan: TradePlanRevision) -> bool:
     """The parent order itself attests the exact plan TP/SL it was sent with."""
     try:
         return all(
@@ -318,7 +318,7 @@ def reconcile_native(
                 )
             )
         linked = 0
-        attached_terms = _order_attached_terms(order, plan)
+        attached_terms = order_attests_plan_exits(order, plan)
         for p in protection:
             # A returned native parent/TPSL id may establish lineage even when the
             # protective client id is blank. Similar terms alone never establish it.
