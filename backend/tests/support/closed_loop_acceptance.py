@@ -33,7 +33,7 @@ from app.services.automated_paper_loop import _eligibility_command
 from app.workers.watcher_market import WatchlistContractDiscovery
 from app.workers.watcher_paper import WatcherPaperScanReport, build_watcher_paper_runtime
 from app.workers.watcher_paper_targets import list_paper_scan_targets
-from tests.support.phase5_market import EVALUATED_AT, trade
+from tests.support.phase5_market import EVALUATED_AT, RECORDED_FIXTURE_GRACE, trade
 from tests.support.phase6_evaluator import (
     build_context_4h_bars,
     build_pattern_15m_bars,
@@ -337,7 +337,9 @@ def build_world(*, failure: str | None = None) -> ClosedLoopWorld:
     )
     clock = AcceptanceClock()
     market = FixtureMarket(failure=failure)
-    source = BinanceUsdmPerpetualSource(transport=market.transport)
+    source = BinanceUsdmPerpetualSource(
+        transport=market.transport, settlement_grace=RECORDED_FIXTURE_GRACE
+    )
     monitor = PerpetualMarketMonitor(source, replay=False, clock=clock.now)
     runtime = build_production_canonical_runtime(factory, settings=settings, clock=clock)
     return ClosedLoopWorld(factory, settings, clock, market, source, monitor, runtime)

@@ -23,7 +23,7 @@ from app.market_activation.profile import (
     LIVE_SOURCE,
     canonicalize_perpetual_evidence_source,
 )
-from app.market_contracts.adapters.binance_usdm import BINANCE_REST_SETTLEMENT_GRACE
+from app.market_contracts.adapters.binance_usdm import BINANCE_REST_FAST_READ_GRACE
 from app.market_contracts.adapters.factory import resolve_perpetual_evidence_source
 from app.market_contracts.adapters.protocol import PerpetualMarketSource
 from app.market_contracts.catalog import catalog_for_symbols, instrument_for_source
@@ -51,8 +51,10 @@ _FALLBACK_PAGES = (200, 50, 1)
 # oldest bar's start, which is the previous bar's end. Stay past that guard or
 # a short first page can never be extended. Bybit classifies a bar with
 # ``FIRST_SLICE_OHLCV_GRACE_SECONDS`` (0), so its post-close guard is not
-# longer than this and one value serves every source.
-_PAGE_CURSOR_CLEARANCE = BINANCE_REST_SETTLEMENT_GRACE
+# longer than this and one value serves every source. Exit bars are never
+# stored as receipts, so the monitor keeps the 5 s guard instead of the 60 s
+# evidence admission: stops and targets react as fast as before.
+_PAGE_CURSOR_CLEARANCE = BINANCE_REST_FAST_READ_GRACE
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 logger = structlog.get_logger(__name__)
@@ -199,8 +201,11 @@ def build_candle_source(
         from app.market_contracts.adapters.replay import ReplayPerpetualSource
 
         return ReplayPerpetualSource()
+    fast = BINANCE_REST_FAST_READ_GRACE
     if origin == "process":
-        return resolve_perpetual_evidence_source(settings, shared=True)
+        return resolve_perpetual_evidence_source(
+            settings, shared=True, binance_settlement_grace=fast
+        )
     secondary = settings.perpetual_evidence_secondary_source.strip().lower()
     if mode == "binance_usdm" and secondary == "bybit_usdt_perpetual":
         tuned = settings.model_copy(
@@ -209,14 +214,14 @@ def build_candle_source(
                 "perpetual_evidence_secondary_source": "bybit_usdt_perpetual",
             }
         )
-        return resolve_perpetual_evidence_source(tuned, shared=True)
+        return resolve_perpetual_evidence_source(tuned, shared=True, binance_settlement_grace=fast)
     tuned = settings.model_copy(
         update={
             "perpetual_evidence_source": mode,
             "perpetual_evidence_secondary_source": "none",
         }
     )
-    return resolve_perpetual_evidence_source(tuned, shared=True)
+    return resolve_perpetual_evidence_source(tuned, shared=True, binance_settlement_grace=fast)
 
 
 def identity_for_trade(

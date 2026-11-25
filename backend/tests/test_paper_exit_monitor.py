@@ -2297,11 +2297,37 @@ class _AlwaysRaises:
         raise self.error
 
 
-def test_settlement_window_constant_is_the_venue_guard() -> None:
-    from app.market_contracts.adapters.binance_usdm import BINANCE_REST_SETTLEMENT_GRACE
+def test_settlement_window_constant_is_the_fast_exit_guard() -> None:
+    from app.market_contracts.adapters.binance_usdm import (
+        BINANCE_REST_FAST_READ_GRACE,
+        BINANCE_REST_SETTLEMENT_GRACE,
+    )
     from app.services import paper_exit_candles
 
-    assert paper_exit_candles._PAGE_CURSOR_CLEARANCE is BINANCE_REST_SETTLEMENT_GRACE
+    # Exit reads keep the 5 s guard; only stored evidence waits the v3 60 s.
+    assert paper_exit_candles._PAGE_CURSOR_CLEARANCE is BINANCE_REST_FAST_READ_GRACE
+    assert BINANCE_REST_FAST_READ_GRACE.total_seconds() == 5
+    assert BINANCE_REST_SETTLEMENT_GRACE.total_seconds() == 60
+
+
+def test_exit_candle_sources_keep_the_fast_binance_guard() -> None:
+    from app.market_contracts.adapters.binance_usdm import BinanceUsdmPerpetualSource
+    from app.market_contracts.adapters.failover import FailoverPerpetualSource
+    from app.services.paper_exit_candles import build_candle_source
+
+    settings = Settings(
+        _env_file=None,
+        environment="local",
+        database_url="sqlite+pysqlite:///:memory:",
+        perpetual_evidence_source="binance_usdm",
+        perpetual_evidence_secondary_source="bybit_usdt_perpetual",
+    )
+    for origin in ("process", "trade", "staging_live"):
+        source = build_candle_source(settings, "binance_usdm", origin)
+        if isinstance(source, FailoverPerpetualSource):
+            source = source.active_source
+        assert isinstance(source, BinanceUsdmPerpetualSource)
+        assert source._settlement_grace == timedelta(seconds=5)
 
 
 @pytest.mark.parametrize(

@@ -252,18 +252,32 @@ def _wait_past_configured_boundary(
     return True
 
 
+# The single worker loop also runs exit monitoring, so it never sleeps longer
+# than this for Binance settlement. The rest of the 60 s admission window is
+# "not yet due": scans stay on the previous bar and the next poll retries.
+BINANCE_SETTLEMENT_MAX_SLEEP = timedelta(seconds=5)
+
+
+def _binance_settling(evaluated_at: datetime) -> bool:
+    """True while the newest M15 close is inside Binance's admission window."""
+
+    since_close = timedelta(minutes=evaluated_at.minute % 15, seconds=evaluated_at.second)
+    since_close += timedelta(microseconds=evaluated_at.microsecond)
+    return since_close < BINANCE_REST_SETTLEMENT_GRACE
+
+
 def _wait_for_binance_rest_settlement(
     evaluated_at: datetime,
     *,
     now: Callable[[], datetime] | None = None,
     sleeper: Callable[[float], None] | None = None,
 ) -> bool:
-    """Pause until Binance's post-close admission window has elapsed.
+    """Pause through the last few seconds of Binance's post-close admission window.
 
-    The adapter rejects a candle whose close is still inside that window.
-    A pause is useful only for that short interval. Any other forming-candle
-    failure returns immediately so the caller can record it. ``now`` and
-    ``sleeper`` default to the wall clock and ``time.sleep``.
+    The adapter rejects a candle whose close is still inside that window. Only
+    the final ``BINANCE_SETTLEMENT_MAX_SLEEP`` is slept; earlier in the window
+    this returns at once and the caller treats the new bar as not yet due.
+    ``now`` and ``sleeper`` default to the wall clock and ``time.sleep``.
     """
 
     clock = now or (lambda: datetime.now(UTC))
@@ -272,7 +286,7 @@ def _wait_for_binance_rest_settlement(
         minutes=evaluated_at.minute % 15
     )
     remaining = (close + BINANCE_REST_SETTLEMENT_GRACE) - clock()
-    if remaining <= timedelta(0) or remaining > BINANCE_REST_SETTLEMENT_GRACE:
+    if remaining <= timedelta(0) or remaining > BINANCE_SETTLEMENT_MAX_SLEEP:
         return False
     pause(remaining.total_seconds())
     return True
@@ -426,6 +440,19 @@ class SymbolMarketFactory:
             slept = True
         return slept
 
+    def bar_close_settle_delay(
+        self, symbol: str, timeframe: Timeframe = Timeframe.M15
+    ) -> timedelta:
+        """How long after a close the new bar is due: Binance REST's admission window."""
+
+        if self._replay:
+            return timedelta(0)
+        source, _, _, _ = self.composition(symbol)
+        active = _active_rest_source(source)
+        if isinstance(active, BinanceUsdmPerpetualSource):
+            return active.settlement_grace_for(timeframe)
+        return timedelta(0)
+
     def probe(self, symbol: str) -> MarketProbeResult:
         if self._replay:
             raise ContractUnavailableError("live_probe_unavailable_in_replay")
@@ -433,12 +460,14 @@ class SymbolMarketFactory:
         # Two final M15 bars (provider request bounded to four rows). Never a
         # current-price quote, full trade/CVD window, strategy or candidate.
         now = self._clock() if self._clock is not None else datetime.now(UTC)
-        # Binance withholds the just-closed candle for a few seconds. Bybit and
-        # the other adapters admit that candle immediately, so they must not sleep.
-        if isinstance(_active_rest_source(source), BinanceUsdmPerpetualSource) and (
-            _wait_for_binance_rest_settlement(now, now=self._clock, sleeper=self._sleeper)
-        ):
-            now = self._clock() if self._clock is not None else datetime.now(UTC)
+        # Binance withholds the just-closed candle for its admission window. Bybit
+        # and the other adapters admit that candle immediately, so they must not
+        # sleep. Inside the window the probe checks the previous, settled close.
+        if isinstance(_active_rest_source(source), BinanceUsdmPerpetualSource):
+            if _wait_for_binance_rest_settlement(now, now=self._clock, sleeper=self._sleeper):
+                now = self._clock() if self._clock is not None else datetime.now(UTC)
+            if _binance_settling(now):
+                now -= BINANCE_REST_SETTLEMENT_GRACE
         for attempt in range(2):
             instrument = instrument_for_source(source, catalog, symbol)
             self.discovery.require(symbol, instrument.venue)

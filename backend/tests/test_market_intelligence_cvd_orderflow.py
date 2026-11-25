@@ -44,6 +44,7 @@ from app.schemas.nested_continuation import EvidenceAvailability as State
 from app.signal_fusion.adapters import evidence_window_from_assessment_command
 from app.signal_fusion.enums import EvidenceRole, SetupAssessmentState
 from app.signal_fusion.evaluator import evaluate_setup
+from tests.support.phase5_market import RECORDED_FIXTURE_GRACE
 from tests.support.phase6_fusion import ORG_ID
 from tests.test_market_intelligence_oi_funding import (
     contract_payload,
@@ -464,7 +465,11 @@ def live_assembler():
             return httpx.Response(200, json=contract_payload(VenueId.BINANCE))
         return transport.handle_request(request)
 
-    src = BinanceUsdmPerpetualSource(transport=httpx.MockTransport(handle), max_retries=0)
+    src = BinanceUsdmPerpetualSource(
+        transport=httpx.MockTransport(handle),
+        max_retries=0,
+        settlement_grace=RECORDED_FIXTURE_GRACE,
+    )
     return FirstSliceEvidenceAssembler(src, replay=False)
 
 

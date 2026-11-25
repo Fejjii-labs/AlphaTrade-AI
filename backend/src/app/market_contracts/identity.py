@@ -19,8 +19,9 @@ from app.market_contracts.models import CanonicalModel, PositiveCanonicalDecimal
 from app.schemas.common import Timeframe
 
 ADAPTER_VERSION = "binance-usdm-perpetual/v1"
-# Live REST v2 confirms settled closed rows; replay v1 history remains unchanged.
-BINANCE_REST_ADAPTER_VERSION = "binance-usdm-perpetual/v2"
+# Live REST v3 admits a closed row 60 s after close (v2: 5 s) and confirms it twice.
+# v1 replay and stored v2 receipts keep their own identity hashes.
+BINANCE_REST_ADAPTER_VERSION = "binance-usdm-perpetual/v3"
 AGGRESSOR_CONVENTION = "binance-usdm-aggtrade/buyer-is-maker/v1"
 BYBIT_ADAPTER_VERSION = "bybit-usdt-perpetual/v1"
 BYBIT_AGGRESSOR_CONVENTION = "bybit-linear-public-trade/taker-side/v1"

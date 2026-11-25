@@ -43,6 +43,7 @@ from app.schemas.nested_continuation import EvidenceAvailability as State
 from app.signal_fusion.adapters import evidence_window_from_assessment_command
 from app.signal_fusion.enums import EvidenceRole, SetupAssessmentState
 from app.signal_fusion.evaluator import evaluate_setup
+from tests.support.phase5_market import RECORDED_FIXTURE_GRACE
 from tests.support.phase6_fusion import ORG_ID
 
 NOW = datetime(2026, 10, 1, 16, tzinfo=UTC)
@@ -471,7 +472,11 @@ def test_required_live_inputs_bind_into_existing_evidence_window():
             return httpx.Response(200, json=payload(VENUES[0], METRICS[1], stamp=at))
         return transport.handle_request(request)
 
-    src = BinanceUsdmPerpetualSource(transport=httpx.MockTransport(handle), max_retries=0)
+    src = BinanceUsdmPerpetualSource(
+        transport=httpx.MockTransport(handle),
+        max_retries=0,
+        settlement_grace=RECORDED_FIXTURE_GRACE,
+    )
     policy = first_slice_read_policy(ORG_ID)
     policy = policy.model_copy(
         update={

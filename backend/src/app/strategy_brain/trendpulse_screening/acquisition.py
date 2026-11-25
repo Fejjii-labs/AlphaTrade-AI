@@ -8,7 +8,10 @@ from typing import Any, Literal, Protocol
 
 import httpx
 
-from app.market_contracts.adapters.binance_usdm import BinanceUsdmPerpetualSource
+from app.market_contracts.adapters.binance_usdm import (
+    BINANCE_REST_FAST_READ_GRACE,
+    BinanceUsdmPerpetualSource,
+)
 from app.market_contracts.adapters.http import ReadOnlyHttpGetClient
 from app.market_contracts.adapters.request_budget import SlidingWeightBudget
 from app.market_contracts.catalog import PerpetualInstrumentCatalog
@@ -158,8 +161,13 @@ class BinanceScreeningAcquirer:
                 ),
             )
             evidence = evidence.model_copy(update={"instrument_rules": rules})
+            # Screening reads are never stored as receipts and must fit its 60 s
+            # trigger window, so they keep the 5 s floor rather than v3's 60 s.
             source = BinanceUsdmPerpetualSource(
-                client=client, catalog=PerpetualInstrumentCatalog((instrument,)), max_retries=0
+                client=client,
+                catalog=PerpetualInstrumentCatalog((instrument,)),
+                max_retries=0,
+                settlement_grace=BINANCE_REST_FAST_READ_GRACE,
             )
             opening = (trigger_end - timedelta(minutes=5)).astimezone(UTC)
             trend_end = opening.replace(minute=opening.minute // 15 * 15, second=0, microsecond=0)

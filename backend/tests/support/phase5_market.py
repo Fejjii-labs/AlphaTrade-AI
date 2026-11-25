@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+from app.market_contracts.adapters.binance_usdm import BINANCE_REST_FAST_READ_GRACE
 from app.market_contracts.coverage import build_complete_trade_window_coverage
 from app.market_contracts.cursor import TradeStreamAssembler, TradeStreamSnapshot
 from app.market_contracts.enums import MarketType, ProductFamily, SourceFamily, VenueId
@@ -28,6 +29,9 @@ from app.schemas.common import Timeframe
 
 EVALUATED_AT = datetime(2026, 1, 15, 16, 15, 5, tzinfo=UTC)
 TRIGGER_OPEN = datetime(2026, 1, 15, 16, 0, tzinfo=UTC)
+# Live USD-M fixtures evaluate at close+5 s (the v2 floor). Sources reading them
+# keep that grace; v3's 60 s admission is tested in test_binance_candle_finalization.
+RECORDED_FIXTURE_GRACE = BINANCE_REST_FAST_READ_GRACE
 CONNECTION = UUID("11111111-2222-3333-4444-555555555555")
 
 

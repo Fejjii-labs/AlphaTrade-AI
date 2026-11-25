@@ -113,9 +113,15 @@ _BINANCE_INTERVAL = {
 }
 
 # REST closeTime is a scheduled boundary, not a finalization acknowledgement.
-# v2 excludes the observed subsecond settlement race and confirms eligible rows
-# twice. This is a conservative admission rule, not a provider revision/guarantee.
-BINANCE_REST_SETTLEMENT_GRACE = timedelta(seconds=5)
+# v3 admits a closed row only 60 s after its close and confirms it twice. v2 used
+# 5 s, and staging still stored a BTC 15m bar at close+6 s that Binance later
+# served with a different close/volume/trade count (see
+# docs/sfp_candle_finalization_recovery.md). This is a conservative admission
+# rule, not a provider revision or a Binance settlement guarantee.
+BINANCE_REST_SETTLEMENT_GRACE = timedelta(seconds=60)
+# The v2 floor, kept for reads that are never stored as receipts and must stay
+# fast: paper exit stops/targets and TrendPulse screening (60 s trigger window).
+BINANCE_REST_FAST_READ_GRACE = timedelta(seconds=5)
 
 
 class BinanceUsdmPerpetualSource:
@@ -152,8 +158,10 @@ class BinanceUsdmPerpetualSource:
         aggtrades_request_cache: ShortTtlSingleflight | None = None,
         closed_kline_cache: ClosedKlineCache | None = None,
         wall_clock: Callable[[], float] | None = None,
+        settlement_grace: timedelta = BINANCE_REST_SETTLEMENT_GRACE,
     ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._settlement_grace = settlement_grace
         self._wall_clock = wall_clock or time.time
         self._http = client or ReadOnlyHttpGetClient(
             base_url=self._base_url,
@@ -388,12 +396,16 @@ class BinanceUsdmPerpetualSource:
         limit = min(max(min_final_bars + 2, min_final_bars), 1500)
         end_ms = int(evaluated_at.timestamp() * 1000)
         ttl_ms = max(int(self._kline_cache.ttl_seconds * 1000), 1)
+        # Shared caches are partitioned by grace so a payload confirmed under the
+        # fast exit/screening grace never becomes a 60 s evidence read.
+        grace_key = str(int(self._settlement_grace.total_seconds() * 1000))
         key = (
             "klines",
             instrument.provider_symbol,
             interval,
             str(limit),
             str(end_ms // ttl_ms),
+            grace_key,
         )
 
         def load_payload() -> list[Any]:
@@ -415,7 +427,7 @@ class BinanceUsdmPerpetualSource:
         elif interval_ms <= MAX_CACHEABLE_INTERVAL_MS:
             # A payload the closed cache refuses still dedupes inside the 10s cache.
             payload = self._closed_klines.get_or_load(
-                (instrument.provider_symbol, interval),
+                (instrument.provider_symbol, interval, grace_key),
                 end_ms=end_ms,
                 interval_ms=interval_ms,
                 limit=limit,
@@ -482,6 +494,12 @@ class BinanceUsdmPerpetualSource:
             raise WrongMarketError("USD-M kline payload is not a list.")
         return confirmed_payload
 
+    def settlement_grace_for(self, timeframe: Timeframe) -> timedelta:
+        """Admission grace for one interval. Bars under 2 min wait half a bar, so
+        a 1m series still has a readable moment under the 60 s v3 grace."""
+
+        return min(self._settlement_grace, interval_timedelta(timeframe) / 2)
+
     def _settled_bars(
         self,
         payload: object,
@@ -493,7 +511,7 @@ class BinanceUsdmPerpetualSource:
         if not isinstance(payload, list):
             raise WrongMarketError("USD-M kline payload is not a list.")
         grace = max(
-            BINANCE_REST_SETTLEMENT_GRACE,
+            self.settlement_grace_for(timeframe),
             timedelta(seconds=first_slice_freshness_policy().ohlcv_post_close_grace_seconds),
         )
         bars = [

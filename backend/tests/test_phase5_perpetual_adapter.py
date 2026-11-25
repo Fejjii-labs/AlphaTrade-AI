@@ -39,6 +39,7 @@ from app.schemas.common import Timeframe
 from tests.support.phase5_market import (
     CONNECTION,
     EVALUATED_AT,
+    RECORDED_FIXTURE_GRACE,
     TRIGGER_OPEN,
     eth_instrument,
     identity,
@@ -291,6 +292,7 @@ def test_live_adapter_maps_closed_klines() -> None:
     source = BinanceUsdmPerpetualSource(
         base_url="https://fapi.binance.com",
         transport=_usdm_handler(klines=rows),
+        settlement_grace=RECORDED_FIXTURE_GRACE,
     )
     live_identity = first_slice_identity(timeframe=Timeframe.M15, replay=False, is_live=True)
     series = source.fetch_closed_ohlcv(

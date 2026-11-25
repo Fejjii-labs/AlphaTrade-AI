@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -95,7 +95,10 @@ def resolve_perpetual_evidence_source(
     max_retries: int | None = None,
     fail_fast_rate_limits: bool = False,
     deadline_monotonic: float | None = None,
+    binance_settlement_grace: timedelta | None = None,
 ) -> PerpetualEvidenceSource:
+    """``binance_settlement_grace`` overrides the 60 s admission for reads never stored."""
+
     mode = settings.perpetual_evidence_source.strip().lower()
     secondary = settings.perpetual_evidence_secondary_source.strip().lower()
     if catalog is None and symbol != "BTCUSDT":
@@ -127,6 +130,7 @@ def resolve_perpetual_evidence_source(
                 max_retries=max_retries,
                 fail_fast_rate_limits=fail_fast_rate_limits,
                 deadline_monotonic=deadline_monotonic,
+                settlement_grace=binance_settlement_grace,
             ),
             _bybit_source(
                 settings,
@@ -149,6 +153,7 @@ def resolve_perpetual_evidence_source(
             max_retries=max_retries,
             fail_fast_rate_limits=fail_fast_rate_limits,
             deadline_monotonic=deadline_monotonic,
+            settlement_grace=binance_settlement_grace,
         )
     raise FallbackForbiddenError(
         f"Unknown perpetual_evidence_source={mode}; refusing silent fallback."
@@ -164,6 +169,7 @@ def _binance_source(
     max_retries: int | None = None,
     fail_fast_rate_limits: bool = False,
     deadline_monotonic: float | None = None,
+    settlement_grace: timedelta | None = None,
 ) -> BinanceUsdmPerpetualSource:
     pool = shared_binance_evidence_pool(settings) if shared else None
     pause: UpstreamPause | None = None if pool is None else pool.ban_gate
@@ -195,6 +201,7 @@ def _binance_source(
         quote_cache=None if pool is None else pool.quote_cache,
         aggtrades_request_cache=None if pool is None else pool.aggtrades_requests,
         closed_kline_cache=None if pool is None else pool.closed_klines,
+        **({} if settlement_grace is None else {"settlement_grace": settlement_grace}),
     )
 
 

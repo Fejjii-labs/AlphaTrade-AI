@@ -73,12 +73,14 @@ def world(producer_engine, monkeypatch, request):
         from app.market_contracts.adapters.binance_usdm import BinanceUsdmPerpetualSource
         from tests.support import phase7_postgres
         from tests.support.closed_loop_acceptance import FixtureMarket
-        from tests.support.phase5_market import EVALUATED_AT
+        from tests.support.phase5_market import EVALUATED_AT, RECORDED_FIXTURE_GRACE
         from tests.support.phase6_fusion import fusion_policy
 
         market = FixtureMarket()
         source = BinanceUsdmPerpetualSource(
-            transport=market.transport, observation_clock=lambda: EVALUATED_AT
+            transport=market.transport,
+            observation_clock=lambda: EVALUATED_AT,
+            settlement_grace=RECORDED_FIXTURE_GRACE,
         )
         assembled = FirstSliceEvidenceAssembler(
             source, replay=False, clock=lambda: EVALUATED_AT

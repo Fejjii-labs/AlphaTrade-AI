@@ -33,6 +33,7 @@ from app.signal_fusion.lifecycle import CandidateLifecycleService
 from app.signal_fusion.memory import InMemoryCandidateRepository
 from app.watcher.contracts import EvaluationMode
 from app.watcher.fusion_evaluation import BoundEvaluationClock, WatcherFusionEvaluationService
+from tests.support.phase5_market import RECORDED_FIXTURE_GRACE
 from tests.support.phase6_fusion import ORG_ID
 from tests.support.postgres_persistence import postgres_available, requires_postgres
 from tests.test_live_evidence_pipeline import (
@@ -62,7 +63,9 @@ def pin(*, end=CANONICAL_TRIGGER_INTERVAL_END, expired=False):
 
 def source(*, omit_trades=False):
     return BinanceUsdmPerpetualSource(
-        transport=_fixture_usdm_handler(omit_trades=omit_trades), max_retries=0
+        transport=_fixture_usdm_handler(omit_trades=omit_trades),
+        max_retries=0,
+        settlement_grace=RECORDED_FIXTURE_GRACE,
     )
 
 
