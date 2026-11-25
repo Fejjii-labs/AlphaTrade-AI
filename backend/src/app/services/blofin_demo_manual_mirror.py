@@ -8,7 +8,9 @@ Official contracts, rechecked 2026-11-16 from https://docs.blofin.com/index.html
   (side ``buy``, open 1591.8, close 1592.5, closePositions 1, realizedPnl
   ``0.7``, fee ``0.190536``) equals ``(close - open) * contracts`` and does
   not subtract ``fee``. ``fee`` is "Trading fee". Both published examples are
-  positive. That page does not define a negative fee. Order history on the
+  positive. The live demo account contradicts that example (see below): its
+  ``fee`` is negative when paid and ``realizedPnl`` already includes it. This
+  module follows the live data. Order history on the
   same document calls its fee field "Fee and rebate"
   (https://docs.blofin.com/index.html#get-order-history).
 * ``GET /api/v1/account/funding-fees``
@@ -83,7 +85,7 @@ from app.services.risk.mirror_economics import MIRROR_REF_PREFIX, RECONCILED_TAG
 
 logger = structlog.get_logger("services.blofin_demo_manual_mirror")
 
-METHOD = "positions-history-orders-fee-funding/v2"
+METHOD = "positions-history-orders-fee-funding/v3"
 _Q = Decimal("0.00000001")
 _TOLERANCE = Decimal("0.01")
 _RATE = Decimal("0.0001")
@@ -160,7 +162,7 @@ _DISABLED = (
 )
 _READY = (
     "BloFin demo journal positions. P&L is BloFin's own positions-history "
-    "realizedPnl minus BloFin's fee, minus BloFin funding when reported. "
+    "realizedPnl, which already includes BloFin's fee and funding. "
     "Positions whose P&L BloFin has not reported yet are excluded."
 )
 
@@ -438,17 +440,22 @@ _OPEN_FILL_LEAD = timedelta(seconds=5)
 
 
 def _price_move_side(row: dict[str, Any]) -> str | None:
-    """Opening side implied by the price move and the sign of ``realizedPnl``.
+    """Opening side implied by the price move and the sign of the P&L before fees.
 
-    A long gains when price rises, a short when it falls. ``None`` when either
-    the move or the P&L is zero or missing (no signal).
+    A long gains when price rises, a short when it falls. ``realizedPnl``
+    includes the (negative) fee, so the fee is added back first: a trade that
+    won a little on price but paid more in fees still reads the right side.
+    ``None`` when either the move or the P&L is zero or missing (no signal).
     """
 
     open_price = _decimal(row.get("openAveragePrice"))
     close_price = _decimal(row.get("closeAveragePrice"))
     realized = _decimal(row.get("realizedPnl"))
+    fee = _decimal(row.get("fee"))
     if open_price is None or close_price is None or realized is None:
         return None
+    if fee is not None:
+        realized -= fee
     move = close_price - open_price
     if move == 0 or realized == 0:
         return None
@@ -2105,17 +2112,17 @@ def _without_verified_economics(built: BuildResult) -> BuildResult:
 
 
 def _without_funding(built: BuildResult) -> BuildResult:
-    """A capped funding read cannot prove funding; keep BloFin realizedPnl and fee."""
+    """A capped funding read cannot prove funding; keep BloFin realizedPnl and fee.
+
+    Net stays BloFin's realizedPnl (it already includes funding); gross becomes
+    net plus fees, and the funding column is unknown.
+    """
     closed = []
     for draft in built.closed:
         if draft.net_pnl is None or draft.gross_pnl is None or draft.fees is None:
             closed.append(draft)
             continue
-        net = _money(draft.gross_pnl - draft.fees)
-        result = (
-            TradeResult.WIN if net > 0 else TradeResult.LOSS if net < 0 else TradeResult.BREAKEVEN
-        )
-        closed.append(replace(draft, funding=None, net_pnl=net, result=result))
+        closed.append(replace(draft, funding=None, gross_pnl=_money(draft.net_pnl + draft.fees)))
     return replace(built, closed=tuple(closed))
 
 

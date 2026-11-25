@@ -134,17 +134,19 @@ assumes it may be reused:
 
 One journal row per lifetime. Each venue history record is one leg.
 
+BloFin's live demo account, checked on 2026-11-25 (TAO short, 180 coins, 178.72 → 174.40): `realizedPnl` 734.33 = price move 777.60 + `fee` −38.14 + funding −5.13, and `closePositions` 180 is in coins. The rules below follow that, not the documentation example.
+
 | Field | Rule |
 | --- | --- |
-| `size` | Σ `closePositions × contractValue` over owned legs. While still open: closed legs plus the live `positions` quantity × `contractValue`. |
+| `size` | Σ `closePositions` over owned legs (BloFin reports it in coins). While still open: closed legs plus the live `positions` quantity × `contractValue` (`positions` is in contracts). |
 | `entry_price` | Size-weighted mean of leg `openAveragePrice`. While open with no legs: `positions.averagePrice`. |
 | `exit_price` | Size-weighted mean of leg `closeAveragePrice`. |
 | `entry_time` | `openTimeMs`. |
 | `exit_time` | Latest leg `updateTime`. |
-| `gross_pnl` | Σ leg price P&L. Each leg must match its own `realizedPnl` (today's `price_matches` rule, per leg). |
-| `fees` | Σ leg `fee` (a negative fee stays a rebate, as today). |
+| `gross_pnl` | `net_pnl + fees + funding` (the price result before costs). |
+| `fees` | −Σ leg `fee`: BloFin reports a paid fee as negative; the journal stores the cost. |
 | `funding` | Σ leg funding from today's `_assign_funding`, which already gives each leg the bills after the previous leg's close. |
-| `net_pnl` | `gross − fees − funding`, only when every leg is verified. |
+| `net_pnl` | Σ leg `realizedPnl`, BloFin's final result (it already includes the fee and funding), only when every leg is verified. |
 | `result` | From `net_pnl`, once `CLOSED`. `OPEN` before that. |
 | `status` | `OPEN` while the lifetime is on `positions`; `CLOSED` once it is gone and at least one leg is owned. |
 | `exit_reason` | `closed` when Σ `closePositions` = max `maxPositions` across legs; else `partially_closed_incomplete`, and the row is unverified. |

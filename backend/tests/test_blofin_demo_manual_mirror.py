@@ -231,7 +231,12 @@ def _drafts(history: list[dict[str, object]], **extra: object) -> object:
 
 
 def _five_closes() -> dict:
-    """Synthetic demo-shaped reconciliation cases, not captured account evidence."""
+    """Synthetic demo-shaped reconciliation cases, not captured account evidence.
+
+    BloFin's wire shape: ``fee`` is negative when paid and ``realizedPnl`` is the
+    final result (price move + fee + fundingFee). Contract value is 1, so
+    ``closePositions`` (coins) equals the contract count.
+    """
     bundle = {key: [] for key in ("positions", "history", "fills", "funding", "orders")}
     opened = int((NOW - timedelta(days=2)).timestamp() * 1000)
     closed = opened + 86400000
@@ -247,8 +252,11 @@ def _five_closes() -> dict:
         inst = ("BTC", "ETH", "SOL", "XRP", "ADA")[index] + "-USDT"
         entry_side = "sell" if direction == "short" else "buy"
         close_side = "buy" if direction == "short" else "sell"
+        # Only ADA pays funding (0.5, the bill below); every leg pays a 0.2 fee.
+        funding = Decimal("0.5") if inst == "ADA-USDT" else Decimal(0)
         for leg, price in enumerate(prices):
             gross = Decimal(price - 100) * (-1 if direction == "short" else 1)
+            net = gross - Decimal("0.2") - funding
             bundle["history"].append(
                 {
                     "historyId": f"five-h{index}-{leg}",
@@ -262,8 +270,8 @@ def _five_closes() -> dict:
                     "closeAveragePrice": str(price),
                     "createTime": str(opened),
                     "updateTime": str(closed + leg * 1000),
-                    "realizedPnl": str(gross),
-                    "fee": "0.2",
+                    "realizedPnl": str(net),
+                    "fee": "-0.2",
                 }
             )
             bundle["orders"].append(
@@ -276,8 +284,8 @@ def _five_closes() -> dict:
                     "createTime": str(closed + leg * 1000),
                     "filledSize": "1",
                     "averagePrice": str(price),
-                    "pnl": str(gross),
-                    "fee": "0.1",
+                    "pnl": str(net),
+                    "fee": "-0.1",
                 }
             )
         bundle["orders"].append(
@@ -291,7 +299,7 @@ def _five_closes() -> dict:
                 "filledSize": str(len(prices)),
                 "averagePrice": "100",
                 "pnl": "0",
-                "fee": str(Decimal("0.1") * len(prices)),
+                "fee": str(Decimal("-0.1") * len(prices)),
             }
         )
     bundle["funding"].append(
@@ -440,12 +448,14 @@ def test_blofin_realized_pnl_is_stored_even_when_price_math_disagrees(session):
     assert row.exit_reason == "closed"
 
 
-def test_recorded_venue_gross_is_preserved_within_one_cent_rounding_tolerance(session):
+def test_recorded_venue_net_is_preserved_within_one_cent_rounding_tolerance(session):
+    # Price move 10 plus fee -0.2 is 9.8; BloFin's 9.805 is stored as is.
     bundle = _five_closes()
-    bundle["history"][0]["realizedPnl"] = bundle["orders"][0]["pnl"] = "10.005"
+    bundle["history"][0]["realizedPnl"] = bundle["orders"][0]["pnl"] = "9.805"
     _apply_five(session, bundle)
     row = next(row for row in _rows(session) if row.symbol == "BTCUSDT")
-    assert row.gross_pnl == Decimal("10.005") and row.net_pnl == Decimal("9.805")
+    assert row.net_pnl == Decimal("9.805") and row.fees == Decimal("0.2")
+    assert row.gross_pnl == Decimal("10.005") and row.exit_reason == "closed"
 
 
 def test_legacy_price_only_verification_does_not_claim_new_order_cost_proof(session):
@@ -548,8 +558,10 @@ def test_funding_shared_with_an_open_position_is_not_assigned_to_the_closed_one(
         for row in _rows(session)
         if row.symbol == "ADAUSDT" and row.status is JournalTradeStatus.CLOSED
     )
-    # Funding is unknown (NULL); BloFin realizedPnl minus fee is still stored.
-    assert row.funding is None and row.net_pnl == Decimal("9.8")
+    # Funding is unknown (NULL). BloFin's realizedPnl already includes the
+    # funding it charged, so net is still stored; gross is net plus fees only.
+    assert row.funding is None and row.net_pnl == Decimal("9.3")
+    assert row.fees == Decimal("0.2") and row.gross_pnl == Decimal("9.5")
     assert row.exit_reason == "closed"
 
 
@@ -634,7 +646,12 @@ def test_long_matches_price_fee_and_paid_funding_and_ignores_fill_pnl(session: S
     assert row.exit_reason == "closed"
 
 
-def test_short_stores_a_fee_rebate_and_funding_received(session: Session) -> None:
+def test_short_stores_a_positive_blofin_fee_as_a_rebate_and_funding_received(
+    session: Session,
+) -> None:
+    # BloFin reports a paid fee as negative, so a positive fee (0.003) is money
+    # received: the journal cost is -0.003. fundingFee +0.005 is funding received.
+    # realizedPnl 0.208 = price move 0.2 + fee 0.003 + funding 0.005.
     _apply(session, _FIXTURE["short"])
     row = _rows(session)[0]
     assert row.direction is TradeDirection.SHORT
@@ -817,8 +834,9 @@ def test_reconciled_close_does_not_move_the_paper_daily_lock(session: Session) -
 
     bundle = copy.deepcopy(_FIXTURE["long"])
     bundle["history"][0]["closeAveragePrice"] = "90"
-    bundle["history"][0]["realizedPnl"] = "-0.2"
-    bundle["orders"][-1]["pnl"] = "-0.2"
+    # Price move -0.2, fee -0.01 and funding -0.004: BloFin's final result.
+    bundle["history"][0]["realizedPnl"] = "-0.214"
+    bundle["orders"][-1]["pnl"] = "-0.214"
     bundle["history"][0]["updateTime"] = str(int(NOW.timestamp() * 1000))
     report = _apply(session, bundle)
     assert report.reconciled == 1 and report.created == 0  # type: ignore[attr-defined]
@@ -1341,17 +1359,67 @@ def test_incomplete_history_cursor_writes_nothing(session: Session) -> None:
     assert _rows(session) == []
 
 
-def test_doc_examples_store_blofin_realized_pnl_and_fee_as_reported() -> None:
+def test_realized_pnl_is_stored_as_net_and_a_paid_fee_as_cost() -> None:
+    # realizedPnl is BloFin's final result; a paid fee arrives negative.
     # Price matching is diagnostic only; BloFin's own figures are stored.
-    eth = _drafts(_FIXTURE["eth_doc"]["history"]).closed[0]  # type: ignore[attr-defined]
-    assert eth.price_matches is True
-    assert eth.gross_pnl == Decimal("0.7") and eth.fees == Decimal("0.190536")
-    assert eth.funding is None and eth.net_pnl == Decimal("0.509464")
-    bch = _drafts(_FIXTURE["bch_doc"]["history"]).closed[0]  # type: ignore[attr-defined]
-    assert bch.price_matches is False
-    assert bch.gross_pnl == Decimal("-8.7") and bch.fees == Decimal("0.5472")
-    assert bch.net_pnl == Decimal("-9.2472") and bch.result is TradeResult.LOSS
+    eth = _drafts(_FIXTURE["eth_net"]["history"]).closed[0]  # type: ignore[attr-defined]
+    assert eth.price_matches is True  # 0.7 price move - 0.190536 fee, no funding
+    assert eth.net_pnl == Decimal("0.509464") and eth.fees == Decimal("0.190536")
+    assert eth.funding == Decimal("0") and eth.gross_pnl == Decimal("0.7")
+    assert eth.size == Decimal("1") and eth.result is TradeResult.WIN
+    bch = _drafts(_FIXTURE["bch_mismatch"]["history"]).closed[0]  # type: ignore[attr-defined]
+    assert bch.price_matches is False  # the short's price move is +8.7
+    assert bch.net_pnl == Decimal("-9.2472") and bch.fees == Decimal("0.5472")
+    assert bch.gross_pnl == Decimal("-8.7") and bch.result is TradeResult.LOSS
+    assert bch.size == Decimal("2.9")  # closePositions is coins, not contracts
     assert bch.direction is TradeDirection.SHORT
+
+
+def test_real_blofin_tao_short_is_stored_with_blofin_net_fee_and_funding() -> None:
+    """BloFin demo TAO short, checked 2026-11-25: 180 coins, 178.72 -> 174.40.
+
+    realizedPnl 734.332363721 = price move 777.60 + fee -38.13696 + funding
+    bill fundingFee -5.130676279. Times are synthetic; the figures are BloFin's.
+    """
+    opened = NOW - timedelta(days=2)
+    row = {
+        "historyId": "tao-h",
+        "positionId": "tao-p",
+        "instId": "TAO-USDT",
+        "side": "sell",
+        "positionSide": "short",
+        "closePositions": "180",
+        "maxPositions": "180",
+        "openAveragePrice": "178.72",
+        "closeAveragePrice": "174.40",
+        "createTime": _ms(opened),
+        "updateTime": _ms(opened + timedelta(days=1)),
+        "leverage": "10",
+        "realizedPnl": "734.332363721",
+        "fee": "-38.13696",
+    }
+    bill = {
+        "billId": "tao-funding",
+        "instId": "TAO-USDT",
+        "fundingFee": "-5.130676279",
+        "fundingTime": _ms(opened + timedelta(hours=8)),
+    }
+    built = _drafts(
+        [row],
+        instruments=[{"instId": "TAO-USDT", "contractValue": "0.1", "settleCurrency": "USDT"}],
+        funding=[bill],
+    )
+    [draft] = built.closed  # type: ignore[attr-defined]
+    assert draft.direction is TradeDirection.SHORT
+    assert draft.price_matches is True
+    assert draft.verified is True and draft.exit_reason == "closed"
+    assert draft.size == Decimal("180")  # coins; contractValue does not scale it
+    assert draft.net_pnl == Decimal("734.33236372")
+    assert draft.fees == Decimal("38.13696")
+    assert draft.funding == Decimal("5.13067628")
+    assert draft.gross_pnl == Decimal("777.6")
+    assert draft.net_pnl == draft.gross_pnl - draft.fees - draft.funding
+    assert draft.result is TradeResult.WIN
 
 
 def test_annotation_rejects_other_sources_and_a_bad_grade(session: Session) -> None:
@@ -1701,14 +1769,17 @@ def test_equal_close_times_leave_funding_unknown() -> None:
     base = dict(_FIXTURE["long"]["history"][0])
     second = dict(base)
     second["historyId"] = "h-same-close"
-    second["closePositions"] = "1"
-    second["maxPositions"] = "2"
-    second["realizedPnl"] = "0.1"
+    second["closePositions"] = "0.01"
+    second["maxPositions"] = "0.02"
+    second["realizedPnl"] = "0.09"  # price move 0.1 + fee -0.01
     built = _drafts([base, second], funding=_FIXTURE["long"]["funding"])
     closed = built.closed  # type: ignore[attr-defined]
     assert len(closed) == 1
     assert all(draft.funding is None for draft in closed)
-    assert all(draft.gross_pnl == Decimal("0.3") for draft in closed)
+    # BloFin's net (0.186 + 0.09) is kept; with funding unknown, gross is net + fees.
+    assert all(draft.net_pnl == Decimal("0.276") for draft in closed)
+    assert all(draft.fees == Decimal("0.02") for draft in closed)
+    assert all(draft.gross_pnl == Decimal("0.296") for draft in closed)
 
 
 def test_touching_positions_do_not_assign_a_shared_funding_bill() -> None:
@@ -1780,7 +1851,8 @@ def test_unparsed_history_and_funding_withhold_and_a_duplicate_does_not(
     _apply(session, bad_fee)
     # An unparsed funding bill makes funding unknown, not BloFin's P&L.
     assert _rows(session)[0].funding is None
-    assert _money(_rows(session)[0].net_pnl) == Decimal("0.19000000")
+    assert _money(_rows(session)[0].net_pnl) == Decimal("0.18600000")
+    assert _money(_rows(session)[0].gross_pnl) == Decimal("0.19600000")
     session.refresh(cycle)
     assert cycle.tags == ["mirror-cycle:incomplete"]
 
@@ -2160,8 +2232,8 @@ _OLD_ETH = {
     "createTime": _ms(datetime(2026, 10, 16, 20, tzinfo=UTC)),
     "updateTime": _ms(datetime(2026, 10, 17, 2, tzinfo=UTC)),
     "leverage": "2",
-    "realizedPnl": "1",
-    "fee": "0.01",
+    "realizedPnl": "0.99",
+    "fee": "-0.01",
 }
 
 
@@ -2218,7 +2290,7 @@ def test_new_close_reads_its_dependencies_from_its_open_and_keeps_older_rows(
             "createTime": _OLD_ETH["createTime"],
             "side": "buy",
             "filledSize": "1",
-            "fee": "0.004",
+            "fee": "-0.004",
             "pnl": "0",
         },
         {
@@ -2228,8 +2300,8 @@ def test_new_close_reads_its_dependencies_from_its_open_and_keeps_older_rows(
             "createTime": _OLD_ETH["updateTime"],
             "side": "sell",
             "filledSize": "1",
-            "fee": "0.006",
-            "pnl": "1",
+            "fee": "-0.006",
+            "pnl": "0.99",
         },
     ]
     client = _WindowClient(bundle)
@@ -2817,3 +2889,19 @@ def test_a_manual_trade_is_still_mirrored_unless_it_matches_a_bot_entry(
     report = _apply(session, _FIXTURE["long"])
     assert report.created == 1 or report.reconciled == 1  # type: ignore[attr-defined]
     assert [r.status for r in _rows(session) if r.external_ref] == [JournalTradeStatus.CLOSED]
+
+
+def test_price_move_side_adds_the_fee_back_before_reading_the_direction() -> None:
+    from app.services.blofin_demo_manual_mirror import _price_move_side
+
+    # Long: price up 0.10 on 1 coin, fee -0.15 -> realizedPnl -0.05 (a net loss).
+    row = {
+        "openAveragePrice": "100",
+        "closeAveragePrice": "100.1",
+        "realizedPnl": "-0.05",
+        "fee": "-0.15",
+    }
+    assert _price_move_side(row) == "buy"
+    # Short: price down 0.10, same fee.
+    assert _price_move_side({**row, "closeAveragePrice": "99.9"}) == "sell"
+    assert _price_move_side({**row, "fee": None}) == "sell"  # no fee: realizedPnl sign as is

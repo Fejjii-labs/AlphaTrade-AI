@@ -58,21 +58,25 @@ def _ms(when: datetime) -> str:
 
 
 def _cc_history(**updates: str) -> dict[str, str]:
-    """BloFin positions-history row whose price move does NOT equal realizedPnl."""
+    """BloFin positions-history row whose price move does NOT equal realizedPnl.
+
+    Real wire shape: ``closePositions`` in coins, ``fee`` negative when paid and
+    ``realizedPnl`` BloFin's final result (here 62.78 before the 9.51 fee).
+    """
     row = {
         "historyId": "cc-h1",
         "positionId": "cc-p1",
         "instId": "CC-USDT",
         "positionSide": "net",
         "side": "buy",
-        "closePositions": "225980",
-        "maxPositions": "225980",
+        "closePositions": "2259800",
+        "maxPositions": "2259800",
         "openAveragePrice": "0.07",
         "closeAveragePrice": "0.0702778",
         "createTime": _ms(_CC_OPEN),
         "updateTime": _ms(_CC_CLOSE),
-        "realizedPnl": "62.78",
-        "fee": "9.51",
+        "realizedPnl": "53.27",
+        "fee": "-9.51",
     }
     row.update(updates)
     return row
@@ -177,27 +181,36 @@ def test_manual_journal_rows_without_prices_still_count() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Task 2: the mirror stores BloFin's realizedPnl and fee as-is
+# Task 2: the mirror stores BloFin's realizedPnl as net and its fee as the cost
 # --------------------------------------------------------------------------- #
 
 
-def test_mirror_takes_gross_and_fees_from_blofin_even_when_price_math_disagrees() -> None:
+def test_mirror_takes_net_and_fees_from_blofin_even_when_price_math_disagrees() -> None:
     built = _drafts(
         [_cc_history(createTime=_ms(WINDOW_BEGIN - timedelta(days=1)))],
         instruments=[_CC_INSTRUMENT],
     )
     [draft] = built.closed
-    assert draft.gross_pnl == Decimal("62.78")
-    assert draft.fees == Decimal("9.51")
     assert draft.net_pnl == Decimal("53.27")
+    assert draft.fees == Decimal("9.51")
+    assert draft.funding is None  # opened before funding coverage
+    assert draft.gross_pnl == Decimal("62.78")  # net + fees
+    assert draft.size == Decimal("2259800")
     assert draft.result is TradeResult.WIN
     assert draft.exit_reason == "closed"
     assert draft.verified is True
 
 
-def test_mirror_subtracts_blofin_funding_when_blofin_reports_it() -> None:
+def test_mirror_adds_blofin_funding_back_into_gross_when_blofin_reports_it() -> None:
+    # BloFin's realizedPnl already includes the 0.25 funding paid.
     built = _drafts(
-        [_cc_history(createTime=_ms(NOW - timedelta(days=2)), updateTime=_ms(NOW))],
+        [
+            _cc_history(
+                createTime=_ms(NOW - timedelta(days=2)),
+                updateTime=_ms(NOW),
+                realizedPnl="53.02",
+            )
+        ],
         instruments=[_CC_INSTRUMENT],
         funding=[
             {
@@ -211,6 +224,8 @@ def test_mirror_subtracts_blofin_funding_when_blofin_reports_it() -> None:
     [draft] = built.closed
     assert draft.funding == Decimal("0.25")
     assert draft.net_pnl == Decimal("53.02")
+    assert draft.fees == Decimal("9.51")
+    assert draft.gross_pnl == Decimal("62.78")
 
 
 def test_mirror_leaves_pnl_pending_when_blofin_omits_realized_pnl_or_fee() -> None:

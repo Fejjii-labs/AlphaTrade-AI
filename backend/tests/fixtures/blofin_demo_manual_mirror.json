@@ -1,5 +1,5 @@
 {
-  "comment": "Synthetic BloFin demo-shaped payloads, not captured account evidence. Independent opening/closing order fees reconcile with positions-history. fillPnl is ignored.",
+  "comment": "Synthetic payloads in BloFin's real demo wire shape (checked 2026-11-25), not captured account evidence. positions-history: closePositions/maxPositions are coins; fee is negative when paid; realizedPnl is the final result (price move + fee + fundingFee). Open positions are contracts. Order fees use the same sign as positions-history fee and closing order pnl equals realizedPnl. fillPnl is ignored.",
   "instruments": [
     {"instId": "BTC-USDT", "contractValue": "0.01", "settleCurrency": "USDT"},
     {"instId": "ETH-USDT", "contractValue": "1", "settleCurrency": "USDT"},
@@ -14,15 +14,15 @@
         "instId": "BTC-USDT",
         "side": "buy",
         "positionSide": "long",
-        "closePositions": "2",
-        "maxPositions": "2",
+        "closePositions": "0.02",
+        "maxPositions": "0.02",
         "openAveragePrice": "100",
         "closeAveragePrice": "110",
         "createTime": "1792195200000",
         "updateTime": "1792238400000",
         "leverage": "5",
-        "realizedPnl": "0.2",
-        "fee": "0.01"
+        "realizedPnl": "0.186",
+        "fee": "-0.01"
       }
     ],
     "fills": [
@@ -54,7 +54,7 @@
         "positionId": "p-long",
         "filledSize": "2",
         "pnl": "0",
-        "fee": "0.004"
+        "fee": "-0.004"
       },
       {
         "orderId": "o-long-close-0",
@@ -63,8 +63,8 @@
         "positionId": "p-long",
         "createTime": "1792238400000",
         "filledSize": "2",
-        "pnl": "0.2",
-        "fee": "0.006"
+        "pnl": "0.186",
+        "fee": "-0.006"
       }
     ]
   },
@@ -77,15 +77,15 @@
         "instId": "BTC-USDT",
         "side": "sell",
         "positionSide": "short",
-        "closePositions": "2",
-        "maxPositions": "2",
+        "closePositions": "0.02",
+        "maxPositions": "0.02",
         "openAveragePrice": "100",
         "closeAveragePrice": "90",
         "createTime": "1792195200000",
         "updateTime": "1792238400000",
         "leverage": "3",
-        "realizedPnl": "0.2",
-        "fee": "-0.003"
+        "realizedPnl": "0.208",
+        "fee": "0.003"
       }
     ],
     "fills": [
@@ -117,7 +117,7 @@
         "positionId": "p-short",
         "filledSize": "2",
         "pnl": "0",
-        "fee": "-0.001"
+        "fee": "0.001"
       },
       {
         "orderId": "o-short-close-0",
@@ -126,8 +126,8 @@
         "positionId": "p-short",
         "createTime": "1792238400000",
         "filledSize": "2",
-        "pnl": "0.2",
-        "fee": "-0.002"
+        "pnl": "0.208",
+        "fee": "0.002"
       }
     ]
   },
@@ -150,15 +150,15 @@
         "instId": "BTC-USDT",
         "side": "buy",
         "positionSide": "long",
-        "closePositions": "1",
-        "maxPositions": "2",
+        "closePositions": "0.01",
+        "maxPositions": "0.02",
         "openAveragePrice": "100",
         "closeAveragePrice": "105",
         "createTime": "1792195200000",
         "updateTime": "1792216800000",
         "leverage": "5",
-        "realizedPnl": "0.05",
-        "fee": "0.001"
+        "realizedPnl": "0.049",
+        "fee": "-0.001"
       }
     ],
     "fills": [],
@@ -172,7 +172,7 @@
         "positionId": "p-part",
         "filledSize": "2",
         "pnl": "0",
-        "fee": "0.001"
+        "fee": "-0.001"
       },
       {
         "orderId": "o-partial_open-close-0",
@@ -181,8 +181,8 @@
         "positionId": "p-part",
         "createTime": "1792216800000",
         "filledSize": "1",
-        "pnl": "0.05",
-        "fee": "0.0005"
+        "pnl": "0.049",
+        "fee": "-0.0005"
       }
     ]
   },
@@ -195,15 +195,15 @@
         "instId": "BTC-USDT",
         "side": "buy",
         "positionSide": "long",
-        "closePositions": "1",
-        "maxPositions": "2",
+        "closePositions": "0.01",
+        "maxPositions": "0.02",
         "openAveragePrice": "100",
         "closeAveragePrice": "105",
         "createTime": "1792195200000",
         "updateTime": "1792216800000",
         "leverage": "5",
-        "realizedPnl": "0.05",
-        "fee": "0.001"
+        "realizedPnl": "0.049",
+        "fee": "-0.001"
       },
       {
         "historyId": "h-part-2",
@@ -211,15 +211,15 @@
         "instId": "BTC-USDT",
         "side": "buy",
         "positionSide": "long",
-        "closePositions": "1",
-        "maxPositions": "2",
+        "closePositions": "0.01",
+        "maxPositions": "0.02",
         "openAveragePrice": "100",
         "closeAveragePrice": "110",
         "createTime": "1792195200000",
         "updateTime": "1792238400000",
         "leverage": "5",
-        "realizedPnl": "0.1",
-        "fee": "0.002"
+        "realizedPnl": "0.096",
+        "fee": "-0.002"
       }
     ],
     "fills": [],
@@ -240,7 +240,7 @@
         "positionId": "p-part",
         "filledSize": "2",
         "pnl": "0",
-        "fee": "0.001"
+        "fee": "-0.001"
       },
       {
         "orderId": "o-partial_flat-close-0",
@@ -249,8 +249,8 @@
         "positionId": "p-part",
         "createTime": "1792216800000",
         "filledSize": "1",
-        "pnl": "0.05",
-        "fee": "0.0005"
+        "pnl": "0.049",
+        "fee": "-0.0005"
       },
       {
         "orderId": "o-partial_flat-close-1",
@@ -259,15 +259,15 @@
         "positionId": "p-part",
         "createTime": "1792238400000",
         "filledSize": "1",
-        "pnl": "0.1",
-        "fee": "0.0015"
+        "pnl": "0.096",
+        "fee": "-0.0015"
       }
     ]
   },
-  "eth_doc": {
+  "eth_net": {
     "history": [
       {
-        "historyId": "eth-doc",
+        "historyId": "eth-net",
         "positionId": "eth-pos",
         "instId": "ETH-USDT",
         "side": "buy",
@@ -276,30 +276,30 @@
         "maxPositions": "1",
         "openAveragePrice": "1591.8",
         "closeAveragePrice": "1592.5",
-        "createTime": "1672531200000",
-        "updateTime": "1672534800000",
+        "createTime": "1792195200000",
+        "updateTime": "1792198800000",
         "leverage": "10",
-        "realizedPnl": "0.7",
-        "fee": "0.190536"
+        "realizedPnl": "0.509464",
+        "fee": "-0.190536"
       }
     ]
   },
-  "bch_doc": {
+  "bch_mismatch": {
     "history": [
       {
-        "historyId": "bch-doc",
+        "historyId": "bch-mismatch",
         "positionId": "bch-pos",
         "instId": "BCH-USDT",
         "side": "sell",
-        "closePositions": "290",
-        "maxPositions": "290",
+        "closePositions": "2.9",
+        "maxPositions": "2.9",
         "openAveragePrice": "1890",
         "closeAveragePrice": "1887",
         "createTime": "1792195200000",
         "updateTime": "1792238400000",
         "leverage": "10",
-        "realizedPnl": "-8.7",
-        "fee": "0.5472"
+        "realizedPnl": "-9.2472",
+        "fee": "-0.5472"
       }
     ]
   }

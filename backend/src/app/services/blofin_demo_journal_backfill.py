@@ -250,8 +250,8 @@ def _proposed(
         reasons.add("funding_before_coverage")
     if any(leg.realized is None for leg in legs):
         reasons.add("blofin_pnl_missing")
-    sizes = [leg.contracts * leg.contract_value for leg in legs if leg.contract_value is not None]
-    size: Decimal | None = sum(sizes, Decimal("0")) if len(sizes) == len(legs) else None
+    # positions-history closePositions is already in coins (see the mirror module).
+    size: Decimal | None = sum((leg.contracts for leg in legs), Decimal("0"))
     entry = _weighted(legs, "open_price")
     if life.position is not None:
         quantity = _decimal(life.position.get("positions"))
@@ -268,10 +268,17 @@ def _proposed(
     )
     if closed and not full:
         reasons.add("partially_closed_incomplete")
-    # BloFin's own positions-history realizedPnl; never a price recomputation.
-    gross = _total([leg.realized for leg in legs])
-    fees = _total([leg.fee for leg in legs])
+    # BloFin's own figures, never a price recomputation: realizedPnl is the final
+    # result (after the fee and funding); a paid fee is negative, stored as a cost.
+    realized = _total([leg.realized for leg in legs])
+    fee_total = _total([leg.fee for leg in legs])
+    fees = -fee_total if fee_total is not None else None
     funding = _total([leg.funding if leg.funding_ok else None for leg in legs])
+    gross = (
+        realized + fees + funding
+        if realized is not None and fees is not None and funding is not None
+        else None
+    )
     verified = (
         closed
         and full
@@ -279,8 +286,8 @@ def _proposed(
         and all(leg.fee is not None and leg.funding_ok for leg in legs)
     )
     net = None
-    if verified and gross is not None and fees is not None and funding is not None:
-        net = gross - fees - funding
+    if verified and gross is not None and realized is not None:
+        net = realized
     if closed:
         status = JournalTradeStatus.CLOSED
         reason = "closed" if full else "partially_closed_incomplete"
