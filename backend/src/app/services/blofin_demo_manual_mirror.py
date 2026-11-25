@@ -1349,6 +1349,72 @@ def _same_money(left: Decimal | None, right: Decimal | None) -> bool:
     return _money(left) == _money(right)
 
 
+# The bot's own BloFin demo trades are journaled by the governed demo loop (source
+# paper_execution, with an execution lifecycle). The same demo account is
+# mirrored here, so a position that one of those trades opened is not a manual
+# trade. It matches on coin, direction, entry time and average entry price.
+BOT_TRADE_REASON = "bot_trade"
+_BOT_ENTRY_WINDOW = timedelta(seconds=120)
+_BOT_PRICE_TOLERANCE = Decimal("0.0005")
+
+
+@dataclass(frozen=True, slots=True)
+class _BotEntry:
+    symbol: str
+    direction: TradeDirection
+    entry_time: datetime
+    entry_price: Decimal
+
+
+def _utc(when: datetime) -> datetime:
+    """SQLite returns naive UTC datetimes; PostgreSQL returns aware ones."""
+    return when if when.tzinfo is not None else when.replace(tzinfo=UTC)
+
+
+def _bot_entries(
+    session: Session, organization_id: uuid.UUID, *, since: datetime | None
+) -> list[_BotEntry]:
+    query = select(
+        JournalTrade.symbol,
+        JournalTrade.direction,
+        JournalTrade.entry_time,
+        JournalTrade.entry_price,
+    ).where(
+        JournalTrade.organization_id == organization_id,
+        JournalTrade.source == JournalTradeSource.PAPER_EXECUTION,
+        JournalTrade.execution_lifecycle_id.is_not(None),
+        JournalTrade.entry_time.is_not(None),
+        JournalTrade.entry_price.is_not(None),
+    )
+    if since is not None:
+        query = query.where(JournalTrade.entry_time >= since - _BOT_ENTRY_WINDOW)
+    return [
+        _BotEntry(_symbol(symbol), direction, _utc(entry_time), entry_price)
+        for symbol, direction, entry_time, entry_price in session.execute(query).all()
+    ]
+
+
+def _bot_owned(
+    bots: list[_BotEntry],
+    *,
+    symbol: str,
+    direction: TradeDirection,
+    entry_time: datetime | None,
+    entry_price: Decimal | None,
+) -> bool:
+    if entry_time is None or entry_price is None or entry_price <= 0:
+        return False
+    coin = _symbol(symbol)
+    entry_time = _utc(entry_time)
+    return any(
+        bot.symbol == coin
+        and bot.direction is direction
+        and abs(bot.entry_time - entry_time) <= _BOT_ENTRY_WINDOW
+        and abs(bot.entry_price - entry_price) <= entry_price * _BOT_PRICE_TOLERANCE
+        for bot in bots
+    )
+
+
 def _claim_manual(row: JournalTrade, draft: MirrorDraft, *, user_id: uuid.UUID) -> bool:
     """Match this user's open row to a venue close without guessing."""
     if row.user_id != user_id:
@@ -1806,8 +1872,30 @@ class BloFinDemoManualMirror:
             ).all()
         )
         by_ref = {row.external_ref: row for row in rows if row.external_ref}
-        created = updated = reconciled = ambiguous = 0
+        created = updated = reconciled = ambiguous = bot_skipped = 0
+        entry_times = [
+            _utc(when)
+            for when in (
+                *(draft.entry_time for draft in (*built.closed, *built.opens)),
+                *(row.entry_time for row in rows),
+            )
+            if when is not None
+        ]
+        bots = _bot_entries(session, organization_id, since=min(entry_times, default=None))
+
+        def bot_owned(draft: MirrorDraft) -> bool:
+            return _bot_owned(
+                bots,
+                symbol=draft.symbol,
+                direction=draft.direction,
+                entry_time=draft.entry_time,
+                entry_price=draft.entry_price,
+            )
+
         for draft in built.closed:
+            if bot_owned(draft):
+                bot_skipped += 1
+                continue
             claimed = [row for row in rows if _claim_manual(row, draft, user_id=user_id)]
             target = by_ref.get(draft.external_ref)
             siblings = [
@@ -1873,6 +1961,9 @@ class BloFinDemoManualMirror:
         open_refs = {draft.external_ref for draft in built.opens}
         opens_written = 0
         for draft in built.opens:
+            if bot_owned(draft):
+                bot_skipped += 1
+                continue
             target = by_ref.get(draft.external_ref)
             if target is None:
                 target = JournalTrade(
@@ -1907,6 +1998,30 @@ class BloFinDemoManualMirror:
             row.result = TradeResult.OPEN
             row.net_pnl = None
             updated += 1
+        for row in rows:
+            # Rows mirrored before this check existed: retire them, never delete.
+            if (
+                row.source is not JournalTradeSource.BLOFIN_DEMO_MANUAL
+                or row.user_id != user_id
+                or (
+                    row.status is JournalTradeStatus.CANCELLED
+                    and row.exit_reason == BOT_TRADE_REASON
+                )
+                or not _bot_owned(
+                    bots,
+                    symbol=row.symbol,
+                    direction=row.direction,
+                    entry_time=row.entry_time,
+                    entry_price=row.entry_price,
+                )
+            ):
+                continue
+            row.status = JournalTradeStatus.CANCELLED
+            row.exit_reason = BOT_TRADE_REASON
+            row.gross_pnl = row.fees = row.funding = row.net_pnl = None
+            row.result = TradeResult.OPEN
+            row.tags = [tag for tag in row.tags or [] if tag != _VERIFIED]
+            updated += 1
         session.flush()
         if built.skipped_rows:
             reasons: dict[str, int] = {}
@@ -1923,6 +2038,7 @@ class BloFinDemoManualMirror:
             updated=updated,
             reconciled=reconciled,
             skipped=built.skipped,
+            bot_trades_skipped=bot_skipped,
             # A bounded sample: one line must not grow with the history size.
             skipped_rows=[row.as_dict() for row in built.skipped_rows[:_LOGGED_SKIPS]],
         )
