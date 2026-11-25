@@ -294,13 +294,14 @@ def seed_band_ledger_headroom(session, account_id, *, max_notional=Decimal("2000
 
 def _strategy_page_name(session, trade) -> str:
     from app.db.models import UserStrategy, UserStrategyVersion
+    from app.services.demo_trade_telegram import strategy_family_name
 
-    name, version = session.execute(
-        select(UserStrategy.name, UserStrategyVersion.version)
+    setup_type = session.execute(
+        select(UserStrategy.setup_type)
         .join(UserStrategyVersion, UserStrategyVersion.strategy_id == UserStrategy.id)
         .where(UserStrategyVersion.id == trade.strategy_version_id)
-    ).one()
-    return f"{name} v{version}"
+    ).scalar_one()
+    return strategy_family_name(setup_type)
 
 
 def demo_settings(account_id: str, **updates: object) -> Settings:

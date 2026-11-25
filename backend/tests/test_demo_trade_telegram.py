@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -13,13 +14,14 @@ import pytest
 from app.core.config import Settings
 from app.providers.alert_delivery.base import AlertDeliveryResult
 from app.providers.alert_delivery.telegram import TelegramAlertDeliveryProvider
-from app.schemas.common import AlertDeliveryChannel, TradeDirection
+from app.schemas.common import AlertDeliveryChannel, StrategyId, TradeDirection
 from app.services.demo_trade_telegram import (
     demo_trade_pages_enabled,
     format_demo_trade_closed_text,
     format_demo_trade_opened_text,
     queue_demo_trade_closed_telegram,
     queue_demo_trade_opened_telegram,
+    strategy_family_name,
     target_r_multiples,
 )
 from app.services.safety_alerts import deliver_queued_safety_alerts, reset_safety_alert_dedup
@@ -58,25 +60,44 @@ def _trade(**overrides: object) -> Any:
     return SimpleNamespace(**values)
 
 
-def test_open_text_has_coin_strategy_direction_entry_stop_and_r_per_target() -> None:
+def test_open_text_is_plain_with_dollar_risk_targets_and_local_time() -> None:
     text = format_demo_trade_opened_text(
-        symbol="BTCUSDT",
-        strategy="D-line BTCUSDT long 15m abc v1",
+        symbol="BTC-USDT",
+        strategy="D-line",
         timeframe="15m",
         direction=TradeDirection.LONG,
         entry_price=Decimal("100.00"),
         stop_price=Decimal("95.0"),
         targets=_TARGETS,
+        quantity=Decimal("2"),
+        opened_at=datetime(2026, 11, 25, 2, 4, tzinfo=UTC),
     )
     assert text.splitlines() == [
-        "AlphaTrade DEMO trade opened.",
-        "Symbol: BTCUSDT",
-        "Strategy: D-line BTCUSDT long 15m abc v1",
-        "Timeframe: 15m",
-        "Direction: long",
+        "🟢 Demo trade opened: BTC long",
+        "Strategy: D-line, 15m",
         "Entry: 100",
-        "Stop: 95",
-        "R:R (before fees): TP1 0.50R, TP2 2.00R, TP3 3.00R",
+        "Stop: 95 (risk $10.00)",
+        "Targets: TP1 102.5 (0.50R), TP2 110 (2.00R), TP3 115 (3.00R)",
+        "Opened: 03:04 CET",
+    ]
+
+
+def test_open_text_single_target_and_unknown_size() -> None:
+    text = format_demo_trade_opened_text(
+        symbol="TAOUSDT",
+        strategy="Nested Continuation",
+        timeframe="15m",
+        direction=TradeDirection.SHORT,
+        entry_price=Decimal("178.72"),
+        stop_price=Decimal("181.41"),
+        targets=[{"label": "tp", "price": "174.47"}],
+    )
+    assert text.splitlines() == [
+        "🟢 Demo trade opened: TAO short",
+        "Strategy: Nested Continuation, 15m",
+        "Entry: 178.72",
+        "Stop: 181.41",
+        "Target: 174.47 (1.58R)",
     ]
 
 
@@ -97,31 +118,74 @@ def test_short_r_uses_the_actual_entry_and_bad_risk_is_unknown() -> None:
     assert inverted == [("TP1", "unknown")]
 
 
-def test_close_text_labels_gross_r_and_shows_net_pnl_only_when_stored() -> None:
-    text = format_demo_trade_closed_text(
-        symbol="ETHUSDT",
-        strategy="",
-        timeframe="1h",
-        direction=TradeDirection.SHORT,
-        exit_reason="target_hit",
-        final_r="1.85R",
-        pnl_display=None,
+def _close(**overrides: object) -> str:
+    values: dict[str, object] = {
+        "symbol": "TAO-USDT",
+        "strategy": "Nested Continuation",
+        "timeframe": "15m",
+        "direction": TradeDirection.SHORT,
+        "exit_reason": "verified_blofin_demo_tp",
+        "entry_price": Decimal("178.72"),
+        "exit_price": Decimal("174.40"),
+        "stop_price": Decimal("181.41"),
+        "targets": [{"label": "tp", "price": "174.47"}],
+        "quantity": Decimal("180"),
+        "opened_at": datetime(2026, 11, 25, 2, 4, 26, tzinfo=UTC),
+        "closed_at": datetime(2026, 11, 25, 7, 37, 12, tzinfo=UTC),
+    }
+    values.update(overrides)
+    return format_demo_trade_closed_text(**values)  # type: ignore[arg-type]
+
+
+def test_close_text_shows_dollars_after_fees_r_planned_rr_and_times() -> None:
+    # The staging TAO trade: 180 TAO short, closed at the take-profit.
+    assert _close().splitlines() == [
+        "✅ Demo trade closed: TAO short (win)",
+        "Strategy: Nested Continuation, 15m",
+        "Exit: take-profit hit",
+        "Price: 178.72 → 174.4",
+        "Result: +$739.46 after fees (+1.53R)",
+        "Fees: $38.14 (estimated)",
+        "Planned reward:risk: 1.58R",
+        "Held: 03:04 → 08:37 CET (5h 32m)",
+    ]
+
+
+def test_close_text_uses_verified_fees_and_shows_a_loss() -> None:
+    text = _close(
+        exit_reason="verified_blofin_demo_sl",
+        exit_price=Decimal("181.41"),
+        fees=Decimal("-39.00"),
+        closed_at=datetime(2026, 11, 26, 9, 0, tzinfo=UTC),
     )
-    assert "Strategy: unlabeled" in text
-    assert "Exit: Target hit" in text
-    assert "Final R (gross, before fees): 1.85R" in text
-    assert "Net P&L" not in text
-    with_pnl = format_demo_trade_closed_text(
-        symbol="ETHUSDT",
-        strategy="s",
-        timeframe="1h",
-        direction=TradeDirection.SHORT,
-        exit_reason="",
-        final_r="1.85R",
-        pnl_display="+18.50 USDT",
-    )
-    assert "Exit: Closed" in with_pnl
-    assert with_pnl.endswith("Net P&L: +18.50 USDT")
+    lines = text.splitlines()
+    assert lines[0] == "❌ Demo trade closed: TAO short (loss)"
+    assert lines[2] == "Exit: stop-loss hit"
+    assert lines[4] == "Result: -$523.20 after fees (-1.08R)"
+    assert lines[5] == "Fees: $39.00"
+    assert lines[-1] == "Held: Wed 03:04 → Thu 10:00 CET (1d 6h)"
+
+
+def test_close_text_without_size_falls_back_to_r_and_words() -> None:
+    text = _close(quantity=None, exit_reason="target_hit", opened_at=None, closed_at=None)
+    assert "Result: +1.61R before fees" in text
+    assert "Exit: target hit" in text
+    assert "$" not in text
+    partial = _close(exit_reason="verified_blofin_demo_normal_sl_tp")
+    assert "Exit: stop hit after a partial take-profit" in partial
+
+
+def test_close_text_never_shows_ids_hashes_or_codes() -> None:
+    text = _close()
+    for dropped in ("verified_blofin", "a68ae8e5a20c", " v1", "Ref", "Symbol:", "gross"):
+        assert dropped not in text
+
+
+def test_strategy_family_name_hides_names_and_hashes() -> None:
+    assert strategy_family_name("nested_continuation") == "Nested Continuation"
+    assert strategy_family_name(StrategyId.SFP) == "Swing Failure Pattern"
+    assert strategy_family_name(StrategyId.D_LINE) == "D-line"
+    assert strategy_family_name("htf_trend_pullback") == "Htf Trend Pullback"
 
 
 def test_free_text_is_redacted() -> None:
@@ -203,7 +267,7 @@ def test_pages_send_after_commit_on_a_background_thread_once_per_trade(
     assert done.wait(timeout=5)
     assert all(name.startswith("telegram-alert") for _, name in sent)
     # Two different trades opening together each get a page (per-trade dedup key).
-    assert ["Symbol: BTCUSDT" in sent[0][0], "Symbol: ETHUSDT" in sent[1][0]] == [True, True]
-    assert "R:R (before fees): TP1 0.50R, TP2 2.00R, TP3 3.00R" in sent[0][0]
-    assert "Final R (gross, before fees): 2.00R" in sent[2][0]
+    assert ["opened: BTC long" in sent[0][0], "opened: ETH long" in sent[1][0]] == [True, True]
+    assert "Targets: TP1 102.5 (0.50R), TP2 110 (2.00R), TP3 115 (3.00R)" in sent[0][0]
+    assert "Result: +2.00R before fees" in sent[2][0]
     assert all(_TOKEN not in message and _CHAT not in message for message, _ in sent)
