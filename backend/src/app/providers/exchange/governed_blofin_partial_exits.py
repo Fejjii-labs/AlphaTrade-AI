@@ -61,11 +61,14 @@ class BloFinDemoReduceOnlyVenue:
         *,
         plan: TradePlanRevision,
         require_identity: Callable[[], None],
+        per_instrument: bool = False,
     ) -> None:
         self._client = client
         self._plan = plan
         self._require_identity = require_identity
         self._client_ids: dict[str, str] = {}
+        # Demo data mode: other coins' positions belong to other bot trades.
+        self._per_instrument = per_instrument
 
     @property
     def _instrument(self) -> str:
@@ -162,7 +165,10 @@ class BloFinDemoReduceOnlyVenue:
                 raise ValueError("Unreadable demo position.")
             if quantity == 0:
                 continue
-            if row.get("instId") != self._instrument or row.get("positionSide") != "net":
+            inst = row.get("instId")
+            if self._per_instrument and isinstance(inst, str) and inst != self._instrument:
+                continue
+            if inst != self._instrument or row.get("positionSide") != "net":
                 raise ValueError("Unrelated demo account inventory.")
             total += quantity
         return total

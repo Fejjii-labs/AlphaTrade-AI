@@ -1,5 +1,7 @@
 """Bounded closing-fill proof for the exclusively governed NET demo account.
 
+In demo data mode the proof is scoped to the entry's own coin (one entry per coin).
+
 No order mutations. Flat balances, acknowledgments and trigger acknowledgments
 are insufficient. Unexplained activity or incomplete pages remain operator holds.
 """
@@ -109,13 +111,33 @@ def reconcile_demo_exit(
     plan: TradePlanRevision,
     entry: DemoOrderEvidence,
     clock: Callable[[], datetime],
+    per_instrument: bool = False,
 ) -> VerifiedDemoExit | None:
+    """Prove this entry's close from venue facts, or return None while it is open.
+
+    ``per_instrument`` (demo data mode, one bot entry per coin): other coins'
+    positions, orders and protection belong to other trades and are skipped.
+    A row without a readable instId still counts, so it cannot be explained away.
+    """
+
+    def other_market(row: object) -> bool:
+        return (
+            per_instrument
+            and isinstance(row, dict)
+            and isinstance(row.get("instId"), str)
+            and row["instId"] != plan.execution_instrument
+        )
+
+    def ours(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [row for row in rows if not other_market(row)]
+
+    scope = {"instId": plan.execution_instrument} if per_instrument else {}
     expected_margin = demo_order_margin_mode(
         plan.risk_and_exits.margin_assumption_id, str(plan.margin_mode.value)
     )
     if not entry.fills or entry.status not in {"filled", "canceled", "cancelled", "expired"}:
         return None  # A live entry remainder can still add exposure.
-    positions = _account_rows(client.request("GET", "/api/v1/account/positions", signed=True))
+    positions = ours(_account_rows(client.request("GET", "/api/v1/account/positions", signed=True)))
     open_positions = []
     for row in positions:
         quantity = Decimal(str(row.get("positions")))
@@ -138,18 +160,24 @@ def reconcile_demo_exit(
             raise DemoPositionLineageError("Demo position exceeds or differs from owned fills.")
         return None  # Partial exits retain capacity until all closing facts arrive.
     for endpoint in ("orders-pending", "orders-tpsl-pending"):
-        if _account_rows(
-            client.request("GET", f"/api/v1/trade/{endpoint}", params={"limit": "100"}, signed=True)
+        if ours(
+            _account_rows(
+                client.request(
+                    "GET", f"/api/v1/trade/{endpoint}", params={"limit": "100"}, signed=True
+                )
+            )
         ):
             return None
     last_entry = max(fill.occurred_at for fill in entry.fills)
     begin = str(int(plan.valid_from.timestamp() * 1000))
-    orders = _account_rows(
-        client.request(
-            "GET",
-            "/api/v1/trade/orders-history",
-            params={"begin": begin, "limit": "100"},
-            signed=True,
+    orders = ours(
+        _account_rows(
+            client.request(
+                "GET",
+                "/api/v1/trade/orders-history",
+                params={**scope, "begin": begin, "limit": "100"},
+                signed=True,
+            )
         )
     )
     if len(orders) > 20:
@@ -358,7 +386,7 @@ def reconcile_demo_exit(
         protection_ids.append(str(row["tpslId"]))
     # Recheck after the history reads; the first account snapshot alone cannot
     # establish the final account state during a long provider round trip.
-    positions = _account_rows(client.request("GET", "/api/v1/account/positions", signed=True))
+    positions = ours(_account_rows(client.request("GET", "/api/v1/account/positions", signed=True)))
     for row in positions:
         amount = Decimal(str(row.get("positions")))
         if not amount.is_finite():
@@ -366,8 +394,12 @@ def reconcile_demo_exit(
         if amount != 0:
             return None
     for endpoint in ("orders-pending", "orders-tpsl-pending"):
-        if _account_rows(
-            client.request("GET", f"/api/v1/trade/{endpoint}", params={"limit": "100"}, signed=True)
+        if ours(
+            _account_rows(
+                client.request(
+                    "GET", f"/api/v1/trade/{endpoint}", params={"limit": "100"}, signed=True
+                )
+            )
         ):
             return None
     observed = clock()

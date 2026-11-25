@@ -614,7 +614,13 @@ class GovernedBloFinDemoProvider:
         uid = self._account.native_account_uid
         if uid != entry.native_account_uid:
             raise ValueError("Demo account identity changed before exit reconciliation.")
-        result = reconcile_demo_exit(self._client, plan=plan, entry=entry, clock=self._clock)
+        result = reconcile_demo_exit(
+            self._client,
+            plan=plan,
+            entry=entry,
+            clock=self._clock,
+            per_instrument=self.flat_per_instrument,
+        )
         self.verify_permissions()
         if self._account.native_account_uid != uid:
             raise ValueError("Demo account identity changed during exit reconciliation.")
@@ -758,7 +764,10 @@ class GovernedBloFinDemoProvider:
         if not self.partial_exits_enabled:
             raise ValueError("Demo partial exits are disabled.")
         return BloFinDemoReduceOnlyVenue(
-            self._client, plan=plan, require_identity=self._require_close_identity
+            self._client,
+            plan=plan,
+            require_identity=self._require_close_identity,
+            per_instrument=self.flat_per_instrument,
         )
 
     def _require_close_identity(self) -> None:
