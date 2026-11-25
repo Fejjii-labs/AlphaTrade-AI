@@ -44,6 +44,7 @@ from app.db.models import (
     UserStrategy,
     UserStrategyVersion,
 )
+from app.db.position_exit_events import PositionExitEventRow
 from app.repositories.journal_trades import (
     JournalTradeEvidenceRepository,
     JournalTradeObservationRepository,
@@ -65,6 +66,7 @@ from app.schemas.journal_trades import (
     JournalTradeDetail,
     JournalTradeEvidenceCreate,
     JournalTradeEvidenceRead,
+    JournalTradeExitEvent,
     JournalTradeObservationCreate,
     JournalTradeObservationRead,
     JournalTradeRead,
@@ -479,7 +481,41 @@ class JournalTradeService:
                 JournalTradeObservationRead.model_validate(o)
                 for o in self._observations.list_for_trade(row.id)
             ],
+            exit_events=self._exit_events(row),
         )
+
+    def _exit_events(self, row: JournalTrade) -> list[JournalTradeExitEvent]:
+        """Partial exits recorded for this trade's execution, oldest first."""
+        if row.execution_lifecycle_id is None:
+            return []
+        events = self._session.scalars(
+            select(PositionExitEventRow)
+            .where(
+                PositionExitEventRow.organization_id == row.organization_id,
+                PositionExitEventRow.execution_lifecycle_id == row.execution_lifecycle_id,
+            )
+            # A fill precedes the stop move it triggers at the same instant.
+            .order_by(
+                PositionExitEventRow.occurred_at,
+                PositionExitEventRow.event_kind,
+                PositionExitEventRow.event_key,
+            )
+            .limit(200)
+        )
+        return [
+            JournalTradeExitEvent(
+                kind=event.event_kind,
+                fill_kind=event.fill_kind,
+                leg=event.leg_order,  # Already 1-based: TP1, TP2, ...
+                quantity=event.quantity,
+                price=event.price,
+                stop_reason=event.stop_reason,
+                previous_stop=event.previous_stop,
+                new_stop=event.new_stop,
+                occurred_at=event.occurred_at,
+            )
+            for event in events
+        ]
 
     def update(
         self,
