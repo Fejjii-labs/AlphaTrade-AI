@@ -328,6 +328,16 @@ class Settings(BaseSettings):
     # a ladder is entered without attached TP/SL and every exit is a
     # bot-managed market reduceOnly close (services/partial_exits/demo.py).
     governed_demo_partial_exits_enabled: bool = False
+    # D-line on BloFin DEMO (from the Nov 2026 one-year history study, net of fees):
+    # a stop closer than this percent of the live entry price is refused, because
+    # fees then eat most of each 1R; and only these trigger timeframes trade
+    # (15m lost even with the stop rule; 30m and 1h were profitable).
+    governed_demo_dline_min_stop_distance_percent: Decimal = Field(
+        default=Decimal("1"), ge=0, le=50
+    )
+    governed_demo_dline_timeframes: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["30m", "1h"]
+    )
     # Retention (H5 + the approved data policy). Kept forever: strategies,
     # conversations, journal, trades/orders/fills/plans, paper_decision and
     # paper_trade_* setup events, knowledge, accounts and settings. Candidates
@@ -920,6 +930,14 @@ class Settings(BaseSettings):
     @classmethod
     def _split_attachment_types(cls, value: object) -> object:
         """Allow a comma-separated string for ``JOURNAL_ATTACHMENT_ALLOWED_TYPES``."""
+        if isinstance(value, str):
+            return [item.strip().lower() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("governed_demo_dline_timeframes", mode="before")
+    @classmethod
+    def _split_governed_demo_dline_timeframes(cls, value: object) -> object:
+        """Allow a comma-separated string for ``GOVERNED_DEMO_DLINE_TIMEFRAMES``."""
         if isinstance(value, str):
             return [item.strip().lower() for item in value.split(",") if item.strip()]
         return value

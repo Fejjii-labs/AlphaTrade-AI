@@ -991,6 +991,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if spec.parameters.entry_mode == "retest":
             # Demo entries are market orders; a resting retest limit is not supported yet.
             return "dline_retest_entry_unsupported_on_demo"
+        allowed = getattr(self._settings, "governed_demo_dline_timeframes", ["30m", "1h"])
+        if spec.trigger_timeframe.value not in {str(tf).strip() for tf in allowed}:
+            return "dline_timeframe_disabled_on_demo"
         return None
 
     def _eligibility_command(
@@ -1134,6 +1137,12 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             reward = (tp2 - entry) if is_long else (entry - tp2)
             if reward / risk < dline_spec.parameters.minimum_reward_risk:
                 return "dline_quote_reward_risk_below_minimum"
+            minimum_stop = Decimal(
+                str(getattr(self._settings, "governed_demo_dline_min_stop_distance_percent", 1))
+            )
+            if risk * 100 < entry * minimum_stop:
+                # Fees on a tight stop take most of each 1R (history study, Nov 2026).
+                return "dline_stop_too_close_for_fees"
         # A binding configured leverage is either written after this plan passes
         # (sized at the configured values; the write reads them back exactly) or,
         # without the write, must already read back exactly. Otherwise the plan
