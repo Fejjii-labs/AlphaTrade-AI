@@ -19,7 +19,7 @@ INVERSE is fail-closed. QUOTE and unknown units fail closed.
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from app.schemas.trade_plan import ContractType, QuantityUnit
 
@@ -37,6 +37,20 @@ class QuoteExposureError(ValueError):
         super().__init__(message)
         self.reason = reason
         self.details: dict[str, str] = {"reason": reason, **(extra or {})}
+
+
+STORED_MONEY_QUANTUM = Decimal("0.00000001")
+
+
+def stored_money(value: Decimal) -> Decimal:
+    """Round a ledger amount exactly as the 8-dp ``Numeric(20, 8)`` columns store it.
+
+    PostgreSQL rounds numeric half away from zero, which is ROUND_HALF_UP here.
+    Risk-ledger deltas pass through this so the per-symbol JSON maps and the
+    numeric columns hold the same value after commit.
+    """
+
+    return value.quantize(STORED_MONEY_QUANTUM, rounding=ROUND_HALF_UP)
 
 
 def _as_decimal(value: Decimal) -> Decimal:

@@ -9,7 +9,11 @@ from app.core.errors import ConflictError
 from app.db.models import AccountRiskAccountingState, RiskReservation
 from app.schemas.execution_protocol import RiskReservationReleaseReason, RiskReservationReleaseState
 from app.services.canonical_serialization import canonical_sha256
-from app.services.execution_exposure import QuoteExposureError, linear_quote_exposure
+from app.services.execution_exposure import (
+    QuoteExposureError,
+    linear_quote_exposure,
+    stored_money,
+)
 
 
 def fill_content_hash(
@@ -62,10 +66,11 @@ def fill_quote_exposure(
 
     Does not accept caller-supplied conversion values. CONTRACTS uses
     quantity * contract_multiplier * price. BASE uses quantity * price.
+    The result is rounded to the 8-dp ledger storage (``stored_money``).
     """
 
     try:
-        return linear_quote_exposure(
+        exposure = linear_quote_exposure(
             quantity=fill_quantity,
             price=fill_price,
             quantity_unit=str(reservation.quantity_unit),
@@ -79,6 +84,8 @@ def fill_quote_exposure(
             else exc.reason
         )
         raise ConflictError(str(exc), details={**exc.details, "reason": reason}) from exc
+    # Ledger columns are 8 dp; the symbol maps must carry the same delta.
+    return stored_money(exposure)
 
 
 def adjust_symbol_map(
@@ -88,7 +95,8 @@ def adjust_symbol_map(
     for key, value in dict(mapping or {}).items():
         updated[str(key)] = str(value)
     current = Decimal(updated.get(instrument, "0"))
-    next_value = current + delta
+    # Same 8-dp rounding as the numeric columns; also normalizes legacy entries.
+    next_value = stored_money(current + delta)
     if next_value < 0:
         next_value = Decimal("0")
     updated[instrument] = str(next_value)

@@ -75,7 +75,11 @@ from app.services.canonical_execution_payload import CanonicalExecutionPayloadSe
 from app.services.demo_account_history import has_demo_entry_history
 from app.services.demo_data_mode import demo_data_mode_enabled
 from app.services.execution_client_order_id import derive_entry_client_order_id
-from app.services.execution_exposure import QuoteExposureError, linear_quote_exposure
+from app.services.execution_exposure import (
+    QuoteExposureError,
+    linear_quote_exposure,
+    stored_money,
+)
 from app.services.execution_integrity import (
     ensure_db_transaction,
     is_idempotency_unique_violation,
@@ -898,7 +902,8 @@ def conservative_reservation(plan: TradePlanRevision) -> ReservationIntent:
     notional += plan.risk_and_exits.fee_allowance.value
     notional += plan.risk_and_exits.slippage_allowance.value
     return ReservationIntent(
-        pending_notional=notional,
+        # Rounded as the 8-dp ledger stores it, so columns and symbol maps agree.
+        pending_notional=stored_money(notional),
         daily_loss=(
             plan.risk_and_exits.risk_budget.value
             if plan.execution_venue == "BLOFIN_DEMO"
@@ -968,7 +973,7 @@ def charge_reservation(accounting: AccountRiskAccountingState, intent: Reservati
     accounting.reserved_trade_slots += intent.trade_slots
     reserved = dict(accounting.symbol_reserved or {})
     current = Decimal(str(reserved.get(intent.instrument, "0")))
-    reserved[intent.instrument] = str(current + intent.pending_notional)
+    reserved[intent.instrument] = str(stored_money(current + intent.pending_notional))
     accounting.symbol_reserved = reserved
     accounting.version = int(accounting.version) + 1
 
