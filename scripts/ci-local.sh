@@ -26,6 +26,8 @@ case "$#:${1:-}" in
         exit 2
       fi
     done
+    # Postgres fixtures fail instead of skipping when CI is set (postgres_template.py).
+    export CI=true
     # The evidence certifies HEAD, so the tested tree must be exactly HEAD.
     if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
       printf 'Commit or stash every change before the full gate; it certifies HEAD.\n' >&2

@@ -185,6 +185,12 @@ class PublicMarket:
                 return httpx.Response(451)
             assert int(request.url.params["limit"]) == 4
             now = self.clock()
+            # Like the venues, return no bar that opens after the requested end
+            # (Binance endTime, Bybit end), so a reader asking for an earlier
+            # window never gets bars from the fixture's own clock.
+            requested_end = request.url.params.get("endTime") or request.url.params.get("end")
+            if requested_end is not None:
+                now = min(now, datetime.fromtimestamp(int(requested_end) / 1000, tz=UTC))
             end = now.replace(second=0, microsecond=0) - timedelta(minutes=now.minute % 15)
             if self.stale:
                 end -= timedelta(minutes=15)
