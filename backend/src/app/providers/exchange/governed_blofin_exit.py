@@ -11,6 +11,10 @@ from decimal import Decimal
 from typing import Any
 
 from app.providers.exchange.blofin_client import BloFinClient
+from app.providers.exchange.demo_reconciliation import (
+    ATTACHED_TPSL_WINDOW,
+    order_attests_plan_exits,
+)
 from app.providers.exchange.governed_blofin import (
     DemoOrderEvidence,
     _account_rows,
@@ -155,6 +159,8 @@ def reconcile_demo_exit(
     order_ids: set[str] = set()
     trigger_categories: set[str] = set()
     exit_order_protection_ids: list[tuple[str, str]] = []
+    entry_created: datetime | None = None
+    entry_attests_exits = False
     for row in orders:
         order_id = str(row.get("orderId", ""))
         if not order_id or order_id in order_ids:
@@ -173,6 +179,10 @@ def reconcile_demo_exit(
                 != sum((f.quantity for f in entry.fills), Decimal("0"))
             ):
                 raise ValueError("Demo entry history identity mismatch.")
+            # Only the blank-client-id TPSL lineage needs these; absent, it is refused.
+            if row.get("createTime") not in (None, ""):
+                entry_created = _time(row.get("createTime"))
+            entry_attests_exits = order_attests_plan_exits(row, plan)
             continue
         filled = Decimal(str(row.get("filledSize")))
         if not filled.is_finite() or filled < 0:
@@ -195,7 +205,8 @@ def reconcile_demo_exit(
             raise ValueError("Unsupported demo exit category.")
         if len(order_ids) > 11:
             raise ValueError("Demo closing-order budget exhausted.")
-        tpsl_id = row.get("tpslId")
+        # BloFin names the triggering TPSL as algoId on the closing order.
+        tpsl_id = row.get("tpslId") or row.get("algoId")
         if tpsl_id not in (None, ""):
             if not isinstance(tpsl_id, str) or len(tpsl_id) > 128:
                 raise ValueError("Unreadable demo closing protection identity.")
@@ -206,7 +217,13 @@ def reconcile_demo_exit(
                 if category == "sl"
                 else plan.risk_and_exits.targets[0].price.value
             )
-            if Decimal(str(row.get(f"{category}TriggerPrice"))) != expected:
+            trigger = row.get(f"{category}TriggerPrice")
+            if trigger in (None, ""):
+                # BloFin omits trigger prices on the closing order; they are then
+                # proven on the effective TPSL row named by its algoId below.
+                if tpsl_id in (None, ""):
+                    raise ValueError("Demo trigger exit names no protection.")
+            elif Decimal(str(trigger)) != expected:
                 raise ValueError("Demo trigger exit differs from approved plan.")
             trigger_categories.add(category)
         rows = _account_rows(
@@ -273,21 +290,55 @@ def reconcile_demo_exit(
         raise ValueError("Duplicate demo exit fill identity.")
     protection_ids: list[str] = []
     if trigger_categories:
-        history = _account_rows(
-            client.request(
-                "GET",
-                "/api/v1/trade/orders-tpsl-history",
-                params={"clientOrderId": entry.client_order_id, "limit": "100"},
-                signed=True,
+        named = {tpsl_id for _, tpsl_id in exit_order_protection_ids}
+
+        def tpsl_history(params: dict[str, str]) -> list[dict[str, Any]]:
+            return _account_rows(
+                client.request(
+                    "GET",
+                    "/api/v1/trade/orders-tpsl-history",
+                    params={**params, "limit": "100"},
+                    signed=True,
+                )
             )
-        )
+
+        history = tpsl_history({"clientOrderId": entry.client_order_id})
         effective = [r for r in history if r.get("state") == "effective"]
+        via_named = False
+        if not effective and len(named) == 1:
+            # BloFin's attached TPSL has a blank clientOrderId, so the lookup by
+            # the entry's client id finds nothing; the closing order's algoId names it.
+            via_named = True
+            effective = [
+                r
+                for r in tpsl_history({"tpslId": next(iter(named))})
+                if r.get("state") == "effective" and r.get("tpslId") in named
+            ]
         if len(effective) != 1:
             raise ValueError("Ambiguous effective protection history.")
         row = effective[0]
+        client_lineage = row.get("clientOrderId") == entry.client_order_id
+        # Without a client id, lineage needs the entry's own attested TP/SL, a
+        # closing order naming this TPSL, and creation just after the entry.
+        attached_lineage = (
+            via_named
+            and entry_attests_exits
+            and entry_created is not None
+            and row.get("clientOrderId") in (None, "")
+            and str(row.get("reduceOnly")).lower() == "true"
+            and row.get("slTriggerPrice") not in (None, "")
+            and row.get("tpTriggerPrice") not in (None, "")
+            and Decimal(str(row["slTriggerPrice"])) == plan.risk_and_exits.stop.value
+            and Decimal(str(row["tpTriggerPrice"])) == plan.risk_and_exits.targets[0].price.value
+            and entry_created
+            <= _time(row.get("createTime"))
+            <= entry_created + ATTACHED_TPSL_WINDOW
+        )
+        trigger_type = row.get("triggerType")
         if (
             not row.get("tpslId")
-            or row.get("clientOrderId") != entry.client_order_id
+            or not (client_lineage or attached_lineage)
+            or (trigger_type not in (None, "") and trigger_type not in trigger_categories)
             or row.get("instId") != plan.execution_instrument
             or row.get("side") != opposite
             or row.get("positionSide") != "net"
