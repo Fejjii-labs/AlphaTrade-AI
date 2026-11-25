@@ -2743,3 +2743,77 @@ def test_import_start_at_before_the_open_keeps_the_position(session: Session) ->
     )
     assert report.closed == 1 and report.opens == 1  # type: ignore[attr-defined]
     assert len(_rows(session)) == 2
+
+
+_LONG_OPENED = datetime.fromtimestamp(1792195200, tz=UTC)
+
+
+def _bot_trade(session: Session, **overrides: object) -> JournalTrade:
+    """A governed BloFin demo trade journaled by the bot on the same account."""
+    values: dict[str, object] = {
+        "organization_id": ORG,
+        "user_id": USER,
+        "source": JournalTradeSource.PAPER_EXECUTION,
+        "status": JournalTradeStatus.CLOSED,
+        "symbol": "BTC-USDT",
+        "timeframe": "15m",
+        "direction": TradeDirection.LONG,
+        "entry_price": Decimal("100"),
+        "entry_time": _LONG_OPENED + timedelta(milliseconds=400),
+        "execution_lifecycle_id": uuid.uuid4(),
+        "result": TradeResult.OPEN,
+    }
+    values.update(overrides)
+    trade = JournalTrade(**values)
+    session.add(trade)
+    session.commit()
+    return trade
+
+
+def _mirrored(session: Session) -> list[JournalTrade]:
+    return [r for r in _rows(session) if r.source is JournalTradeSource.BLOFIN_DEMO_MANUAL]
+
+
+def test_bot_trade_position_is_not_mirrored_as_a_manual_trade(session: Session) -> None:
+    bot = _bot_trade(session)
+    report = _apply(session, _FIXTURE["long"])
+    assert report.created == 0  # type: ignore[attr-defined]
+    assert _mirrored(session) == []
+    assert session.get(JournalTrade, bot.id).status is JournalTradeStatus.CLOSED
+
+
+def test_bot_duplicate_mirrored_earlier_is_retired_not_deleted(session: Session) -> None:
+    _apply(session, _FIXTURE["long"])
+    (duplicate,) = _mirrored(session)
+    assert duplicate.net_pnl is not None
+    _bot_trade(session)
+    _apply(session, _FIXTURE["long"])
+    (retired,) = _mirrored(session)
+    assert retired.id == duplicate.id
+    assert retired.status is JournalTradeStatus.CANCELLED
+    assert retired.exit_reason == "bot_trade"
+    assert retired.net_pnl is None and retired.gross_pnl is None and retired.fees is None
+    assert "pnl-verified" not in (retired.tags or [])
+    # Idempotent: a later cycle leaves it as it is.
+    _apply(session, _FIXTURE["long"])
+    assert [r.exit_reason for r in _mirrored(session)] == ["bot_trade"]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"entry_time": _LONG_OPENED + timedelta(minutes=10)},
+        {"entry_price": Decimal("101")},
+        {"direction": TradeDirection.SHORT},
+        {"symbol": "ETH-USDT"},
+        {"execution_lifecycle_id": None},
+        {"source": JournalTradeSource.MANUAL},
+    ],
+)
+def test_a_manual_trade_is_still_mirrored_unless_it_matches_a_bot_entry(
+    session: Session, overrides: dict[str, object]
+) -> None:
+    _bot_trade(session, **overrides)
+    report = _apply(session, _FIXTURE["long"])
+    assert report.created == 1 or report.reconciled == 1  # type: ignore[attr-defined]
+    assert [r.status for r in _rows(session) if r.external_ref] == [JournalTradeStatus.CLOSED]
