@@ -383,8 +383,8 @@ def test_external_check_reports_missing_and_stale_heartbeats_once(
     assert _TOKEN not in blob
     assert _CHAT not in blob
     assert "pnl" not in blob.lower()
-    assert "worker_heartbeat_missing" in blob
-    assert "worker_heartbeat_stale" in blob
+    assert "The bot is not responding" in blob
+    assert "The bot is responding slowly" in blob
 
 
 def test_safety_alert_text_drops_secrets_and_pnl_amounts() -> None:
@@ -399,8 +399,9 @@ def test_safety_alert_text_drops_secrets_and_pnl_amounts() -> None:
             "dedup_key": "backfill_loss:org:command",
         },
     )
-    assert "net_loss: true" in text
-    assert "kill_switch" in text
+    assert text.startswith("⚠️ A late trade close recorded a loss")
+    # Plain words only: no internal codes or dedup keys.
+    assert "kill_switch" not in text and "backfill_loss:" not in text
     assert "-12.50" not in text
     assert "net_pnl" not in text
     assert _TOKEN not in text
@@ -438,7 +439,7 @@ def test_safety_alerts_use_the_existing_telegram_path_and_dedupe(
     assert chat == _CHAT
     assert _TOKEN not in message
     assert _CHAT not in message
-    assert "Code: backfill_loss" in message
+    assert "A late trade close recorded a loss" in message
 
     session = SimpleNamespace(info={})
     queued = ExitMonitorAlert(
@@ -455,7 +456,7 @@ def test_safety_alerts_use_the_existing_telegram_path_and_dedupe(
     assert calls == calls[:1]
     deliver_queued_safety_alerts(session)  # type: ignore[arg-type]
     assert len(calls) == 2
-    assert "stale_live_loss" in calls[1][0]
+    assert "A stale trade recorded a loss" in calls[1][0]
 
 
 def test_exit_monitor_record_queues_telegram_only_for_a_new_alert(

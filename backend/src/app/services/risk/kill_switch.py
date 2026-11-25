@@ -245,6 +245,17 @@ class KillSwitchService:
             at=now,
             version=0,
         )
+        try:
+            from app.services.safety_alerts import queue_kill_switch_deactivation
+
+            queue_kill_switch_deactivation(
+                self._session,
+                self._settings,
+                organization_id=str(organization_id),
+                version=int(row.version),
+            )
+        except Exception:
+            logger.error("kill_switch_alert_failed", source="deactivation")
         return self._to_status(row)
 
     def evaluate(self, *, organization_id: uuid.UUID) -> KillSwitchEvaluation:

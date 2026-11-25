@@ -135,6 +135,7 @@ TELEGRAM_SAFETY_DEFAULT_CODES: frozenset[str] = frozenset(
         "blofin_demo_mirror_page_cap",
         "stop_hit",
         "tp_hit",
+        "kill_switch_deactivated",
     }
 )
 TELEGRAM_SAFETY_LOGS_ONLY_CODES: frozenset[str] = frozenset(
@@ -189,22 +190,89 @@ def reset_safety_alert_dedup() -> None:
     reset_kill_switch_retry_window()
 
 
+_HEADLINES: dict[str, str] = {
+    "kill_switch_activated": "⛔ Kill switch on: trading paused",
+    "kill_switch_deactivated": "✅ Kill switch off: trading resumed",
+    "backfill_loss": "⚠️ A late trade close recorded a loss",
+    "stale_live_loss": "⚠️ A stale trade recorded a loss",
+    "account_equity_stop_sweep_stale": "⚠️ Equity stop check is late",
+    "account_equity_stop_sweep_missing": "⚠️ Equity stop check is not running",
+    "account_equity_stop_sweep_failed": "⚠️ Equity stop check failed",
+    "account_equity_stop_orphan_breaker_rows": "⚠️ Equity stop records need a look",
+    "worker_heartbeat_missing": "⚠️ The bot is not responding",
+    "worker_heartbeat_stale": "⚠️ The bot is responding slowly",
+    "exit_monitor_heartbeat_missing": "⚠️ The exit monitor is not responding",
+    "exit_monitor_heartbeat_stale": "⚠️ The exit monitor is responding slowly",
+    "worker_config_degraded": "⚠️ Bot settings problem",
+    "market_data_banned": "⚠️ Market data is blocked",
+    "worker_memory_watchdog_repeat": "⚠️ The bot restarted to free memory",
+    "worker_unclean_exit": "⚠️ The bot restarted unexpectedly",
+    "blofin_demo_mirror_page_cap": "⚠️ BloFin history read limit reached",
+    "stop_hit": "🛑 Stop hit",
+    "tp_hit": "🎯 Take-profit hit",
+}
+# Why a kill switch went on, in plain words. ``source`` is a fixed token.
+_KILL_SWITCH_WHY: dict[str, str] = {
+    "manual": "It was switched on by hand.",
+    "drawdown": "The drawdown limit was reached.",
+    "account_equity_stop": "The account equity stop was reached.",
+    "breaker": "A safety breaker tripped.",
+    "exit_monitor": "The exit monitor found a problem with an open trade.",
+    "demo_protection": (
+        "The bot could not confirm the stop-loss and take-profit on an open demo trade."
+    ),
+    "system": "A safety check switched it on.",
+}
+# Plain labels for the few fields worth showing. Identifiers, dedup keys,
+# component names and internal codes are never shown.
+_FIELD_LABELS: dict[str, str] = {
+    "consecutive_trips": "Times in a row",
+    "cycles": "Cycles",
+    "elapsed_seconds": "Seconds since last sign of life",
+    "heartbeat_age_seconds": "Seconds since last sign of life",
+    "threshold_seconds": "Limit (seconds)",
+    "grace_seconds": "Grace period (seconds)",
+    "skew_seconds": "Clock difference (seconds)",
+    "until": "Until",
+    "health_state": "Status",
+    "status": "Status",
+    "reason": "Reason",
+    "error": "Error",
+    "exit_origin": "Exit",
+}
+
+
+def _plain(value: str) -> str:
+    return redact_text(value).replace("_", " ").strip()[:160]
+
+
 def safety_alert_message(
     *,
     code: str,
     message: str,
     fields: Mapping[str, str],
 ) -> str:
-    """Text safe to hand to Telegram. Unknown fields and amounts are dropped."""
+    """Short plain text for Telegram: a headline, what happened, what it means.
 
-    lines = [f"Code: {code}", redact_text(message)[:500]]
-    for key in sorted(fields):
-        if key not in _SAFE_FIELDS:
-            continue
-        value = fields[key]
-        if not isinstance(value, str):
-            continue
-        lines.append(f"{key}: {redact_text(value)[:160]}")
+    No ids, dedup keys, component names or codes. Unknown fields and amounts
+    are dropped, and secrets are redacted.
+    """
+
+    headline = _HEADLINES.get(code) or "⚠️ " + code.replace("_", " ").capitalize()
+    lines = [headline]
+    if code == "kill_switch_activated":
+        why = _KILL_SWITCH_WHY.get(str(fields.get("source", "")))
+        if why:
+            lines.append(why)
+    body = redact_text(message).strip()[:500]
+    if body:
+        lines.append(body)
+    if fields.get("net_loss") == "true" and code not in {"backfill_loss", "stale_live_loss"}:
+        lines.append("Result: loss")
+    for key, label in _FIELD_LABELS.items():
+        value = fields.get(key)
+        if isinstance(value, str) and value.strip():
+            lines.append(f"{label}: {_plain(value)}")
     return _AMOUNT.sub("[redacted]", "\n".join(lines))
 
 
@@ -279,7 +347,8 @@ def deliver_safety_alert(
         severity=alert.severity,
         message=text,
         dedup_key=key[:200],
-        use_message_verbatim=alert.telegram_verbatim,
+        # The text above is already the whole message.
+        use_message_verbatim=True,
     )
     result = TelegramAlertDeliveryProvider(settings).deliver(payload, bypass_enable_check=True)
     if not result.success:
@@ -322,7 +391,7 @@ def build_kill_switch_alert(
     elif token == "fail_closed":
         message = "Kill switch state could not be read. New entries are refused."
     else:
-        message = "Kill switch activated. New entries stay blocked until a human deactivates it."
+        message = "New trades are blocked until you turn it off."
     org = organization_id.strip()
     if not org:
         org = "system"
@@ -370,6 +439,28 @@ def notify_kill_switch_activation(
             _remember(key, moment)
         return False
     return deliver_safety_alert(settings, alert, now=moment)
+
+
+def queue_kill_switch_deactivation(
+    session: Session,
+    settings: Settings,
+    *,
+    organization_id: str,
+    version: int,
+) -> None:
+    """Queue the "trading resumed" page for one committed deactivation."""
+
+    org = organization_id.strip() or "system"
+    queue_safety_alert(
+        session,
+        settings,
+        ExitMonitorAlert(
+            code="kill_switch_deactivated",
+            severity="info",
+            message="New trades are allowed again.",
+            fields={"dedup_key": f"kill_switch_deactivated:{org}:{version}"[:200]},
+        ),
+    )
 
 
 def queue_kill_switch_activation(

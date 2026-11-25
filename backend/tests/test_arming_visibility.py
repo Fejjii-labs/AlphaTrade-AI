@@ -359,7 +359,7 @@ def test_exit_monitor_thread_is_stale_while_the_watcher_heartbeat_is_fresh(
     assert report.alert_raised is False
     assert report.exit_monitor_status == "stale"
     assert report.exit_monitor_alert_raised is True
-    assert "exit_monitor_heartbeat_stale" in sent[0]
+    assert "The exit monitor is responding slowly" in sent[0]
     assert _TOKEN not in sent[0]
     missing_rows = {
         PAPER_WORKER_COMPONENT: fresh,
@@ -410,7 +410,7 @@ def test_exit_monitor_heartbeat_is_not_the_watcher_row(monkeypatch: pytest.Monke
         )
         is True
     )
-    assert "exit_monitor_heartbeat_missing" in sent[0]
+    assert "The exit monitor is not responding" in sent[0]
     assert _TOKEN not in sent[0]
 
 
@@ -453,7 +453,10 @@ def test_kill_switch_page_drops_secrets_and_amounts() -> None:
             "refusal": "kill_switch",
         },
     )
-    assert "source: manual" in text
+    assert text.startswith("⛔ Kill switch on: trading paused")
+    assert "It was switched on by hand." in text
+    # Plain words only: no ids, dedup keys or internal codes.
+    assert str(_ORG) not in text and "dedup" not in text and "refusal" not in text
     assert "-42.00" not in text
     assert _TOKEN not in text
     assert "net_pnl" not in text
@@ -487,8 +490,8 @@ def test_global_and_fail_closed_pages_are_deduped(monkeypatch: pytest.MonkeyPatc
     assert evaluation.reason_code == "kill_switch_unavailable"
     assert evaluation.blocked is True
     blob = "\n".join(sent)
-    assert "global_setting" in blob
-    assert "fail_closed" in blob
+    assert "Global kill switch is active" in blob
+    assert "Kill switch state could not be read" in blob
     assert "secret" not in blob
     assert "password" not in blob
     assert _TOKEN not in blob
@@ -555,7 +558,7 @@ def test_manual_and_drawdown_activations_page_after_commit(
         assert sent == []
         session.commit()
     assert len(sent) == 1
-    assert "source: manual" in sent[0]
+    assert "It was switched on by hand." in sent[0]
     assert "-99.50" not in sent[0]
     assert _TOKEN not in sent[0]
     with factory() as session:
@@ -585,7 +588,10 @@ def test_manual_and_drawdown_activations_page_after_commit(
             )
             session.rollback()
         assert any(entry["event"] == "safety_alert_discarded_with_rollback" for entry in logs)
-    assert len(sent) == 1
+    # The committed deactivation pages "trading resumed"; the rolled-back
+    # re-activation pages nothing.
+    assert len(sent) == 2
+    assert sent[1] == "✅ Kill switch off: trading resumed\nNew trades are allowed again."
     assert all("drawdown" not in message for message in sent)
 
 
@@ -645,7 +651,7 @@ def test_attached_exit_monitor_stays_expected_when_the_autonomous_loop_refuses(
     assert report.arming_refusal.reason == CYCLE_INTERVAL_EXCEEDS_TIMEFRAME
     assert report.exit_monitor_status == "stale"
     assert report.exit_monitor_alert_raised is True
-    assert any("exit_monitor_heartbeat_stale" in message for message in sent)
+    assert any("The exit monitor is responding slowly" in message for message in sent)
     blob = "\n".join(sent)
     assert _TOKEN not in blob
     assert _CHAT not in blob
@@ -758,7 +764,7 @@ def test_global_and_fail_closed_pages_leave_the_open_transaction(
             assert sent == []
             assert session.in_transaction() is True
         assert session.in_transaction() is False
-        assert any("global_setting" in message for message in sent)
+        assert any("Global kill switch is active" in message for message in sent)
     reset_safety_alert_dedup()
     sent.clear()
     with factory() as session:
@@ -773,7 +779,7 @@ def test_global_and_fail_closed_pages_leave_the_open_transaction(
         except RuntimeError as exc:
             assert str(exc) == "abort the transaction"
         blob = "\n".join(sent)
-        assert "fail_closed" in blob
+        assert "Kill switch state could not be read" in blob
         assert "secret" not in blob
         assert "password" not in blob
         assert _TOKEN not in blob
@@ -1092,7 +1098,7 @@ def test_failed_kill_switch_page_retries_once_per_version(
     report = paper_worker_heartbeat(settings, tasks)
     assert report.kill_switch.active is True
     assert report.kill_switch.source == "drawdown"
-    page = "Kill switch activated. New entries stay blocked until a human deactivates it."
+    page = "New trades are blocked until you turn it off."
     assert page not in "\n".join(sent)
     asyncio.run(tasks())
     assert sum(page in message for message in sent) == 1
@@ -1133,7 +1139,7 @@ def test_crash_before_kill_switch_send_retries_on_boot(
         session.commit()
     sent = _capture_telegram(monkeypatch)
     assert retry_unsent_kill_switch_alert(settings) is True
-    page = "Kill switch activated. New entries stay blocked until a human deactivates it."
+    page = "New trades are blocked until you turn it off."
     assert sent and page in sent[0]
     assert "operator note" not in sent[0]
     reset_safety_alert_dedup()
@@ -1344,7 +1350,7 @@ def test_legacy_kill_switch_slot_is_still_retried(
         session.delete(current)
     sent = _capture_telegram(monkeypatch)
     assert retry_unsent_kill_switch_alert(settings) is True
-    page = "Kill switch activated. New entries stay blocked until a human deactivates it."
+    page = "New trades are blocked until you turn it off."
     assert sent and page in sent[0]
     with factory() as session:
         legacy = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
@@ -1492,7 +1498,7 @@ def test_truncated_kill_switch_slot_is_still_retried(
     assert len(paper_kill_switch_truncated_component(_ORG)) == 32
     sent = _capture_telegram(monkeypatch)
     assert retry_unsent_kill_switch_alert(settings) is True
-    page = "Kill switch activated. New entries stay blocked until a human deactivates it."
+    page = "New trades are blocked until you turn it off."
     assert sent and page in sent[0]
     with factory() as session:
         legacy = session.get(

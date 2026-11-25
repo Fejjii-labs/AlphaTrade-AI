@@ -114,7 +114,8 @@ def test_restart_alert_codes_use_the_default_telegram_safety_path() -> None:
         message="tripped",
         fields={"consecutive_trips": "2", "grace_seconds": "600", "component": "paper_worker"},
     )
-    assert "consecutive_trips: 2" in text and "grace_seconds: 600" in text
+    assert "Times in a row: 2" in text and "Grace period (seconds): 600" in text
+    assert "paper_worker" not in text  # component names are not shown
 
 
 def test_alert_delivery_failure_never_raises(
