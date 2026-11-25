@@ -150,8 +150,9 @@ def test_confirmed_paper_event_content_and_duplicate_episode(nested_world):
         "Nested stage",
         "Time",
     ]
-    assert text.splitlines()[9].startswith("Ref: ") and len(text.splitlines()[9]) == 13
-    assert text.splitlines()[10] == "PAPER alert. Not an order."
+    # No ID line, not even a shortened one.
+    assert text.splitlines()[9] == "PAPER alert. Not an order."
+    assert "Ref:" not in text
     assert w.summary.entry is not None and w.summary.stop is not None
     assert w.summary.target is not None
     assert format(w.summary.entry, "f") in text

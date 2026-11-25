@@ -31,10 +31,8 @@ def _assert_layout(text: str, *, stage_label: str | None) -> None:
     assert labels[: len(expected)] == expected
     lines = text.splitlines()
     time_index = next(i for i, line in enumerate(lines) if line.startswith("Time: "))
-    assert lines[time_index + 1] == "PAPER alert. Not an order." or (
-        lines[time_index + 1].startswith("Ref: ")
-        and lines[time_index + 2] == "PAPER alert. Not an order."
-    )
+    assert lines[time_index + 1] == "PAPER alert. Not an order."
+    assert "Ref:" not in text
     for dropped in DROPPED:
         assert dropped not in text
 
@@ -185,7 +183,7 @@ def test_time_uses_berlin_zone_abbreviation_across_dst(instant, expected) -> Non
         reference="abcdef12-3456",
     )
     assert expected in text
-    assert "Ref: abcdef12" in text
+    assert "Ref:" not in text and "abcdef12" not in text
     assert "UTC" not in text
 
 

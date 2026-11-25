@@ -580,11 +580,13 @@ def test_close_page_text_uses_the_plan_stop_not_the_editable_journal_stop(monkey
         trade = session.scalar(select(JournalTrade))
         strategy = _strategy_page_name(session, trade)
     assert len(pages) == 1
-    assert pages[0].startswith("AlphaTrade DEMO trade closed.")
-    assert f"Strategy: {strategy}" in pages[0]
-    assert f"Symbol: {trade.symbol}" in pages[0]
-    final_r = pages[0].split("Final R (gross, before fees): ", 1)[1].splitlines()[0]
-    assert final_r.endswith("R") and final_r != "unknown"
+    assert "Demo trade closed: " in pages[0].splitlines()[0]
+    assert f"Strategy: {strategy}, {trade.timeframe}" in pages[0]
+    assert strategy and "v1" not in strategy
+    # Dollars after fees and R against the plan stop (the edited zero-risk stop
+    # would make R unknown).
+    result = next(line for line in pages[0].splitlines() if line.startswith("Result: "))
+    assert "$" in result and "after fees" in result and result.endswith("R)")
 
 
 def test_editable_journal_status_never_releases_the_demo_slot(monkeypatch):

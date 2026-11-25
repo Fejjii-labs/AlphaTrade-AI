@@ -115,6 +115,7 @@ from app.services.demo_trade_telegram import (
     demo_trade_pages_enabled,
     queue_demo_trade_closed_telegram,
     queue_demo_trade_opened_telegram,
+    strategy_family_name,
 )
 from app.services.execution_claim import ExecutionClaimHooks
 from app.services.execution_service import ExecutionService
@@ -2588,17 +2589,22 @@ def _open_page_not_due(session: Session, settings: Settings, command: ExecutionC
 
 
 def _strategy_name(session: Session, plan: PlanRevision, organization_id: UUID) -> str:
+    """Strategy family for the Telegram page (e.g. "Nested Continuation").
+
+    The stored strategy name carries the symbol, a spec hash and a version; the
+    page shows only the family.
+    """
     if plan.strategy_version_id is None:
         return ""
-    row = session.execute(
-        select(UserStrategy.name, UserStrategyVersion.version)
+    setup_type = session.scalar(
+        select(UserStrategy.setup_type)
         .join(UserStrategyVersion, UserStrategyVersion.strategy_id == UserStrategy.id)
         .where(
             UserStrategyVersion.id == plan.strategy_version_id,
             UserStrategy.organization_id == organization_id,
         )
-    ).first()
-    return "" if row is None else f"{row.name} v{row.version}"
+    )
+    return "" if setup_type is None else strategy_family_name(setup_type)
 
 
 def _queue_trade_telegram(
@@ -2627,6 +2633,9 @@ def _queue_trade_telegram(
                 return
             strategy = _strategy_name(session, plan, command.organization_id)
             stop = plan.risk_and_exits.stop.value
+            targets = canonical_planned_targets(plan)
+            # Coins held: contracts times the contract size, from the immutable plan.
+            quantity = plan.quantity.value * plan.instrument_rules.contract_multiplier
             if opened:
                 queue_demo_trade_opened_telegram(
                     session,
@@ -2634,11 +2643,18 @@ def _queue_trade_telegram(
                     trade,
                     strategy=strategy,
                     stop_price=stop,
-                    targets=canonical_planned_targets(plan),
+                    targets=targets,
+                    quantity=quantity,
                 )
             else:
                 queue_demo_trade_closed_telegram(
-                    session, settings, trade, strategy=strategy, stop_price=stop
+                    session,
+                    settings,
+                    trade,
+                    strategy=strategy,
+                    stop_price=stop,
+                    targets=targets,
+                    quantity=quantity,
                 )
     except SQLAlchemyError:
         raise

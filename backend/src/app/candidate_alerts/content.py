@@ -184,12 +184,10 @@ def render_strategy_alert_text(
     """The one Telegram alert layout shared by every strategy (current and future).
 
     Order: symbol, strategy, direction, entry, stop, target, timeframe, stage
-    (when present), HH:MM Europe/Berlin time labelled CET/CEST, a short
-    audit reference ``Ref:`` (first 8 chars of the id: the SFP setup_id for SFP
-    alerts, the candidate_id for Nested and every other strategy), PAPER marker,
-    then the Source line for borrowed-parameter scans. Full internal IDs,
-    strategy version, risk state and coverage stay in the stored payload/audit
-    data and are never rendered.
+    (when present), HH:MM Europe/Berlin time labelled CET/CEST, PAPER marker,
+    then the Source line for borrowed-parameter scans. ``reference`` is accepted
+    for callers but never rendered: IDs (even shortened), strategy version, risk
+    state and coverage stay in the stored payload/audit data.
     """
     stage_lines: tuple[str, ...] = ()
     if nested_stage:
@@ -218,7 +216,6 @@ def render_strategy_alert_text(
             f"Timeframe: {timeframe}",
             *stage_lines,
             f"Time: {_local_time_text(at)}",
-            *((f"Ref: {str(reference)[:8]}",) if reference is not None else ()),
             PAPER_MARKER,
             *projected,
         )
