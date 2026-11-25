@@ -116,16 +116,21 @@ def enforce_demo_equity_stop(
 
 
 def demo_stop_sized_contracts(
-    snapshot: DemoVenueSnapshot, *, stop: Decimal, risk: Decimal
+    snapshot: DemoVenueSnapshot, *, stop: Decimal, risk: Decimal, allowance: Decimal
 ) -> Decimal:
-    """Largest lot-aligned quantity whose worst entry fits the stop budget."""
+    """Largest lot-aligned quantity whose worst entry fits the stop budget.
+
+    Each level is taken at its price moved ``allowance`` (a rate) away from the
+    stop, the worst fill the plan's widened entry zone authorizes.
+    """
     depth = Decimal("0")
     quantity = Decimal("0")
     for price, contracts in snapshot.book.levels:
         if abs(price - snapshot.price) / snapshot.price * 10000 > MAXIMUM_QUOTE_BPS:
             break
         depth += contracts
-        affordable = min(depth, snapshot.maximum, risk / (abs(price - stop) * snapshot.multiplier))
+        distance = abs(price - stop) + price * allowance
+        affordable = min(depth, snapshot.maximum, risk / (distance * snapshot.multiplier))
         rounded = (affordable / snapshot.lot).to_integral_value(rounding=ROUND_FLOOR) * snapshot.lot
         if rounded <= quantity:
             break

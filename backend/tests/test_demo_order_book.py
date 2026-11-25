@@ -355,7 +355,9 @@ def test_governed_executable_price_below_one_r_returns_refusal(monkeypatch, mode
 
     world = make_world()
     terms = plan_terms(world.candidate)
-    # This short is exactly 1R at 100000; a lower executable bid worsens it.
+    # This short is exactly 1R at the worst authorized entry: 100000 less the 10 bps
+    # zone allowance (99900, stop 101000, target 98800). A bid low enough to move
+    # that tick-rounded edge (99999 -> 99899.1) worsens it.
     risk = terms.risk_and_exits.model_copy(
         update={
             "stop": terms.risk_and_exits.stop.model_copy(
@@ -367,7 +369,7 @@ def test_governed_executable_price_below_one_r_returns_refusal(monkeypatch, mode
                         "quantity_fraction": Decimal("1"),
                         "price": terms.risk_and_exits.targets[0].price.model_copy(
                             update={
-                                "value": Decimal("110050") if mode == "size" else Decimal("99000")
+                                "value": Decimal("110050") if mode == "size" else Decimal("98800")
                             }
                         ),
                     }
@@ -414,13 +416,15 @@ def test_governed_executable_price_below_one_r_returns_refusal(monkeypatch, mode
     equity = min(Decimal("10000"), loop._snapshot.equity, loop._snapshot.available)
     assert equity * Decimal("0.01") <= loss <= equity * Decimal("0.05")
     assert (control_plan.valid_until - loop._snapshot.observed_at).total_seconds() > 3
-    venue = Venue(Decimal("99999.9") if mode in {"top", "size"} else Decimal("100000"))
+    venue = Venue(
+        Decimal("99999") if mode == "top" else Decimal("99999.9" if mode == "size" else "100000")
+    )
 
     def handle(request):
         response = venue.handle(request)
         if mode == "depth" and request.url.path.endswith("/books"):
             content = response.json()
-            content["data"][0]["bids"] = [["100000", "1"], ["99999.9", "1000000"]]
+            content["data"][0]["bids"] = [["100000", "1"], ["99999", "1000000"]]
             return httpx.Response(200, json=content)
         if mode == "size" and request.url.path.endswith("/books"):
             content = response.json()

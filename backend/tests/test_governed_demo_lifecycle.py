@@ -41,15 +41,18 @@ from app.services.demo_account_history import has_demo_entry_history
 from app.services.execution_claim import PaperPlanClaimService
 from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
 from app.signal_fusion.memory import FrozenClock
+from tests.support.governed_demo_target import wide_first_slice_target
 from tests.support.phase5_market import EVALUATED_AT
 from tests.support.postgres_persistence import phase7_plan_session_factory, requires_postgres
 from tests.test_automated_paper_loop import _live_source, _monitor, _runtime_for, _seed
 from tests.test_governed_blofin_demo import (
     _TS,
+    ADVERSE_MOVES,
     Venue,
     _strategy_page_name,
     demo_settings,
     seed_band_ledger_headroom,
+    widened_zone,
 )
 from tests.test_watcher_paper_runtime import ORG, USER, _seed_approved_compiled
 
@@ -177,7 +180,9 @@ def open_world(
     exit_fee_currency="USDT",
     child_tpsl_id=None,
     risk_v2=False,
+    behavior="success",
 ):
+    wide_first_slice_target(monkeypatch)
     factory = phase7_plan_session_factory()
     with factory() as session:
         _seed(session)
@@ -205,7 +210,7 @@ def open_world(
     price = build_slice_trades(build_pattern_15m_bars())[-1].price
     venue = ClosingVenue(
         price,
-        "partial_cancel" if partial else "success",
+        "partial_cancel" if partial else behavior,
         category=category,
         gross=gross,
         entry_fee_currency=entry_fee_currency,
@@ -823,14 +828,10 @@ def test_demo_utc_roll_resets_realized_loss_and_keeps_open_reservation(
         assert rolled.reserved_daily_loss == reserved
 
 
-def test_v2_demo_worker_sizes_c_checks_budget_and_arms_equity_stop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.db.models import TradePlanRevision
+def _v2_wider_stop_grade_c(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 1% stop and 2% target (the v2 fee check needs room), graded C."""
     from app.schemas.trade_plan import TradePlanRevisionCreate
     from app.services import automated_paper_loop, governed_blofin_demo
-    from app.services.demo_risk_v2 import demo_v2_claim_refusal
-    from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
     from app.services.risk_policy.grader import GradeDecision
     from app.services.risk_policy.profile import Grade
 
@@ -870,6 +871,41 @@ def test_v2_demo_worker_sizes_c_checks_budget_and_arms_equity_stop(
         "_grade_for_plan",
         lambda *_: (GradeDecision(Grade.C, "deterministic-grade/v1", None, None, None), None),
     )
+
+
+@pytest.mark.parametrize("behavior", ["tick_moved", "moved_9bps"])
+def test_v2_adverse_move_inside_the_zone_is_sent_within_the_budget(
+    monkeypatch: pytest.MonkeyPatch, behavior: str
+) -> None:
+    """The v2 send re-check accepts an adverse fill inside the widened zone."""
+    from app.db.models import TradePlanRevision
+    from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
+
+    _v2_wider_stop_grade_c(monkeypatch)
+    # open_world asserts the one POST: refused before it, the world never opens.
+    world = open_world(monkeypatch, risk_v2=True, behavior=behavior)  # type: ignore[no-untyped-call]
+    with world.factory() as session:
+        command = session.get(ExecutionCommand, world.command_id)
+        plan = trade_plan_revision_to_schema(session.get(TradePlanRevision, command.revision_id))
+    price = world.venue.price
+    zone, exits = plan.entry_zone, plan.risk_and_exits
+    assert (zone.lower, zone.upper) == widened_zone(price)
+    base = plan.quantity.value * plan.instrument_rules.contract_multiplier
+    # Budget at the widened edge, within the 1% grade cap; the sent bid is inside it.
+    assert exits.risk_budget.value == base * (exits.stop.value - zone.lower) <= Decimal("100")
+    sent = ADVERSE_MOVES[behavior](price)
+    assert zone.lower <= sent < price
+    assert base * (exits.stop.value - sent) <= exits.risk_budget.value
+
+
+def test_v2_demo_worker_sizes_c_checks_budget_and_arms_equity_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db.models import TradePlanRevision
+    from app.services.demo_risk_v2 import demo_v2_claim_refusal
+    from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
+
+    _v2_wider_stop_grade_c(monkeypatch)
     world = open_world(monkeypatch, risk_v2=True)  # type: ignore[no-untyped-call]
     with world.factory() as session:
         account = session.scalar(select(AccountRiskAccountingState))
