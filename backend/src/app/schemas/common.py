@@ -378,6 +378,7 @@ class AuditEventType(StrEnum):
     RISK_SETTINGS_UPDATED = "risk_settings_updated"
     AUTONOMOUS_TRADING_SETTINGS_UPDATED = "autonomous_trading_settings_updated"
     NOTIFICATION_PREFERENCES_UPDATED = "notification_preferences_updated"
+    DEMO_DAILY_SUMMARY_QUEUED = "demo_daily_summary_queued"
     NOTIFICATION_TEST_SENT = "notification_test_sent"
     ALERT_TELEGRAM_DELIVERY_REQUESTED = "alert_telegram_delivery_requested"
     ALERT_TELEGRAM_DELIVERY_SENT = "alert_telegram_delivery_sent"
