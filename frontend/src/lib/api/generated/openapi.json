@@ -22688,13 +22688,20 @@
       },
       "JournalTradeDetail": {
         "additionalProperties": false,
-        "description": "Journal trade with its evidence, rule checks, and observations.",
+        "description": "Journal trade with its evidence, rule checks, observations and partial exits.",
         "properties": {
           "evidence": {
             "items": {
               "$ref": "#/components/schemas/JournalTradeEvidenceRead"
             },
             "title": "Evidence",
+            "type": "array"
+          },
+          "exit_events": {
+            "items": {
+              "$ref": "#/components/schemas/JournalTradeExitEvent"
+            },
+            "title": "Exit Events",
             "type": "array"
           },
           "manual_demo": {
@@ -23115,6 +23122,112 @@
           "status"
         ],
         "title": "JournalTradeExcursionRead",
+        "type": "object"
+      },
+      "JournalTradeExitEvent": {
+        "additionalProperties": false,
+        "description": "One recorded partial exit: a take-profit/stop fill or a protective stop move.\n\nRead from the append-only ``position_exit_events`` record for the trade's\nexecution lifecycle; the Journal's final close still averages all exits.",
+        "properties": {
+          "fill_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'target', 'stop' or 'runner_stop'.",
+            "title": "Fill Kind"
+          },
+          "kind": {
+            "description": "'fill' or 'stop_move'.",
+            "title": "Kind",
+            "type": "string"
+          },
+          "leg": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Take-profit level (1 = TP1), when known.",
+            "title": "Leg"
+          },
+          "new_stop": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Stop"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "previous_stop": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Stop"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'breakeven' or 'trail'.",
+            "title": "Stop Reason"
+          }
+        },
+        "required": [
+          "kind",
+          "occurred_at"
+        ],
+        "title": "JournalTradeExitEvent",
         "type": "object"
       },
       "JournalTradeLinks": {

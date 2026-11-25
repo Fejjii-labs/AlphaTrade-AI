@@ -10,12 +10,12 @@ import { Input, Label, Textarea } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { TechnicalDetails } from "@/components/ui/technical-details";
 import { useAsyncData } from "@/hooks/useAsyncData";
-import { journalTradeApi } from "@/lib/api/journal-trade";
+import { journalTradeApi, type JournalTradeExitEvent } from "@/lib/api/journal-trade";
 import {
   blofinHistoryId,
   isBlofinReconciledJournalTrade,
 } from "@/lib/journal-blofin-reconciliation";
-import { formatDateTime, formatMoney, formatQuantity, humanizeToken, stripDisplayIdentifiers, venueLabel } from "@/lib/format";
+import { formatDateTime, formatMoney, formatPrice, formatQuantity, humanizeToken, stripDisplayIdentifiers, venueLabel } from "@/lib/format";
 import { friendlyError } from "@/lib/api/client";
 
 export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
@@ -170,6 +170,16 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
         ]} />
       </CardContent>
     </Card>
+    {data.exit_events?.length ? (
+      <Card data-testid="journal-exit-events">
+        <CardHeader><CardTitle>Exits</CardTitle></CardHeader>
+        <CardContent>
+          <ul className="space-y-2 text-sm">
+            {data.exit_events.map((event, index) => <li key={`${event.occurred_at}-${index}`} className="flex flex-wrap justify-between gap-2"><span>{exitEventText(event)}</span><span className="text-xs text-text-secondary">{formatDateTime(event.occurred_at)}</span></li>)}
+          </ul>
+        </CardContent>
+      </Card>
+    ) : null}
     {mirrorAnnotated ? (
       <Card data-testid="journal-mirror-annotation">
         <CardHeader><CardTitle>Strategy tag</CardTitle></CardHeader>
@@ -206,4 +216,17 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
       </CardContent>
     </Card>
   </div>;
+}
+
+/** "TP1 filled: 0.5 at 110", "Stop moved to break-even: 95 → 100.5". */
+export function exitEventText(event: JournalTradeExitEvent): string {
+  if (event.kind === "stop_move") {
+    const label = event.stop_reason === "breakeven" ? "Stop moved to break-even"
+      : event.stop_reason === "trail" ? "Trailing stop moved" : "Stop moved";
+    return `${label}: ${formatPrice(event.previous_stop)} → ${formatPrice(event.new_stop)}`;
+  }
+  const what = event.fill_kind === "target"
+    ? (event.leg ? `TP${event.leg}` : "Take-profit")
+    : event.fill_kind === "runner_stop" ? "Runner stop" : "Stop";
+  return `${what} filled: ${formatQuantity(event.quantity, { maximumFractionDigits: 8 })} at ${formatPrice(event.price)}`;
 }

@@ -231,3 +231,28 @@ it("keeps venue code and trade, command and order IDs in collapsed Technical det
   expect(screen.getByText("Entry order: Recorded on venue")).toBeInTheDocument();
   expectNoIdentifiers();
 });
+
+it("lists partial take-profit fills and stop moves in plain words, in order", async () => {
+  vi.mocked(journalTradeApi.detail).mockResolvedValue({
+    ...fixture,
+    exit_events: [
+      { kind: "fill", fill_kind: "target", leg: 1, quantity: "0.5", price: "110", stop_reason: null, previous_stop: null, new_stop: null, occurred_at: "2026-11-25T08:00:00Z" },
+      { kind: "stop_move", fill_kind: null, leg: null, quantity: null, price: null, stop_reason: "breakeven", previous_stop: "95", new_stop: "100.5", occurred_at: "2026-11-25T08:00:00Z" },
+      { kind: "fill", fill_kind: "target", leg: 2, quantity: "0.25", price: "120", stop_reason: null, previous_stop: null, new_stop: null, occurred_at: "2026-11-25T09:00:00Z" },
+    ],
+  });
+  render(<JournalTradeScreen tradeId="exact-trade" />);
+  const exits = await screen.findByTestId("journal-exit-events");
+  const items = within(exits).getAllByRole("listitem").map((item) => item.textContent ?? "");
+  expect(items).toHaveLength(3);
+  expect(items[0]).toMatch(/^TP1 filled: 0\.5 at 110/);
+  expect(items[1]).toMatch(/^Stop moved to break-even: 95 → 100\.5/);
+  expect(items[2]).toMatch(/^TP2 filled: 0\.25 at 120/);
+  expectNoIdentifiers(exits);
+});
+
+it("shows no exits card when the trade has no recorded partial exits", async () => {
+  render(<JournalTradeScreen tradeId="exact-trade" />);
+  await screen.findByTestId("journal-trade-detail");
+  expect(screen.queryByTestId("journal-exit-events")).not.toBeInTheDocument();
+});

@@ -300,11 +300,30 @@ class JournalTradeObservationRead(ORMModel):
     created_at: datetime
 
 
+class JournalTradeExitEvent(StrictModel):
+    """One recorded partial exit: a take-profit/stop fill or a protective stop move.
+
+    Read from the append-only ``position_exit_events`` record for the trade's
+    execution lifecycle; the Journal's final close still averages all exits.
+    """
+
+    kind: str = Field(description="'fill' or 'stop_move'.")
+    fill_kind: str | None = Field(default=None, description="'target', 'stop' or 'runner_stop'.")
+    leg: int | None = Field(default=None, description="Take-profit level (1 = TP1), when known.")
+    quantity: Decimal | None = None
+    price: Decimal | None = None
+    stop_reason: str | None = Field(default=None, description="'breakeven' or 'trail'.")
+    previous_stop: Decimal | None = None
+    new_stop: Decimal | None = None
+    occurred_at: datetime
+
+
 class JournalTradeDetail(StrictModel):
-    """Journal trade with its evidence, rule checks, and observations."""
+    """Journal trade with its evidence, rule checks, observations and partial exits."""
 
     trade: JournalTradeRead
     manual_demo: ManualDemoAttempt | None = None
     evidence: list[JournalTradeEvidenceRead] = Field(default_factory=list)
     rule_checks: list[JournalTradeRuleCheckRead] = Field(default_factory=list)
     observations: list[JournalTradeObservationRead] = Field(default_factory=list)
+    exit_events: list[JournalTradeExitEvent] = Field(default_factory=list)

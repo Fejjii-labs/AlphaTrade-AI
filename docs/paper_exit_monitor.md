@@ -383,8 +383,9 @@ final R. Both R values are gross: from prices against the immutable plan
 stop, before fees and funding; the final R uses the size-weighted average
 exit price. Net P&L is shown only when the Journal has stored it (governed
 demo closes do not store it today). Partial take-profit fills are not paged;
-each is recorded in `position_exit_events` (not as a Journal lifecycle event)
-and counted in the daily summary. Only the reconciler that writes the lifecycle
+each is recorded in `position_exit_events` (not as a Journal lifecycle event),
+counted in the daily summary, and listed with any stop moves under "Exits" on
+the Journal trade page (`exit_events` on `GET /journal/trades/{id}`). Only the reconciler that writes the lifecycle
 resolution queues the close page, so competing reconcilers page once.
 Pages are queued with the reconcile commit and sent at most once on a
 background thread: a failed send is logged and not retried, and a page still

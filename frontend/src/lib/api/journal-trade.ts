@@ -8,6 +8,18 @@ export type JournalObservation = {
   observation: string;
   created_at: string;
 };
+/** One recorded partial exit: a take-profit/stop fill or a stop move. */
+export type JournalTradeExitEvent = {
+  kind: "fill" | "stop_move" | string;
+  fill_kind: "target" | "stop" | "runner_stop" | string | null;
+  leg: number | null;
+  quantity: string | null;
+  price: string | null;
+  stop_reason: "breakeven" | "trail" | string | null;
+  previous_stop: string | null;
+  new_stop: string | null;
+  occurred_at: string;
+};
 export type JournalTradeDetail = {
   trade: CanonicalJournalTradeListItem & {
     size: string | null;
@@ -27,6 +39,7 @@ export type JournalTradeDetail = {
   evidence: Array<{ id: string; kind: string; caption: string | null; ref: string | null }>;
   rule_checks: Array<{ id: string; rule_key: string; status: string; notes: string | null }>;
   observations: JournalObservation[];
+  exit_events?: JournalTradeExitEvent[];
 };
 export const journalTradeApi = {
   detail: (id: string) => apiFetch<JournalTradeDetail>(`/journal/trades/${encodeURIComponent(id)}`, { auth: true }),
