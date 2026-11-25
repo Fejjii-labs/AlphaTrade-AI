@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
@@ -142,6 +142,52 @@ def occurrence(value: Any, *, earliest: datetime, now: datetime) -> datetime:
     return parsed
 
 
+ATTACHED_TPSL_WINDOW = timedelta(seconds=10)
+
+
+def _order_attached_terms(order: dict[str, Any], plan: TradePlanRevision) -> bool:
+    """The parent order itself attests the exact plan TP/SL it was sent with."""
+    try:
+        return all(
+            order.get(key) not in (None, "") and number(order[key], field=key) == expected
+            for key, expected in (
+                ("slTriggerPrice", plan.risk_and_exits.stop.value),
+                ("tpTriggerPrice", plan.risk_and_exits.targets[0].price.value),
+                ("slOrderPrice", Decimal("-1")),
+                ("tpOrderPrice", Decimal("-1")),
+            )
+        )
+    except NativeEvidenceError:
+        return False
+
+
+def _attached_link(p: dict[str, Any], plan: TradePlanRevision, created: datetime) -> bool:
+    """Link BloFin's attached TPSL, which carries no parent or client id.
+
+    BloFin creates the attached TP/SL as its own TPSL order with a blank
+    clientOrderId, no orderId and no tpslId on the parent. It is linked only when
+    the parent order attests the same exact terms, the row has no conflicting
+    identity, is reduce-only, matches the plan prices exactly and was created
+    within seconds after the parent. More than one such row stays ambiguous.
+    """
+    try:
+        if p.get("clientOrderId") not in (None, "") or p.get("orderId") not in (None, ""):
+            return False
+        if str(p.get("reduceOnly")).lower() != "true":
+            return False
+        if (
+            number(p.get("slTriggerPrice"), field="slTriggerPrice")
+            != plan.risk_and_exits.stop.value
+            or number(p.get("tpTriggerPrice"), field="tpTriggerPrice")
+            != plan.risk_and_exits.targets[0].price.value
+        ):
+            return False
+        born = _time(p.get("createTime"))
+    except (NativeEvidenceError, TypeError, ValueError):
+        return False
+    return created <= born <= created + ATTACHED_TPSL_WINDOW
+
+
 def reconcile_native(
     client: BloFinClient,
     *,
@@ -272,13 +318,19 @@ def reconcile_native(
                 )
             )
         linked = 0
+        attached_terms = _order_attached_terms(order, plan)
         for p in protection:
             # A returned native parent/TPSL id may establish lineage even when the
             # protective client id is blank. Similar terms alone never establish it.
             client_link = p.get("clientOrderId") == client_order_id
             parent_link = p.get("orderId") == order_id
             tpsl_link = bool(order.get("tpslId")) and p.get("tpslId") == order["tpslId"]
-            if not (client_link or parent_link or tpsl_link):
+            if not (
+                client_link
+                or parent_link
+                or tpsl_link
+                or (attached_terms and _attached_link(p, plan, created))
+            ):
                 continue
             linked += 1
             try:
