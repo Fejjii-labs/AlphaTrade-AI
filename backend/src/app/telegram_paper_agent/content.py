@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from app.telegram_paper_agent.contracts import (
     MAX_TEXT_BYTES,
     JournalOutcomeView,
@@ -12,68 +14,96 @@ from app.telegram_paper_agent.contracts import (
 )
 
 _PROFIT_CLAIMS = ("guaranteed", "will win", "autonomous profit")
+_BULLET = "\u2022 "
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+_HEX_HASH = re.compile(r"\b[0-9a-f]{32,}\b", re.I)
+_BLOCKED_REASON_TEXT = {
+    "stale_evidence": "market data is out of date",
+    "provider_outage": "the market data provider is unavailable",
+    "wrong_source": "market data came from an unexpected source",
+    "candidate_creation_failed": "the setup could not be saved",
+}
+_WORDS = {"pnl": "P&L", "mfe": "MFE", "mae": "MAE", "true": "yes", "false": "no"}
+
+
+def humanize(code: str) -> str:
+    """``stale_evidence`` -> ``Stale evidence``. End-user text never shows raw codes."""
+    words = [_WORDS.get(w.lower(), w) for w in re.split(r"[_\s]+", code.strip()) if w]
+    text = " ".join(words)
+    return text[:1].upper() + text[1:] if text else "n/a"
+
+
+def _is_internal(value: str) -> bool:
+    return bool(_UUID.search(value) or _HEX_HASH.search(value))
 
 
 def format_watcher_blocked_text(notice: WatcherScanNotice) -> str:
-    text = (
-        "Watcher paper alert (not a trade).\n"
-        f"symbol: {notice.symbol}\n"
-        f"status: {notice.status}\n"
-        f"reason: {notice.reason_code}\n"
-        "Evidence failed closed. No Candidate was minted. "
-        "Telegram cannot override SetupAssessment or risk."
+    reason = _BLOCKED_REASON_TEXT.get(notice.reason_code) or humanize(notice.reason_code).lower()
+    text = "\n".join(
+        (
+            f"{notice.symbol}: setup check skipped",
+            f"{_BULLET}Reason: {reason}",
+            f"{_BULLET}No setup was created and no trade was placed.",
+        )
     )
     return guard_paper_text(text)
 
 
-def format_confirmed_setup_footer(*, candidate_id: str) -> str:
-    text = (
-        "Paper Watcher minted a canonical Candidate on CONFIRMED_SETUP.\n"
-        f"candidate_id: {candidate_id}\n"
-        "Reply to discuss evidence, strategy, Candidate, or risk. "
-        "Mutating paper actions require an explicit identity-bound confirmation. "
-        "Telegram cannot execute, approve a strategy, or enable live trading."
-    )
-    return guard_paper_text(text)
+def format_confirmed_setup_footer() -> str:
+    return guard_paper_text("Reply to this message to ask about this setup.")
 
 
 def format_journal_outcome_text(view: JournalOutcomeView) -> str:
-    pnl = "n/a" if view.net_pnl is None else view.net_pnl
-    text = (
-        "Paper journal outcome (facts only, not a live fill).\n"
-        f"trade_id: {view.trade_id}\n"
-        f"symbol: {view.symbol}\n"
-        f"status: {view.status}\n"
-        f"result: {view.result or 'n/a'}\n"
-        f"net_pnl: {pnl}\n"
-        f"{view.summary}"
-    )
-    return guard_paper_text(text)
+    lines = [f"{view.symbol} paper trade {humanize(view.status).lower()}"]
+    if view.result and view.result.lower() != view.status.lower():
+        lines.append(f"{_BULLET}Result: {humanize(view.result)}")
+    if view.net_pnl is not None:
+        lines.append(f"{_BULLET}Net P&L: {view.net_pnl}")
+    lines.append(view.summary)
+    return guard_paper_text("\n".join(lines))
 
 
 def format_paper_status_text(view: PaperTradeStatusView) -> str:
-    text = (
-        "Paper trade status (read-only).\n"
-        f"execution_mode: {view.execution_mode}\n"
-        f"real_trading_enabled: {view.real_trading_enabled}\n"
-        f"open_positions: {view.open_positions}\n"
-        f"open_orders: {view.open_orders}\n"
-        f"{view.summary}"
+    text = "\n".join(
+        (
+            "Paper trading status",
+            f"{_BULLET}Open positions: {view.open_positions}",
+            f"{_BULLET}Open orders: {view.open_orders}",
+            f"{_BULLET}Live trading: {'on' if view.real_trading_enabled else 'off'}",
+            view.summary,
+        )
     )
     return guard_paper_text(text)
+
+
+def _fact_line(line: str) -> str | None:
+    sep = ":" if ":" in line else "="
+    key, _, value = line.partition(sep)
+    if key.endswith("_hash") or _is_internal(line):
+        return None
+    if key == "refinement":
+        category = value.split(":", 1)[0]
+        return f"{_BULLET}Refinement idea: {humanize(category)} (not active)"
+    if not value:
+        return f"{_BULLET}{humanize(key)}"
+    return f"{_BULLET}{humanize(key)}: {humanize(value)}"
 
 
 def format_learning_summary_text(view: LearningSummaryView) -> str:
-    facts = "\n".join(view.fact_lines) if view.fact_lines else "No learning facts bound."
-    text = (
-        f"{view.banner}\n"
-        "Learning summary (explanation of recorded facts).\n"
-        f"setup_quality: {view.setup_quality or 'n/a'}\n"
-        f"execution_quality: {view.execution_quality or 'n/a'}\n"
-        f"trader_behavior: {view.trader_behavior or 'n/a'}\n"
-        f"{facts}"
-    )
-    return guard_paper_text(text)
+    lines = ["Learning summary"]
+    for label, value in (
+        ("Setup quality", view.setup_quality),
+        ("Execution quality", view.execution_quality),
+        ("Trader behavior", view.trader_behavior),
+    ):
+        if value:
+            lines.append(f"{_BULLET}{label}: {humanize(value)}")
+    facts = [fact for fact in (_fact_line(line) for line in view.fact_lines) if fact]
+    lines.extend(facts or ["No learning results yet."])
+    # Banners read "CODE — sentence"; only the sentence is shown.
+    banner = view.banner.split(" \u2014 ", 1)[-1].strip()
+    lines.append(banner[:1].upper() + banner[1:] + ("" if banner.endswith(".") else "."))
+    return guard_paper_text("\n".join(lines))
 
 
 def notification_kind_label(kind: PaperNotificationKind) -> str:

@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -53,12 +53,28 @@ from app.services.governed_blofin_demo import (
 )
 from app.services.risk.kill_switch import KillSwitchService
 from app.signal_fusion.memory import FrozenClock
+from tests.support.governed_demo_target import wide_first_slice_target
 from tests.support.phase5_market import EVALUATED_AT
 from tests.support.postgres_persistence import phase7_plan_session_factory, requires_postgres
 from tests.test_automated_paper_loop import _live_source, _monitor, _runtime_for, _seed
 from tests.test_watcher_paper_runtime import ORG, USER
 
 _TS = str(int(EVALUATED_AT.timestamp() * 1000))
+_BPS = Decimal("0.0001")
+# Adverse moves of the short's bid: inside the 10 bps zone allowance (sent) and beyond it.
+ADVERSE_MOVES: dict[str, Callable[[Decimal], Decimal]] = {
+    "tick_moved": lambda price: price - Decimal("0.1"),
+    "moved_9bps": lambda price: (price * (1 - 9 * _BPS)).quantize(Decimal("0.1"), ROUND_CEILING),
+    "moved_11bps": lambda price: (price * (1 - 11 * _BPS)).quantize(Decimal("0.1"), ROUND_FLOOR),
+}
+
+
+def widened_zone(price: Decimal) -> tuple[Decimal, Decimal]:
+    """The fixture's one-level zone: the price +/- 10 bps, inward to the 0.1 tick."""
+    return (
+        (price * (1 - 10 * _BPS)).quantize(Decimal("0.1"), ROUND_CEILING),
+        (price * (1 + 10 * _BPS)).quantize(Decimal("0.1"), ROUND_FLOOR),
+    )
 
 
 @dataclass
@@ -146,6 +162,10 @@ class Venue:
         elif path.endswith("books"):
             self.ticker_reads += 1
             quoted = self.price * Decimal("1.01") if self.behavior == "basis" else self.price
+            if self.behavior in ADVERSE_MOVES and self.ticker_reads >= 2:
+                # The bid moves against the short between planning and the send
+                # (staging, 23-24 Nov: every governed send was refused for one tick).
+                quoted = ADVERSE_MOVES[self.behavior](self.price)
             if self.behavior == "depth_moved" and self.ticker_reads >= 2:
                 # The dispatch-time book left the plan's entry zone (staging, 23 Nov).
                 quoted = self.price * Decimal("1.03")
@@ -331,6 +351,31 @@ def test_demo_gate_requires_separate_arm_and_exact_principal_pins() -> None:
         assert not governed_demo_worker_access_requested(settings.model_copy(update=updates))
 
 
+def _assert_sized_at_the_widened_zone(session, command, trade, learning, price) -> None:
+    from app.db.models import TradePlanRevision
+    from app.learning_attribution.contracts import ExecutionQuality
+    from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
+    from app.services.risk_policy.plan_sizing import reserved_maximum_loss
+
+    plan = trade_plan_revision_to_schema(session.get(TradePlanRevision, command.revision_id))
+    zone, exits = plan.entry_zone, plan.risk_and_exits
+    # The top of book covers the size: the zone is the observed bid +/- 10 bps.
+    assert (zone.lower, zone.upper) == widened_zone(price)
+    assert plan.basis_policy.execution_price.value == price
+    # Risk is sized at the worst authorized fill (the short's lower edge), so a
+    # fill anywhere in the zone loses at most the stored budget.
+    base = plan.quantity.value * plan.instrument_rules.contract_multiplier
+    stop = exits.stop.value
+    assert exits.risk_budget.value == base * (stop - zone.lower)
+    assert exits.maximum_loss.value == reserved_maximum_loss(
+        size=base, adverse_entry=zone.lower, stop=stop, worse_price=zone.upper, profile_costs=False
+    )
+    assert base * (stop - ADVERSE_MOVES["moved_9bps"](price)) <= exits.risk_budget.value
+    # A fill at the intended entry is not slippage: the journal plans the quote, not the edge.
+    assert trade.planned_entry_price == trade.entry_price == price
+    assert learning.execution_quality_axis == ExecutionQuality.MATCHED_PLAN
+
+
 @requires_postgres
 @pytest.mark.parametrize(
     "behavior",
@@ -354,13 +399,19 @@ def test_demo_gate_requires_separate_arm_and_exact_principal_pins() -> None:
         "protection_unrelated_malformed",
         "preflight_kill",
         "preflight_fence",
+        "tick_moved",
+        "moved_9bps",
+        "moved_11bps",
         "leverage_above_ceiling",
         "autonomous_off",
+        "first_slice_1r",
     ],
 )
 def test_worker_venue_fills_journal_restart_and_protection(
     monkeypatch: pytest.MonkeyPatch, behavior: str
 ) -> None:
+    if behavior != "first_slice_1r":
+        wide_first_slice_target(monkeypatch)
     factory = phase7_plan_session_factory()
     with factory() as session:
         _seed(session)
@@ -449,6 +500,13 @@ def test_worker_venue_fills_journal_restart_and_protection(
         assert scan.trade_plan_revision_id is None
         assert venue.post_count == 0
         return
+    if behavior == "first_slice_1r":
+        # Owner decision (24 Nov): planned R:R is judged at the worst entry the zone
+        # authorizes, so an exactly-1R first-slice target is refused at planning.
+        assert scan.paper_loop_reason == "planned_reward_risk_below_minimum"
+        assert scan.trade_plan_revision_id is None
+        assert venue.post_count == 0
+        return
     if behavior == "autonomous_off":
         # M1: with the autonomous demo mode OFF the worker opens no demo entry.
         assert scan.paper_loop_reason == "autonomous_mode_disarmed"
@@ -461,6 +519,7 @@ def test_worker_venue_fills_journal_restart_and_protection(
         "stale",
         "expiry",
         "depth_moved",
+        "moved_11bps",
         "preflight_kill",
         "preflight_fence",
     }:
@@ -553,6 +612,8 @@ def test_worker_venue_fills_journal_restart_and_protection(
             assert learning.learning_venue_mode == "paper_exchange_demo"
             assert learning.journal_trade_id == trade.id
             assert not learning.closed
+            if behavior == "success" or behavior in ADVERSE_MOVES:
+                _assert_sized_at_the_widened_zone(session, command, trade, learning, price)
             if behavior == "partial_cancel":
                 reservation = session.scalar(select(RiskReservation))
                 assert reservation is not None
@@ -1156,3 +1217,24 @@ def test_release_script_keeps_any_order_blofin_has_seen() -> None:
     assert check(None, [], [other, found]) == "order_history_found"
     with pytest.raises(ValueError):  # unreadable history never proves absence
         check(None, [], None)
+
+
+@pytest.mark.parametrize(
+    ("low", "high", "tick", "expected"),
+    [
+        # On-tick quote: 10 bps each side, rounded inward to the tick.
+        (Decimal("725.67"), Decimal("725.67"), Decimal("0.01"), ("724.95", "726.39")),
+        # A tick wider than the allowance leaves the observed range.
+        (Decimal("64.6"), Decimal("64.6"), Decimal("0.1"), ("64.6", "64.6")),
+        # Off-tick inputs never shrink the zone below the observed prices.
+        (Decimal("0.1234"), Decimal("0.1236"), Decimal("0.001"), ("0.1234", "0.1236")),
+    ],
+)
+def test_widened_zone_rounds_inward_and_keeps_the_observed_prices(
+    low: Decimal, high: Decimal, tick: Decimal, expected: tuple[str, str]
+) -> None:
+    from app.services.governed_blofin_demo import _widened_zone
+
+    lower, upper = _widened_zone(low, high, tick)
+    assert (lower, upper) == (Decimal(expected[0]), Decimal(expected[1]))
+    assert lower <= low <= high <= upper

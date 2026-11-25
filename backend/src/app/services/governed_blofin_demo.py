@@ -153,6 +153,10 @@ from app.workers.watcher_paper_targets import PaperScanTarget
 
 logger = logging.getLogger(__name__)
 DEMO_POLICY = "governed-blofin-demo/v1"
+# Slippage allowance (bps) added on both sides of the authorized entry zone; equal to
+# the plan's send-time quote bound (slippage_policy.maximum_bps). The plan is sized
+# at the widened edge, so any fill inside the zone stays within its risk budget.
+DEMO_ENTRY_ZONE_ALLOWANCE_BPS = Decimal("10")
 _NAMESPACE = UUID("c44ea7de-0008-4000-8000-a070e1100001")
 # Demo book quotes are action evidence for 10 seconds.
 _DEMO_QUOTE_TTL = timedelta(seconds=10)
@@ -550,6 +554,21 @@ def _demo_calculation_inputs(
     if isinstance(grade, Grade) and isinstance(grade_cap, Decimal):
         inputs.append(profile_sizing_grade_payload(grade, grade_cap))
     return inputs
+
+
+def _widened_zone(low: Decimal, high: Decimal, tick: Decimal) -> tuple[Decimal, Decimal]:
+    """The entry zone plus the slippage allowance, rounded inward to the venue tick.
+
+    Fills land on ticks, so rounding inward drops no fill within the allowance; the
+    stored prices, and the amounts derived from them, keep the venue's precision.
+    A tick wider than the allowance leaves the zone at [low, high].
+    """
+    rate = DEMO_ENTRY_ZONE_ALLOWANCE_BPS / Decimal("10000")
+    lower = (low * (1 - rate) / tick).to_integral_value(rounding=ROUND_CEILING) * tick
+    upper = (high * (1 + rate) / tick).to_integral_value(rounding=ROUND_FLOOR) * tick
+    # Book levels are on the tick, so this never binds today; an off-tick input
+    # must still never shrink the zone below the observed prices.
+    return min(lower, low), max(upper, high)
 
 
 def demo_action_evidence(
@@ -1140,6 +1159,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if loss_floor is None or loss_ceiling is None:
             return "stop_loss_band_invalid"
         risk_cap = loss_floor + (loss_ceiling - loss_floor) / Decimal("10")
+        # Widen first, then size: every risk, cost and notional bound below uses the
+        # worst price the widened entry zone authorizes, not the observed quote.
+        allowance = DEMO_ENTRY_ZONE_ALLOWANCE_BPS / Decimal("10000")
+        sizing_lower, sizing_upper = _widened_zone(entry, entry, snapshot.tick)
+        sizing_adverse = sizing_upper if is_long else sizing_lower
         sfp_stop_cap = None
         if sfp and active_profile is None:
             # Paper risk is stop-distance cash; fees remain reserved below.
@@ -1178,7 +1202,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 return "demo_risk_grade_blocked"
             sfp_stop_cap = equity * profile_grade_cap / 100
             notional_cap = snapshot.available * account_leverage
-            raw = demo_stop_sized_contracts(snapshot, stop=stop, risk=sfp_stop_cap)
+            raw = demo_stop_sized_contracts(
+                snapshot, stop=stop, risk=sfp_stop_cap, allowance=allowance
+            )
         elif active_profile is None:
             # The claim also caps notional plus fee and slippage allowances at the
             # account's remaining total exposure; size within it rather than plan a
@@ -1192,14 +1218,14 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 notional_cap,
                 remaining_exposure / (1 + _DEMO_FEE_ALLOWANCE_RATE + _DEMO_SLIPPAGE_ALLOWANCE_RATE),
             )
-            cost_per_base = entry * Decimal("0.002")
+            cost_per_base = sizing_upper * Decimal("0.002")
             raw = (
                 min(
-                    risk_cap / (abs(entry - stop) + cost_per_base),
-                    sfp_stop_cap / abs(entry - stop)
+                    risk_cap / (abs(sizing_adverse - stop) + cost_per_base),
+                    sfp_stop_cap / abs(sizing_adverse - stop)
                     if sfp_stop_cap is not None
-                    else notional_cap / entry,
-                    notional_cap / entry,
+                    else notional_cap / sizing_upper,
+                    notional_cap / sizing_upper,
                 )
                 / snapshot.multiplier
             )
@@ -1225,7 +1251,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 active=active_profile,
                 grade=grade,
                 equity=equity,
-                entry=entry,
+                entry=sizing_adverse,
                 stop=stop,
                 target=target,
                 direction="long" if is_long else "short",
@@ -1290,8 +1316,18 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         except ValueError:
             return "demo_quote_depth_insufficient"
         base = quantity * snapshot.multiplier
-        lower, upper = min(entry, worst_entry), max(entry, worst_entry)
+        # The authorized zone: the quote and the expected fill, plus the slippage
+        # allowance on both sides. Without it the zone was a single price whenever
+        # the top of book covered the size, so the send refused any one-tick move
+        # (every staging send, 23-24 Nov).
+        lower, upper = _widened_zone(
+            min(entry, worst_entry), max(entry, worst_entry), snapshot.tick
+        )
+        if base * lower < Decimal("5"):
+            # A fill at the zone's low edge must still meet the 5 USDT venue minimum.
+            return "demo_size_below_minimum"
         adverse_entry = upper if is_long else lower
+        nearest_entry = lower if is_long else upper
         from app.services.demo_leverage_config import demo_liquidation_refusal
 
         # Pre-trade gate at the configured leverage. Fail closed.
@@ -1323,8 +1359,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if demo_v2:
             from app.services.risk_policy.plan_sizing import PAPER_DEMO_TAKER_FEE_RATE
 
-            stop_risk_per_base = abs(adverse_entry - stop)
-            if (upper + stop) * PAPER_DEMO_TAKER_FEE_RATE > stop_risk_per_base / 5:
+            # The send re-checks fees at the live fill; the nearest zone edge (the
+            # shortest stop distance) bounds every fill inside the zone.
+            if (upper + stop) * PAPER_DEMO_TAKER_FEE_RATE > abs(nearest_entry - stop) / 5:
                 return "demo_fees_exceed_risk_limit"
             if base * (upper / account_leverage + upper * PAPER_DEMO_TAKER_FEE_RATE) > (
                 snapshot.available

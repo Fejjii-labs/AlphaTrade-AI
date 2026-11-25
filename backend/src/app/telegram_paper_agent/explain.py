@@ -1,28 +1,56 @@
-"""Read-only explanations copied from canonical authorities. LLM is not used."""
+"""Read-only plain-language explanations of canonical records. LLM is not used.
+
+Replies name the coin, direction, timeframe and status. Internal ids, hashes and
+enum names stay in the stored records and are never rendered.
+"""
 
 from __future__ import annotations
 
-from app.candidate_alerts.content import format_candidate_alert_text
+from datetime import datetime
+
+from app.candidate_alerts.content import ALERT_TIMEZONE, format_candidate_alert_text
 from app.candidate_alerts.contracts import CandidateAlertContent
 from app.signal_fusion.assessment import SetupAssessment
 from app.signal_fusion.candidate import Candidate
 from app.signal_fusion.evidence_window import CanonicalEvidenceWindowV1
-from app.telegram_paper_agent.content import guard_paper_text
+from app.telegram_paper_agent.content import guard_paper_text, humanize
 from app.telegram_paper_agent.contracts import StrategyDraftView
+
+_BULLET = "• "
+
+
+def _symbol(instrument_id: str) -> str:
+    """``binance:usdm_futures:perpetual:BTCUSDT`` -> ``BTCUSDT``."""
+    return instrument_id.rsplit(":", 1)[-1]
+
+
+def _time(at: datetime) -> str:
+    return at.astimezone(ALERT_TIMEZONE).strftime("%H:%M %Z")
+
+
+def _title(candidate: Candidate) -> str:
+    return (
+        f"{_symbol(candidate.evidence_instrument)} {candidate.direction.value} setup "
+        f"({candidate.timeframe.value})"
+    )
+
+
+def _candidate_text(candidate: Candidate, closing: str) -> str:
+    return guard_paper_text(
+        "\n".join(
+            (
+                _title(candidate),
+                f"{_BULLET}Status: {humanize(candidate.state.value)}",
+                f"{_BULLET}Valid until: {_time(candidate.valid_until)}",
+                closing,
+            )
+        )
+    )
 
 
 def explain_persisted_candidate(*, candidate: Candidate) -> str:
     """Explain a stored Candidate when the assessment body is not on this path."""
-
-    return guard_paper_text(
-        "Candidate facts stored for this tenant (read-only).\n"
-        f"candidate_id: {candidate.candidate_id}\n"
-        f"state: {candidate.state.value}\n"
-        f"instrument: {candidate.evidence_instrument}\n"
-        f"evidence_window_hash: {candidate.evidence_window_hash}\n"
-        "The SetupAssessment body is not replayed from Telegram. "
-        "Telegram cannot override SetupAssessment, override risk, or mint a Candidate."
-    )
+    return _candidate_text(candidate, "The full setup check isn't available here.")
 
 
 def explain_candidate(
@@ -32,59 +60,58 @@ def explain_candidate(
 ) -> str:
     if content is not None:
         return format_candidate_alert_text(content)
-    return guard_paper_text(
-        "Candidate facts (read-only).\n"
-        f"candidate_id: {candidate.candidate_id}\n"
-        f"state: {candidate.state.value}\n"
-        f"instrument: {candidate.evidence_instrument}\n"
-        f"direction: {candidate.direction.value}\n"
-        f"content_hash: {candidate.content_hash}\n"
-        "Telegram did not mint this Candidate."
+    return _candidate_text(
+        candidate, "Ask me about the evidence, the risk or the strategy behind it."
     )
 
 
 def explain_evidence(*, window: CanonicalEvidenceWindowV1, assessment: SetupAssessment) -> str:
-    return guard_paper_text(
-        "Evidence and SetupAssessment (read-only; not overridden).\n"
-        f"assessment_state: {assessment.state.value}\n"
-        f"evidence_window_hash: {window.content_hash}\n"
-        f"instrument: {window.evidence_instrument}\n"
-        f"fusion_policy_version: {window.fusion_policy_version}\n"
-        "Missing, stale, or conflicting evidence stays fail-closed."
-    )
+    passed = sum(1 for rule in assessment.rule_results if rule.passed)
+    failed = [humanize(rule.rule_id) for rule in assessment.rule_results if not rule.passed]
+    lines = [
+        f"Evidence for {_symbol(window.evidence_instrument)} ({window.timeframe.value})",
+        f"{_BULLET}Setup check: {humanize(assessment.state.value)}",
+        f"{_BULLET}Checks passed: {passed} of {len(assessment.rule_results)}",
+    ]
+    if failed:
+        lines.append(f"{_BULLET}Not met: {', '.join(failed)}")
+    lines.append("Missing or out-of-date data never counts as confirmation.")
+    return guard_paper_text("\n".join(lines))
 
 
 def explain_risk(*, candidate: Candidate, assessment: SetupAssessment) -> str:
-    reasons = ",".join(code.value for code in assessment.reason_codes) or "none"
+    reasons = ", ".join(humanize(code.value) for code in assessment.reason_codes) or "none"
     return guard_paper_text(
-        "Risk and setup reasons (explanation only).\n"
-        f"candidate_state: {candidate.state.value}\n"
-        f"assessment_state: {assessment.state.value}\n"
-        f"reason_codes: {reasons}\n"
-        "Telegram cannot override RiskEngine BLOCK or kill switch."
+        "\n".join(
+            (
+                f"Risk for the {_title(candidate)}",
+                f"{_BULLET}Setup check: {humanize(assessment.state.value)}",
+                f"{_BULLET}Reasons: {reasons}",
+                "Risk limits and the kill switch always apply. Telegram can't override them.",
+            )
+        )
     )
 
 
 def explain_strategy(*, candidate: Candidate, draft: StrategyDraftView | None) -> str:
-    extra = "" if draft is None else f"\n{draft.summary}"
-    compiled = "false" if draft is None else str(draft.compiled).lower()
-    approved = "false" if draft is None else str(draft.approved).lower()
-    return guard_paper_text(
-        "Strategy context (discussion only).\n"
-        f"strategy_version_id: {candidate.strategy_version_id}\n"
-        f"compiled_setup_id: {candidate.setup_definition_id}\n"
-        f"conversation_compiled: {compiled}\n"
-        f"conversation_approved: {approved}\n"
-        "A Telegram message cannot approve or compile a strategy."
-        f"{extra}"
-    )
+    lines = [f"Strategy behind the {_title(candidate)}"]
+    if draft is not None:
+        lines.append(draft.summary)
+    lines.append("Telegram can't approve or change a strategy.")
+    return guard_paper_text("\n".join(lines))
 
 
 def explain_market_context(*, window: CanonicalEvidenceWindowV1) -> str:
     return guard_paper_text(
-        "Market context bound to canonical evidence (not a live mark invention).\n"
-        f"instrument: {window.evidence_instrument}\n"
-        f"evidence_window_hash: {window.content_hash}\n"
-        f"trigger: {window.trigger.natural_event_id}\n"
-        "Replay or stale evidence is never treated as a current live perpetual mark."
+        "\n".join(
+            (
+                f"Market context for {_symbol(window.evidence_instrument)} "
+                f"({window.timeframe.value})",
+                f"{_BULLET}Data window: {_time(window.interval.start)} to "
+                f"{_time(window.interval.end)}",
+                f"{_BULLET}Source: {humanize(window.evidence_venue.value)} "
+                f"{humanize(window.evidence_market.value).lower()}",
+                "This is the data the setup check used, not a live price.",
+            )
+        )
     )

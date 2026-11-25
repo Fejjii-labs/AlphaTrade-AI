@@ -89,9 +89,7 @@ class DurablePaperContext:
             status=status,
             result=result,
             net_pnl=pnl,
-            summary=(
-                f"Recorded journal status {status}. Result {result}. Facts only. Not a live fill."
-            ),
+            summary="Paper trade only, not a live fill.",
         )
 
     def learning_summary(
