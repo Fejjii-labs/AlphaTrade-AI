@@ -54,6 +54,7 @@ from app.services.canonical_paper_execution import (
     _note_profile_close,
 )
 from app.services.canonical_serialization import canonical_sha256
+from app.services.execution_exposure import stored_money
 from app.services.execution_fills import adjust_symbol_map
 from app.services.journal_lifecycle_projector import JournalLifecycleProjector
 from app.services.risk_policy.profile import PolicyKind
@@ -293,8 +294,11 @@ def resolve_verified_demo_exit(
     if (
         accounting.actual_notional < exposure
         or accounting.reserved_notional < unused
-        or Decimal(str(accounting.symbol_actual.get(reservation.instrument, "0"))) < exposure
-        or Decimal(str(accounting.symbol_reserved.get(reservation.instrument, "0"))) < unused
+        # Maps written before 8-dp rounding may hold extra digits; read them as stored.
+        or stored_money(Decimal(str(accounting.symbol_actual.get(reservation.instrument, "0"))))
+        < exposure
+        or stored_money(Decimal(str(accounting.symbol_reserved.get(reservation.instrument, "0"))))
+        < unused
     ):
         raise ValidationAppError("Demo exit risk accounting is inconsistent; release refused.")
     close_time = max(f.occurred_at for f in evidence.fills)

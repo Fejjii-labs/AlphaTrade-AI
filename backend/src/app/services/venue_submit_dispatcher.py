@@ -62,6 +62,7 @@ from app.services.execution_dispatch_boundary import (
     require_committed_dispatch_authorization,
     require_idle_session_for_provider_io,
 )
+from app.services.execution_exposure import stored_money
 from app.services.execution_fills import (
     convert_reservation_for_fill,
     cumulative_weighted_price,
@@ -1022,7 +1023,7 @@ class VenueSubmitDispatcher:
             accounting.reserved_trade_slots = 0
         reserved = dict(accounting.symbol_reserved or {})
         current = Decimal(str(reserved.get(reservation.instrument, "0")))
-        reserved[reservation.instrument] = str(max(Decimal("0"), current - unused))
+        reserved[reservation.instrument] = str(max(Decimal("0"), stored_money(current - unused)))
         accounting.symbol_reserved = reserved
         reservation.remaining_reserved_notional = Decimal("0")
         reservation.release_state = RiskReservationReleaseState.RELEASED
