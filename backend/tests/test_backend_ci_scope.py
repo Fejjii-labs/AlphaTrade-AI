@@ -125,17 +125,19 @@ def test_focused_command_preserves_pytest_failure_and_reports_incomplete_accepta
 def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gate():
     workflow = yaml.load((ROOT / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader)
     trigger = workflow["on"]
-    assert "pull_request" in trigger and "push" in trigger
+    assert set(trigger) == {"pull_request", "workflow_dispatch"}
     full = trigger["workflow_dispatch"]["inputs"]["full_backend"]
     assert full == {
         "description": "Run the complete backend suite for final release acceptance",
         "type": "boolean",
         "required": "true",
-        "default": "true",
+        # A dispatch for e2e_smoke alone must not also start the 2 h full suite.
+        "default": "false",
     }
     jobs = workflow["jobs"]
     assert set(jobs) == {
         "backend",
+        "backend-full",
         "frontend",
         "deployment-safety",
         "evaluation",
@@ -179,29 +181,41 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     assert "edited-not-base" in scope_script
     assert "pull/${CI_SCOPE_PR_NUMBER}/head" in scope_script
     concurrency = workflow["concurrency"]
-    assert concurrency["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
-    assert "github.event_name == 'push'" not in concurrency["cancel-in-progress"]
-    group = concurrency["group"]
-    assert "format('pr-{0}', github.event.pull_request.number)" in group
-    assert "github.run_id" in group
-    assert "github.event.action != 'edited'" in group
-    assert "github.event.changes.base.ref.from" in group
-    assert "format('{0}-{1}', github.workflow, github.ref)" not in group
-    dispatch_gate = "github.event_name == 'workflow_dispatch' && inputs.full_backend"
-    trailer_gate = "steps.scope.outputs.full_backend == 'true'"
-    full_gate = f"({dispatch_gate}) || {trailer_gate}"
-    steps = {step.get("name"): step for step in jobs["backend"]["steps"]}
-    scope_step = steps["Decide CI scope"]["run"]
-    assert "bash .github/workflows/ci-scope.sh" in scope_step
-    assert "Full-Backend" in scope_step
-    assert "full_backend=%s" in scope_step
+    assert concurrency == {
+        "group": "${{ github.workflow }}-${{ github.event_name == 'pull_request' "
+        "&& github.ref || github.run_id }}",
+        "cancel-in-progress": "true",
+    }
+    backend = jobs["backend"]
+    steps = {step.get("name"): step for step in backend["steps"]}
+    assert "bash .github/workflows/ci-scope.sh" in steps["Decide CI scope"]["run"]
+    paths = steps["Select checks by path"]
+    # The Full-Backend trailer is local evidence only: no commit message can
+    # start the hosted full suite (Rule 11), only workflow_dispatch can.
+    run = paths["run"]
+    for step in (s for job in jobs.values() for s in job.get("steps", [])):
+        script = step.get("run", "")
+        assert "Full-Backend" not in script.replace("# The Full-Backend trailer", "")
+        assert "trailers" not in script and "git log" not in script
+    # full_backend is assigned only from the dispatch input, inside the dispatch branch.
+    assert run.count("full_backend=") == 2  # the false default and the dispatch value
+    dispatch_branch = run.split('if [[ "$CI_SCOPE_EVENT_NAME" == workflow_dispatch ]]; then', 1)[1]
+    assert dispatch_branch.split("else", 1)[0].strip() == 'full_backend="$DISPATCH_FULL"'
+    assert "full_backend=true" not in run
+    assert paths["env"]["DISPATCH_FULL"] == "${{ inputs.full_backend }}"
+    assert backend["outputs"]["full_backend"] == "${{ steps.paths.outputs.full_backend }}"
     assert steps["Ruff check"]["run"] == "uv run ruff check . ../scripts/run_backend_focused.py"
     assert steps["Ruff format"]["run"] == (
         "uv run ruff format --check . ../scripts/run_backend_focused.py"
     )
-    acceptance = steps["Complete backend release acceptance"]
-    assert acceptance["if"] == full_gate
-    assert acceptance["timeout-minutes"] == "140"
+    full_job = jobs["backend-full"]
+    assert full_job["needs"] == "backend"
+    assert (
+        full_job["if"] == "always() && !cancelled() && needs.backend.outputs.full_backend == 'true'"
+    )
+    assert "postgres" in full_job["services"] and "services" not in backend
+    full_steps = {step.get("name"): step for step in full_job["steps"]}
+    acceptance = full_steps["Complete backend release acceptance"]
     assert acceptance["shell"] == "bash -eo pipefail {0}"
     assert acceptance["run"] == (
         "uv run pytest -o addopts= --timeout=300 --timeout-method=thread "
@@ -213,26 +227,37 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
             if "| tee" not in script:
                 continue
             assert "pipefail" in (step.get("shell") or ""), step.get("name")
-    assert steps["Focused backend development tests"]["if"] == (
-        "(github.event_name != 'workflow_dispatch' || !inputs.full_backend) "
-        "&& steps.scope.outputs.full_backend != 'true'"
-    )
-    for name in ("Install dependencies", "Ruff check", "Ruff format"):
-        assert steps[name]["if"] == (
-            "steps.scope.outputs.heavy != 'false' || steps.scope.outputs.full_backend == 'true'"
-        )
+    for name in (
+        "Install dependencies",
+        "Ruff check",
+        "Ruff format",
+        "Focused backend development tests",
+    ):
+        assert steps[name]["if"] == "steps.paths.outputs.backend == 'true'"
     assert "run_backend_focused.py" in steps["Focused backend development tests"]["run"]
-    upload = steps["Upload full backend pytest artifacts"]
-    assert upload["if"] == f"always() && ({full_gate})"
+    upload = full_steps["Upload full backend pytest artifacts"]
+    assert upload["if"] == "always()"
     assert upload["uses"] == "actions/upload-artifact@v4"
     assert upload["with"]["name"] == "full-backend-pytest"
     assert "backend/full-backend-junit.xml" in upload["with"]["path"]
     assert "backend/full-backend-pytest.log" in upload["with"]["path"]
-    assert jobs["backend"]["timeout-minutes"] == "150"
-    assert jobs["evaluation"]["needs"] == ["backend"]
-    assert jobs["e2e-smoke"]["needs"] == ["backend", "frontend"]
-    for job in jobs.values():
-        assert "if" not in job and "continue-on-error" not in job
+    assert int(backend["timeout-minutes"]) <= 30
+    assert int(full_job["timeout-minutes"]) <= 120
+    assert jobs["evaluation"]["needs"] == "backend"
+    for name, output in (
+        ("deployment-safety", "deployment"),
+        ("frontend", "frontend"),
+        ("evaluation", "evaluation"),
+        ("docker-build", "docker"),
+    ):
+        assert f"needs.backend.outputs.{output}" in jobs[name]["if"]
+    smoke = jobs["e2e-smoke"]
+    assert smoke["if"] == "github.event_name == 'workflow_dispatch' && inputs.e2e_smoke"
+    assert smoke["continue-on-error"] == "true"
+    for name, job in jobs.items():
+        assert int(job["timeout-minutes"]) > 0
+        if name != "e2e-smoke":
+            assert "continue-on-error" not in job
         assert all("continue-on-error" not in step for step in job["steps"])
 
 

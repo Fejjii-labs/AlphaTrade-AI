@@ -86,11 +86,22 @@ def select_tests(changed: list[str], backend: Path) -> list[str]:
     )
 
 
-def changed_paths(root: Path, base: str, head: str) -> list[str]:
+def changed_paths(root: Path, base: str, head: str, *, worktree: bool = False) -> list[str]:
     if not re.fullmatch(r"[0-9a-f]{40}", head) or (
         base and not re.fullmatch(r"[0-9a-f]{40}", base)
     ):
         raise ValueError("CI base/head must be commit SHAs.")
+    if worktree:
+        if not base or base == "0" * 40:
+            raise ValueError("Working-tree selection requires a base commit.")
+        tracked = ["git", "diff", "--name-only", "-z", "--no-renames", base, "--"]
+        untracked = ["git", "ls-files", "--others", "--exclude-standard", "-z"]
+        return [
+            path
+            for command in (tracked, untracked)
+            for path in subprocess.check_output(command, cwd=root, text=True).split("\0")
+            if path
+        ]
     if base and base != "0" * 40:
         command = ["git", "diff", "--name-only", "--diff-filter=ACDMR", base, head, "--"]
     else:
@@ -102,10 +113,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="")
     parser.add_argument("--head", required=True)
+    parser.add_argument("--worktree", action="store_true")
     parser.add_argument("--list-only", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    selection = select_tests(changed_paths(root, args.base, args.head), root / "backend")
+    selection = select_tests(
+        changed_paths(root, args.base, args.head, worktree=args.worktree), root / "backend"
+    )
     if not selection:
         raise ValueError("Focused selection must not be empty.")
     message = "Focused backend development checks; full backend release acceptance is pending."
