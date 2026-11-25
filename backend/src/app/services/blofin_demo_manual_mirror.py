@@ -8,7 +8,9 @@ Official contracts, rechecked 2026-11-16 from https://docs.blofin.com/index.html
   (side ``buy``, open 1591.8, close 1592.5, closePositions 1, realizedPnl
   ``0.7``, fee ``0.190536``) equals ``(close - open) * contracts`` and does
   not subtract ``fee``. ``fee`` is "Trading fee". Both published examples are
-  positive. That page does not define a negative fee. Order history on the
+  positive. The live demo account contradicts that example (see below): its
+  ``fee`` is negative when paid and ``realizedPnl`` already includes it. This
+  module follows the live data. Order history on the
   same document calls its fee field "Fee and rebate"
   (https://docs.blofin.com/index.html#get-order-history).
 * ``GET /api/v1/account/funding-fees``
@@ -30,11 +32,20 @@ Official contracts, rechecked 2026-11-16 from https://docs.blofin.com/index.html
   ``contractValue`` and ``settleCurrency``.
 
 Journal economics are BloFin's own figures (Sofien's rule: never computed
-by the app). Closed slices are grouped by positionId; gross is the sum of
-positions-history ``realizedPnl`` and fees the sum of positions-history
-``fee`` (a negative fee is a rebate). Funding is ``-fundingFee`` from the
-funding route when it covers the position, else NULL. Net is gross minus
-fees minus known funding. Prices, sizes and contract values never feed P&L.
+by the app). What BloFin actually returns (demo account, checked 2026-11-25 on
+three closed positions, e.g. TAO short 180 coins 178.72 -> 174.40:
+realizedPnl 734.332, fee -38.137, fundingFee -5.131, price move +777.60):
+
+* ``realizedPnl`` is the final result: price move plus ``fee`` plus funding.
+  It is stored as the net P&L as is.
+* ``fee`` is negative when paid; the journal stores the cost (``-fee``).
+* ``closePositions`` is already in coins, not contracts.
+
+Closed slices are grouped by positionId. Net is the sum of ``realizedPnl``;
+fees are minus the sum of ``fee``; funding is ``-fundingFee`` from the funding
+route when it covers the position, else NULL. Gross (before fees and funding)
+is net plus fees plus known funding, so net = gross - fees - funding holds.
+Prices and contract values never feed P&L.
 A missing BloFin field leaves the row's P&L pending (NULL) with a short
 ``unverified:<reason>``. Closed rows still pending outside the read window
 are re-read individually on later syncs (bounded backfill) and filled in
@@ -74,7 +85,7 @@ from app.services.risk.mirror_economics import MIRROR_REF_PREFIX, RECONCILED_TAG
 
 logger = structlog.get_logger("services.blofin_demo_manual_mirror")
 
-METHOD = "positions-history-orders-fee-funding/v2"
+METHOD = "positions-history-orders-fee-funding/v3"
 _Q = Decimal("0.00000001")
 _TOLERANCE = Decimal("0.01")
 _RATE = Decimal("0.0001")
@@ -151,7 +162,7 @@ _DISABLED = (
 )
 _READY = (
     "BloFin demo journal positions. P&L is BloFin's own positions-history "
-    "realizedPnl minus BloFin's fee, minus BloFin funding when reported. "
+    "realizedPnl, which already includes BloFin's fee and funding. "
     "Positions whose P&L BloFin has not reported yet are excluded."
 )
 
@@ -429,17 +440,22 @@ _OPEN_FILL_LEAD = timedelta(seconds=5)
 
 
 def _price_move_side(row: dict[str, Any]) -> str | None:
-    """Opening side implied by the price move and the sign of ``realizedPnl``.
+    """Opening side implied by the price move and the sign of the P&L before fees.
 
-    A long gains when price rises, a short when it falls. ``None`` when either
-    the move or the P&L is zero or missing (no signal).
+    A long gains when price rises, a short when it falls. ``realizedPnl``
+    includes the (negative) fee, so the fee is added back first: a trade that
+    won a little on price but paid more in fees still reads the right side.
+    ``None`` when either the move or the P&L is zero or missing (no signal).
     """
 
     open_price = _decimal(row.get("openAveragePrice"))
     close_price = _decimal(row.get("closeAveragePrice"))
     realized = _decimal(row.get("realizedPnl"))
+    fee = _decimal(row.get("fee"))
     if open_price is None or close_price is None or realized is None:
         return None
+    if fee is not None:
+        realized -= fee
     move = close_price - open_price
     if move == 0 or realized == 0:
         return None
@@ -636,10 +652,8 @@ def _side_source(row: dict[str, Any]) -> str:
 
 
 def _price_pnl(sliver: _Slice) -> Decimal | None:
-    """Direction-aware price P&L. ``size`` is contracts times contract value."""
-    if sliver.contract_value is None:
-        return None
-    size = sliver.contracts * sliver.contract_value
+    """Direction-aware price P&L. ``closePositions`` is already in coins."""
+    size = sliver.contracts
     delta = sliver.close_price - sliver.open_price
     if sliver.direction is TradeDirection.SHORT:
         delta = -delta
@@ -817,27 +831,26 @@ def _protective(sliver: _Slice) -> bool:
 
 def _draft_from_slice(sliver: _Slice) -> MirrorDraft:
     price = _price_pnl(sliver)
+    funding = sliver.funding if sliver.funding_ok else None
+    # BloFin's realizedPnl = price move + fee (negative when paid) - funding cost.
     price_matches = (
         price is not None
         and sliver.realized is not None
-        and abs(price - sliver.realized) <= _TOLERANCE
+        and sliver.fee is not None
+        and funding is not None
+        and abs(price + sliver.fee - funding - sliver.realized) <= _TOLERANCE
         and not sliver.side_conflict
         and sliver.settle == "USDT"
     )
-    fee = sliver.fee
+    fee = -sliver.fee if sliver.fee is not None else None
     verified = (
         price_matches and fee is not None and sliver.funding_ok and sliver.funding is not None
     )
-    size = (
-        _money(sliver.contracts * sliver.contract_value)
-        if sliver.contract_value is not None
-        else None
-    )
-    gross = _money(sliver.realized) if price_matches and sliver.realized is not None else None
-    funding = sliver.funding if sliver.funding_ok else None
-    net = None
-    if verified and gross is not None and fee is not None and funding is not None:
-        net = _money(gross - fee - funding)
+    size = _money(sliver.contracts)
+    net = _money(sliver.realized) if verified and sliver.realized is not None else None
+    gross = None
+    if net is not None and fee is not None and funding is not None:
+        gross = _money(net + fee + funding)
     if net is None:
         result = TradeResult.OPEN
     elif net > 0:
@@ -894,11 +907,12 @@ def _position_draft(
 ) -> MirrorDraft:
     """One position, many closes. P&L and fees are BloFin's own figures.
 
-    Gross is the sum of positions-history ``realizedPnl`` and fees the sum of
-    positions-history ``fee``, exactly as BloFin reports them. Nothing is
-    derived from prices, sizes or contract values. Funding is BloFin's
-    funding-fee history when it covers the position; otherwise the funding
-    column stays NULL and net is realizedPnl minus fee. A missing BloFin field
+    Net is the sum of positions-history ``realizedPnl`` (BloFin's final result,
+    after fees and funding) and fees are minus the sum of ``fee`` (BloFin
+    reports a paid fee as negative). Nothing is derived from prices, sizes or
+    contract values. Funding is BloFin's funding-fee history when it covers the
+    position (else NULL); gross is net plus fees plus known funding. Size is
+    the sum of ``closePositions``, already in coins. A missing BloFin field
     leaves P&L pending (NULL) with a short reason; it is never estimated.
     """
     del window_begin
@@ -917,8 +931,8 @@ def _position_draft(
         reason = "missing_blofin_fee"
     elif any(item.settle not in {None, "USDT"} for item in group):
         reason = "non_usdt_settlement"
-    gross = sum((item.realized or Decimal(0) for item in group), Decimal(0))
-    fees = sum((item.fee or Decimal(0) for item in group), Decimal(0))
+    realized = sum((item.realized or Decimal(0) for item in group), Decimal(0))
+    fees = -sum((item.fee or Decimal(0) for item in group), Decimal(0))
     funding: Decimal | None = None
     if all(item.funding_ok and item.funding is not None for item in group):
         funding = sum((item.funding or Decimal(0) for item in group), Decimal(0))
@@ -927,7 +941,8 @@ def _position_draft(
     _fees, order_ids, _reason = _position_costs(
         group, all_slices, orders, conflicting_order_ids, positions
     )
-    net = None if reason else _money(gross - fees - (funding or Decimal(0)))
+    net = None if reason else _money(realized)
+    gross = realized + fees + (funding or Decimal(0))
     result = (
         TradeResult.OPEN
         if net is None
@@ -935,7 +950,7 @@ def _position_draft(
             TradeResult.WIN if net > 0 else TradeResult.LOSS if net < 0 else TradeResult.BREAKEVEN
         )
     )
-    size = _money(quantity * first.contract_value) if first.contract_value is not None else None
+    size = _money(quantity)
     return replace(
         drafts[0],
         history_ids=tuple(item.history_id for item in group),
@@ -2097,17 +2112,17 @@ def _without_verified_economics(built: BuildResult) -> BuildResult:
 
 
 def _without_funding(built: BuildResult) -> BuildResult:
-    """A capped funding read cannot prove funding; keep BloFin realizedPnl and fee."""
+    """A capped funding read cannot prove funding; keep BloFin realizedPnl and fee.
+
+    Net stays BloFin's realizedPnl (it already includes funding); gross becomes
+    net plus fees, and the funding column is unknown.
+    """
     closed = []
     for draft in built.closed:
         if draft.net_pnl is None or draft.gross_pnl is None or draft.fees is None:
             closed.append(draft)
             continue
-        net = _money(draft.gross_pnl - draft.fees)
-        result = (
-            TradeResult.WIN if net > 0 else TradeResult.LOSS if net < 0 else TradeResult.BREAKEVEN
-        )
-        closed.append(replace(draft, funding=None, net_pnl=net, result=result))
+        closed.append(replace(draft, funding=None, gross_pnl=_money(draft.net_pnl + draft.fees)))
     return replace(built, closed=tuple(closed))
 
 
