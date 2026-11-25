@@ -2261,10 +2261,14 @@ def reconcile_governed_demo_once(
     recovering after a boot refusal, from the idle cycle (M7), so open demo
     positions keep their journal/lifecycle rows current either way. It reads
     the demo venue and writes lifecycle rows; it never places an order.
+    After a reconcile that read the venue for every pending command, it
+    queues the opt-in daily demo summary once per UTC day (database reads
+    only; sent on a background thread, never raises).
     """
 
     if not settings.governed_blofin_demo_enabled:
         return ()
+    started = clock.now()
     from app.runtime.canonical import (
         ProductionCanonicalRuntime,
         build_production_canonical_runtime,
@@ -2284,6 +2288,11 @@ def reconcile_governed_demo_once(
         recovered = GovernedBloFinDemoLoop(runtime, settings, clock).reconcile_pending(session)
     for reason in recovered:
         logger.info("governed_demo_reconciliation", reason_code=reason, paper_only=True)
+    from app.services.demo_daily_summary import VENUE_MISS_MARKERS, send_demo_daily_summary_if_due
+
+    if not any(marker in reason for reason in recovered for marker in VENUE_MISS_MARKERS):
+        # The cycle start time: only a reconcile that began after the window counts.
+        send_demo_daily_summary_if_due(settings, session_factory, now=started)
     return recovered
 
 
