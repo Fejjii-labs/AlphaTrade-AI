@@ -1045,6 +1045,36 @@ def test_local_uncertain_demo_reservation_consumes_preview_capacity(world, monke
     assert world[3].post_count == 0
 
 
+def test_manual_refusal_before_post_stays_ambiguous_for_operator_recovery(world, monkeypatch):
+    """#494 follow-up: only governed worker plans convert a pre-POST refusal.
+
+    A manual demo plan keeps main's behaviour: the provider refuses during its
+    read-only preflight, before ``before_post``, and the send still stays
+    SEND_AMBIGUOUS with the reservation held for the manual operator recovery.
+    """
+    from app.db.models import VenueSubmitEffect
+    from app.schemas.execution_protocol import VenueSubmitEffectState
+
+    first = preview(world)
+    calls: list[str] = []
+
+    def refused_in_preflight(*, before_post, **kwargs):
+        calls.append("submit")
+        raise ValueError("Demo instrument constraints changed before dispatch.")
+
+    monkeypatch.setattr(world[4], "submit", refused_in_preflight)
+    status = confirm(world, first)
+    assert calls == ["submit"]
+    assert status.status == "ambiguous_operator_hold"
+    with world[0]() as session:
+        effect = session.scalar(select(VenueSubmitEffect))
+        assert effect is not None
+        assert effect.state is VenueSubmitEffectState.SEND_AMBIGUOUS
+        reservation = session.scalar(select(RiskReservation))
+        assert reservation.remaining_reserved_notional > 0
+    assert world[3].post_count == 0
+
+
 def test_manual_claim_without_fresh_account_policy_cannot_reserve(world):
     from app.schemas.execution_protocol import ExecutePaperPlanRequest
     from app.schemas.trade_plan import AuthorizationChannel, AuthorizationDecision

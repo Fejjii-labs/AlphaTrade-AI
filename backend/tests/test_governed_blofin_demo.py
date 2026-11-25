@@ -393,6 +393,7 @@ def _assert_sized_at_the_widened_zone(session, command, trade, learning, price) 
         "basis",
         "stale",
         "expiry",
+        "expiry_convert_fails",
         "depth_moved",
         "protection_wrongid",
         "protection_malformed",
@@ -432,9 +433,18 @@ def test_worker_venue_fills_journal_restart_and_protection(
     price = build_slice_trades(build_pattern_15m_bars())[-1].price
     venue = Venue(
         price,
-        behavior,
+        "expiry" if behavior == "expiry_convert_fails" else behavior,
         leverage="25" if behavior == "leverage_above_ceiling" else "10",
     )
+    if behavior == "expiry_convert_fails":
+        # #494 follow-up: a failure while converting a pre-POST refusal must roll
+        # back and leave the send ambiguous, never a half-converted state.
+        from app.services.venue_submit_dispatcher import VenueSubmitDispatcher
+
+        def failing_convert(self, **_kwargs):
+            raise RuntimeError("simulated conversion failure")
+
+        monkeypatch.setattr(VenueSubmitDispatcher, "_convert_refused_before_post", failing_convert)
 
     def late_safety_change() -> None:
         with factory() as session:
@@ -518,6 +528,7 @@ def test_worker_venue_fills_journal_restart_and_protection(
         "basis",
         "stale",
         "expiry",
+        "expiry_convert_fails",
         "depth_moved",
         "moved_11bps",
         "preflight_kill",
@@ -534,6 +545,14 @@ def test_worker_venue_fills_journal_restart_and_protection(
             )
             if behavior in {"permissions", "basis", "stale"}:
                 assert effect is None  # refused while planning; nothing to send
+            elif behavior == "expiry_convert_fails":
+                # The wrapper rolled back: still ambiguous, reservation still held.
+                assert effect is not None and effect.state is VenueSubmitEffectState.SEND_AMBIGUOUS
+                assert effect.uncertainty is True
+                reservation = session.scalar(select(RiskReservation))
+                assert reservation is not None
+                assert reservation.release_state is not RiskReservationReleaseState.RELEASED
+                assert blocked
             elif behavior == "preflight_fence":
                 # Another fence holder may own the send: stays ambiguous for lookup.
                 assert effect is not None and effect.state is VenueSubmitEffectState.SEND_AMBIGUOUS
