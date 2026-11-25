@@ -364,6 +364,8 @@ def demo_settings(**changes):
         "risk_model_v2_enabled": True,
         "governed_demo_data_mode_enabled": True,
         "governed_demo_partial_exits_enabled": True,
+        # The fixtures are 15m; the default (30m, 1h) is covered below.
+        "governed_demo_dline_timeframes": ["15m", "30m", "1h"],
     }
     settings = Settings(_env_file=None, **{**base, **changes})
     return settings.model_copy(update={"exchange_mode": ExchangeMode.PAPER_EXCHANGE_DEMO})
@@ -583,3 +585,29 @@ def test_later_scan_does_not_expire_a_traded_setup_row():
     result = scan([*COIL, *BE_PATH])
     events = detections(result, evaluated_at=START + timedelta(days=1))
     assert {e.state.value for e in events} == {"CONFIRMED"}
+
+
+def test_dline_demo_defaults_trade_30m_and_1h_with_a_one_percent_minimum_stop():
+    settings = Settings(_env_file=None)
+    assert settings.governed_demo_dline_timeframes == ["30m", "1h"]
+    assert settings.governed_demo_dline_min_stop_distance_percent == Decimal("1")
+    parsed = Settings(_env_file=None, governed_demo_dline_timeframes="1H, 30m")
+    assert parsed.governed_demo_dline_timeframes == ["1h", "30m"]
+
+
+def test_demo_dline_15m_is_refused_by_default():
+    loop, kwargs = demo_loop(demo_settings(governed_demo_dline_timeframes=["30m", "1h"]))
+    assert loop._plan_terms(**kwargs) == "dline_timeframe_disabled_on_demo"
+
+
+@pytest.mark.parametrize("short", [False, True])
+def test_demo_dline_stop_closer_than_the_minimum_is_refused(short):
+    # Stop 99.9 / 100.1. Entry 100.5 / 99.5 is 0.6% away: R:R passes, fees would not.
+    loop, kwargs = demo_loop(demo_settings(), short, price="99.5" if short else "100.5")
+    assert loop._plan_terms(**kwargs) == "dline_stop_too_close_for_fees"
+    loop, kwargs = demo_loop(
+        demo_settings(governed_demo_dline_min_stop_distance_percent=Decimal("0.5")),
+        short,
+        price="99.5" if short else "100.5",
+    )
+    assert loop._plan_terms(**kwargs) != "dline_stop_too_close_for_fees"
