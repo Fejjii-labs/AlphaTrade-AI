@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.telegram_activation.identity import bot_identity_mismatch, token_bot_user_id
 from app.telegram_paper_agent.contracts import DiscussionIntent
 from app.telegram_security.contracts import TelegramInboundUpdate
-from tests.support.telegram_paper_agent import enabled_paper_agent_world
+from tests.support.telegram_paper_agent import assert_no_internal_ids, enabled_paper_agent_world
 from tests.support.telegram_security import message_identity
 
 
@@ -29,8 +29,10 @@ def test_persisted_candidate_discussion_does_not_invent_assessment() -> None:
     assert result.intent is DiscussionIntent.EXPLAIN_EVIDENCE
     assert result.reply_outbox is not None
     text = result.reply_outbox.text
-    assert str(world.candidate.candidate_id) in text
-    assert world.candidate.evidence_window_hash in text
-    assert "not replayed" in text
+    assert_no_internal_ids(text)
+    assert text.startswith("BTCUSDT short setup (15m)\n")
+    # The assessment is not on this path, so no setup-check result is invented.
+    assert "Setup check" not in text
+    assert "The full setup check isn't available here." in text
     assert result.executed is False
     assert result.candidate_minted is False

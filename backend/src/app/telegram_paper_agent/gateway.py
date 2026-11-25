@@ -269,9 +269,10 @@ class TelegramPaperAgent:
                 candidate_alert=alert,
                 converged=alert.converged,
             )
+        watcher_setup = watcher_notice is not None and watcher_notice.published
         kind = (
             PaperNotificationKind.WATCHER_CONFIRMED_SETUP
-            if watcher_notice is not None and watcher_notice.published
+            if watcher_setup
             else PaperNotificationKind.CANDIDATE_ACTIVE
         )
         intent = self._notification(
@@ -280,7 +281,7 @@ class TelegramPaperAgent:
             resource_type=PAPER_RESOURCE_CANDIDATE,
             resource_id=candidate.candidate_id,
             content_hash=candidate.content_hash,
-            text=format_confirmed_setup_footer(candidate_id=str(candidate.candidate_id)),
+            text=alert.outbox.text if watcher_setup else format_confirmed_setup_footer(),
             candidate_id=candidate.candidate_id,
             watcher_lineage_id=None if watcher_notice is None else watcher_notice.lineage_id,
             watcher_reason_code=None if watcher_notice is None else watcher_notice.reason_code,
@@ -293,6 +294,17 @@ class TelegramPaperAgent:
             resource_id=candidate.candidate_id,
             notification_id=persisted.intent_id,
         )
+        if watcher_setup:
+            # The setup alert is the only message. Telegram presents no paper action
+            # for a Watcher setup, so no confirmation row or nonce exists and any
+            # "I confirm ..." reply fails closed. Replies still discuss this thread.
+            return PaperNotificationProjection(
+                intent=persisted,
+                outbox=alert.outbox,
+                thread=thread,
+                candidate_alert=alert,
+                converged=prior is not None or alert.converged,
+            )
         confirmations = self._present_candidate_actions(
             thread=thread, recipient=recipient, intent=alert.intent
         )
@@ -300,7 +312,7 @@ class TelegramPaperAgent:
             organization_id=recipient.organization_id,
             idempotency_key=_thread_key(persisted.identity_hash),
         )
-        footer = format_confirmed_setup_footer(candidate_id=str(candidate.candidate_id))
+        footer = format_confirmed_setup_footer()
         if confirmations:
             footer = f"{footer}\n\n{format_paper_confirmation(confirmations[0])}"
         outbox = self._protocol.enqueue_outbound(
@@ -491,20 +503,14 @@ class TelegramPaperAgent:
                 thread=thread,
                 outcome=outcome,
                 intent=DiscussionIntent.CONFIRM_MUTATION,
-                reason=(
-                    "No identity-bound paper confirmation is presented. "
-                    "Bare chat text is not trading or mutation authority."
-                ),
+                reason="Telegram can't change this setup. Nothing was changed.",
             )
         if outcome.receipt.state is not ActionReceiptState.APPLIED:
-            reason = outcome.reason_code or "confirmation_not_applied"
             return self._refuse(
                 thread=thread,
                 outcome=outcome,
                 intent=DiscussionIntent.CONFIRM_MUTATION,
-                reason=(
-                    f"Paper confirmation was not applied ({reason}). No execution. No live order."
-                ),
+                reason="That confirmation didn't go through. Nothing was changed.",
             )
         candidate_result = None
         if presented.resource_type == PAPER_RESOURCE_CANDIDATE:
@@ -515,12 +521,7 @@ class TelegramPaperAgent:
         reply = self._reply(
             thread=thread,
             identity=identity,
-            text=(
-                f"Paper action {presented.action.value} recorded. "
-                f"candidate_mutated="
-                f"{False if candidate_result is None else candidate_result.candidate_mutated}. "
-                "No execution. No live order."
-            ),
+            text=f"{presented.action.value.capitalize()} recorded. No order was placed.",
             intent=DiscussionIntent.CONFIRM_MUTATION,
         )
         return PaperDiscussionResult(
@@ -773,10 +774,7 @@ class TelegramPaperAgent:
     ) -> str:
         del identity
         if candidate is None:
-            return (
-                "No Candidate is bound to this chat thread. "
-                "Telegram cannot mint a Candidate from this request."
-            )
+            return "There is no open setup to act on right now."
         action = {
             DiscussionIntent.REQUEST_REJECT: TelegramRemoteAction.REJECT,
             DiscussionIntent.REQUEST_SKIP: TelegramRemoteAction.SKIP,
@@ -797,9 +795,8 @@ class TelegramPaperAgent:
                 f"{format_paper_confirmation(matches[0])}"
             )
         return (
-            f"{action.value} requires the identity presented on the Candidate alert. "
-            "Reply I confirm using that exact paper confirmation identity. "
-            "Telegram still will not execute."
+            f"Telegram can't {action.value.lower()} this setup. "
+            "You can still ask me anything about it."
         )
 
     def _resolve_confirm_payload(
@@ -859,7 +856,7 @@ class TelegramPaperAgent:
                 trade_id=None,
             )
             if journal is None:
-                return "No journal outcome is bound for this tenant."
+                return "No closed paper trades yet."
             return format_journal_outcome_text(journal)
         if intent is DiscussionIntent.LEARNING_SUMMARY:
             learning = self._context.learning_summary(
@@ -868,7 +865,7 @@ class TelegramPaperAgent:
                 candidate_id=None if candidate is None else candidate.candidate_id,
             )
             if learning is None:
-                return "No learning facts are bound for this tenant."
+                return "No learning results yet."
             return format_learning_summary_text(learning)
         if candidate is not None and assessment is None:
             if intent in {
@@ -888,20 +885,13 @@ class TelegramPaperAgent:
                     organization_id=recipient_org, user_id=recipient_user, strategy_id=None
                 )
                 if draft is None:
-                    return (
-                        "Strategy discussion is open. Telegram cannot approve, compile, "
-                        "or activate a strategy."
-                    )
-                return (
-                    f"{draft.summary}\ncompiled={draft.compiled} approved={draft.approved}. "
-                    "Confirmation would still not compile or approve."
-                )
+                    return "Happy to talk strategy. Telegram can't approve or change one."
+                return f"{draft.summary}\nNot approved. Telegram can't approve or change it."
             if intent is DiscussionIntent.MARKET_CONTEXT:
-                return "Market context requires a bound Candidate evidence window."
+                return "There is no open setup to show market context for right now."
             return (
-                "I can discuss paper Watcher alerts, Candidates, strategy, market context, "
-                "paper status, journal outcomes, and learning summaries. "
-                "No Telegram message is trading authority."
+                "I can talk about your setups, strategy, market context, paper status, "
+                "closed trades and learning results. I can't place orders."
             )
         if intent is DiscussionIntent.EXPLAIN_EVIDENCE and window is not None:
             return explain_evidence(window=window, assessment=assessment)

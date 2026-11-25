@@ -32,7 +32,7 @@ from app.schemas.trade_plan import AuthorizationState, TradePlanRevision
 from app.services.audit_service import AuditService
 from app.services.canonical_serialization import canonical_sha256
 from app.services.execution_claim import conservative_reservation
-from app.services.execution_exposure import linear_quote_exposure
+from app.services.execution_exposure import linear_quote_exposure, stored_money
 from app.services.execution_fills import adjust_symbol_map, fill_content_hash
 from app.services.safety_epoch import SafetyEpochService, release_demo_daily_loss
 
@@ -418,8 +418,13 @@ def resolve_manual_lifecycle(
         if (
             accounting.actual_notional < exposure
             or accounting.reserved_notional < unused
-            or Decimal(str(accounting.symbol_actual.get(reservation.instrument, "0"))) < exposure
-            or Decimal(str(accounting.symbol_reserved.get(reservation.instrument, "0"))) < unused
+            # Maps written before 8-dp rounding may hold extra digits; read them as stored.
+            or stored_money(Decimal(str(accounting.symbol_actual.get(reservation.instrument, "0"))))
+            < exposure
+            or stored_money(
+                Decimal(str(accounting.symbol_reserved.get(reservation.instrument, "0")))
+            )
+            < unused
         ):
             raise TradingPolicyError(
                 "Account reservation accounting is inconsistent; scoped release refused."

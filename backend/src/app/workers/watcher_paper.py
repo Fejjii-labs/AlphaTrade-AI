@@ -1717,6 +1717,7 @@ class WatcherPaperRuntime:
         from app.services.autonomous_trading import AutonomousMode
 
         candidate = discussion.candidate
+        mode: AutonomousMode | None = None
         if report.kill_switch_active or self._settings.global_kill_switch_active:
             proof = _proof(candidate, "blocked", "kill_switch_active")
         else:
@@ -1725,6 +1726,7 @@ class WatcherPaperRuntime:
                 session,
                 target.organization_id,
             )
+            mode = resolution.mode
             if resolution.refusal is not None:
                 proof = _proof(candidate, "blocked", resolution.refusal)
             elif resolution.mode is AutonomousMode.OFF:
@@ -1802,6 +1804,17 @@ class WatcherPaperRuntime:
             replayed=proof.replayed,
             paper_only=True,
         )
+        if (
+            mode is AutonomousMode.BLOFIN_DEMO
+            and proof.stage == "blocked"
+            and proof.reason_code in {"daily_loss_limit", "insufficient_daily_loss_allocation"}
+        ):
+            # The page says DEMO: internal paper refusals of the same budget are not paged.
+            from app.services.daily_loss_alert import page_daily_loss_limit_reached
+
+            page_daily_loss_limit_reached(
+                self._settings, organization_id=target.organization_id, now=self._clock.now()
+            )
         return replace(
             report,
             paper_loop_stage=proof.stage,
@@ -2261,10 +2274,14 @@ def reconcile_governed_demo_once(
     recovering after a boot refusal, from the idle cycle (M7), so open demo
     positions keep their journal/lifecycle rows current either way. It reads
     the demo venue and writes lifecycle rows; it never places an order.
+    After a reconcile that read the venue for every pending command, it
+    queues the opt-in daily demo summary once per UTC day (database reads
+    only; sent on a background thread, never raises).
     """
 
     if not settings.governed_blofin_demo_enabled:
         return ()
+    started = clock.now()
     from app.runtime.canonical import (
         ProductionCanonicalRuntime,
         build_production_canonical_runtime,
@@ -2284,6 +2301,11 @@ def reconcile_governed_demo_once(
         recovered = GovernedBloFinDemoLoop(runtime, settings, clock).reconcile_pending(session)
     for reason in recovered:
         logger.info("governed_demo_reconciliation", reason_code=reason, paper_only=True)
+    from app.services.demo_daily_summary import VENUE_MISS_MARKERS, send_demo_daily_summary_if_due
+
+    if not any(marker in reason for reason in recovered for marker in VENUE_MISS_MARKERS):
+        # The cycle start time: only a reconcile that began after the window counts.
+        send_demo_daily_summary_if_due(settings, session_factory, now=started)
     return recovered
 
 

@@ -55,9 +55,18 @@ A Telegram message is never trading authority. The layer refuses:
 
 `APPROVE` remains protocol `AuthorizationIntent` only (`executes=false`).
 
-Reject/Skip of a Candidate requires an exact presented confirmation identity
-(footer or `I confirm reject` / `I confirm skip` bound to one issued nonce).
-Bare `I confirm` is not mutation authority when multiple actions were presented.
+A Watcher `CONFIRMED_SETUP` sends one message: the setup alert. Telegram
+presents no Reject/Skip/Approve for it and issues no confirmation row or nonce,
+so `I confirm reject`, or a pasted identity block, fails closed and nothing
+changes. Replies to the alert still discuss that Candidate's thread.
+
+Only a Candidate alert projected without a Watcher notice still presents
+identity-bound actions: Reject/Skip need an exact presented confirmation
+identity (footer, or `I confirm reject` / `I confirm skip` bound to one issued
+nonce). Bare `I confirm` is not mutation authority.
+
+End-user text is short plain English with bullets: no ids, hashes, enum names
+or field names. Those stay in the stored records.
 
 ## Durability
 

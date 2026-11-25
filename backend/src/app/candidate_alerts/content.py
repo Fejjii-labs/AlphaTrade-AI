@@ -204,7 +204,8 @@ def render_strategy_alert_text(
         )
     text = "\n".join(
         (
-            f"Symbol: {symbol}",
+            # "binance:usdm_futures:perpetual:BTCUSDT" reads as "BTCUSDT".
+            f"Symbol: {symbol.rsplit(':', 1)[-1]}",
             f"Strategy: {strategy_display_name(strategy)}",
             f"Direction: {direction}",
             *((reason,) if reason else ()),
