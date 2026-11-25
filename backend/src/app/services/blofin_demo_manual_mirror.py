@@ -938,9 +938,7 @@ def _position_draft(
         funding = sum((item.funding or Decimal(0) for item in group), Decimal(0))
     # Order ids only link the journal row to its BloFin orders; they do not
     # gate or change the BloFin P&L.
-    _fees, order_ids, _reason = _position_costs(
-        group, all_slices, orders, conflicting_order_ids, positions
-    )
+    order_ids = _position_order_ids(group, all_slices, orders, conflicting_order_ids)
     net = None if reason else _money(realized)
     gross = realized + fees + (funding or Decimal(0))
     result = (
@@ -973,17 +971,18 @@ def _position_draft(
     )
 
 
-def _position_costs(
+def _position_order_ids(
     group: list[_Slice],
     all_slices: list[_Slice],
     orders: list[dict[str, Any]],
     conflicting_order_ids: set[str],
-    positions: list[dict[str, Any]],
-) -> tuple[Decimal | None, tuple[str, ...], str | None]:
-    """Prove both order sides and their fee sign/total against positions history.
+) -> tuple[str, ...]:
+    """BloFin order ids that belong to this position lifetime, to link the row.
 
     Without an explicit positionId, only an exclusive instrument/time window
-    permits attribution. Never add order P&L to the positions-history P&L.
+    permits attribution; an ambiguous, unnamed or conflicting order links
+    nothing. Order fees, sizes and P&L are never read: the journal economics
+    are BloFin's positions-history figures.
     """
     first = group[0]
     start, end = first.opened_at, max(i.closed_at for i in group)
@@ -1012,7 +1011,7 @@ def _position_costs(
                 if when is None or not start <= when <= end:
                     continue
                 if any(opened <= when <= closed for opened, closed in other_lifetimes.items()):
-                    return None, (), "ambiguous_order_position"
+                    return ()
         else:
             when = _time(row.get("createTime"))
             if when is None or not start <= when <= end:
@@ -1024,59 +1023,14 @@ def _position_costs(
                 and start <= other.closed_at
                 for other in all_slices
             ):
-                return None, (), "ambiguous_order_position"
+                return ()
         oid = row.get("orderId")
         if not isinstance(oid, str) or not oid:
-            return None, (), "missing_order_id"
+            return ()
         if oid in conflicting_order_ids:
-            return None, (), "conflicting_order_id"
+            return ()
         by_id[oid] = row
-    entry_qty = close_qty = entry_fee = close_fee = closing_pnl = Decimal(0)
-    entry_seen = close_seen = False
-    for row in by_id.values():
-        qty = _decimal(row.get("filledSize"))
-        if qty == 0:
-            continue
-        is_entry = row.get("side") == first.side
-        fee = _decimal(row.get("fee"))
-        if fee is None:
-            return None, tuple(by_id), "missing_entry_fee" if is_entry else "missing_close_fee"
-        if qty is None or qty < 0 or row.get("side") not in {"buy", "sell"}:
-            return None, tuple(by_id), "missing_order_quantity"
-        pnl = _decimal(row.get("pnl"))
-        if is_entry:
-            entry_seen = True
-            entry_qty += qty
-            entry_fee += fee
-            if pnl != 0:
-                return None, tuple(by_id), "ambiguous_entry_order"
-        else:
-            close_seen = True
-            close_qty += qty
-            close_fee += fee
-            if pnl is None:
-                return None, tuple(by_id), "missing_close_pnl"
-            closing_pnl += pnl
-    if not entry_seen:
-        return None, tuple(by_id), "missing_entry_fee"
-    if not close_seen:
-        return None, tuple(by_id), "missing_close_fee"
-    quantity = sum((item.contracts for item in group), Decimal(0))
-    remaining = sum(
-        (
-            abs(_decimal(p.get("positions")) or Decimal(0))
-            for p in positions
-            if p.get("positionId") == first.position_id
-        ),
-        Decimal(0),
-    )
-    if close_qty != quantity or entry_qty != quantity + remaining:
-        return None, tuple(by_id), "incomplete_position_history"
-    realized = sum((item.realized or Decimal(0) for item in group), Decimal(0))
-    if abs(closing_pnl - realized) > _TOLERANCE:
-        return None, tuple(by_id), "closing_pnl_mismatch"
-    # A still-open position allocates entry costs to its realized quantity only.
-    return entry_fee * quantity / entry_qty + close_fee, tuple(by_id), None
+    return tuple(by_id)
 
 
 def _open_direction(row: dict[str, Any], quantity: Decimal) -> TradeDirection | None:
