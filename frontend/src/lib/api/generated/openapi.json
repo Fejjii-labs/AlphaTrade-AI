@@ -3982,6 +3982,7 @@
           "risk_settings_updated",
           "autonomous_trading_settings_updated",
           "notification_preferences_updated",
+          "demo_daily_summary_queued",
           "notification_test_sent",
           "alert_telegram_delivery_requested",
           "alert_telegram_delivery_sent",
