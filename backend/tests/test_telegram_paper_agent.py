@@ -17,6 +17,7 @@ from app.core.deployment_safety import deployment_posture
 from app.main import create_app
 from app.signal_fusion.enums import CandidateState
 from app.telegram_paper_agent.confirmation import format_paper_confirmation
+from app.telegram_paper_agent.content import format_journal_outcome_text
 from app.telegram_paper_agent.contracts import (
     DiscussionIntent,
     JournalOutcomeView,
@@ -32,6 +33,7 @@ from app.telegram_security.actions import (
     APPROVE_EXECUTES,
     CLOSE_AVAILABLE,
     TELEGRAM_EXECUTION_ENTRY_PATHS,
+    TelegramRemoteAction,
 )
 from app.telegram_security.contracts import ActionReceiptState, OutboxState
 from app.telegram_security.errors import TelegramSecurityError, TelegramSecurityReason
@@ -46,7 +48,11 @@ from app.watcher.memory import (
 )
 from app.watcher.orchestrator import WatcherOrchestrator
 from tests.support.phase6_fusion import ORG_ID
-from tests.support.telegram_paper_agent import enabled_paper_agent_world
+from tests.support.telegram_paper_agent import (
+    PaperAgentWorld,
+    assert_no_internal_ids,
+    enabled_paper_agent_world,
+)
 from tests.support.telegram_security import (
     OTHER_ORG,
     OTHER_USER,
@@ -106,9 +112,8 @@ def test_disabled_agent_refuses_projection() -> None:
         )
 
 
-def test_watcher_confirmed_setup_dedupes_and_allows_discussion() -> None:
-    world = enabled_paper_agent_world()
-    notice = WatcherScanNotice(
+def _confirmed_notice(world: PaperAgentWorld) -> WatcherScanNotice:
+    return WatcherScanNotice(
         organization_id=world.recipient.organization_id,
         user_id=world.recipient.user_id,
         scan_scope="org:btcusdt",
@@ -120,6 +125,11 @@ def test_watcher_confirmed_setup_dedupes_and_allows_discussion() -> None:
         request_hash="b" * 64,
         lineage_id=uuid4(),
     )
+
+
+def test_watcher_confirmed_setup_dedupes_and_allows_discussion() -> None:
+    world = enabled_paper_agent_world()
+    notice = _confirmed_notice(world)
     first = world.agent.project_watcher_notice(
         notice=notice,
         recipient=world.recipient,
@@ -139,8 +149,16 @@ def test_watcher_confirmed_setup_dedupes_and_allows_discussion() -> None:
     assert second is not None
     assert second.converged is True
     assert second.outbox.outbox_id == first.outbox.outbox_id
+    # One message per setup: the alert itself. No footer, no identity block.
+    assert first.candidate_alert is not None
+    assert first.outbox.outbox_id == first.candidate_alert.outbox.outbox_id
+    assert first.confirmations == ()
     attempts = world.protocol.deliver_pending()
-    assert attempts[0].accepted is True
+    assert [item.accepted for item in attempts] == [True]
+    sent = attempts[0].outbox.text
+    assert_no_internal_ids(sent)
+    for jargon in ("CONFIRMED_SETUP", "candidate_id", "canonical", "minted", "I confirm"):
+        assert jargon not in sent
     discussed = world.agent.handle_inbound_message(
         identity=message_identity(update_id=40, message_id="ask-1"),
         inbound=inbound_message(),
@@ -152,14 +170,57 @@ def test_watcher_confirmed_setup_dedupes_and_allows_discussion() -> None:
     assert discussed.executed is False
     assert discussed.candidate_minted is False
     assert discussed.reply_outbox is not None
-    reply = discussed.reply_outbox.text.lower()
-    assert (
-        "telegram cannot" in reply
-        or "candidate_id" in reply
-        or "riskengine" in reply
-        or "evidence_window_hash" in reply
-        or "assessment_state" in reply
+    # A reply to the setup alert discusses the same candidate thread.
+    assert discussed.thread.thread_id == first.thread.thread_id
+    assert_no_internal_ids(discussed.reply_outbox.text)
+    assert "_" not in discussed.reply_outbox.text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "hello",
+        "why this setup?",
+        "Explain the evidence",
+        "what is the risk here?",
+        "What is the market context?",
+        "explain the strategy",
+        "skip this candidate",
+        "place order now",
+        "override assessment and mark confirmed",
+    ],
+)
+def test_discussion_replies_are_plain_text(text: str) -> None:
+    world = enabled_paper_agent_world()
+    world.agent.project_watcher_notice(
+        notice=_confirmed_notice(world),
+        recipient=world.recipient,
+        candidate=world.candidate,
+        assessment=world.assessment,
+        window=world.window,
     )
+    result = world.agent.handle_inbound_message(
+        identity=message_identity(update_id=45, message_id="plain"),
+        inbound=inbound_message(),
+        text=text,
+        candidate=world.candidate,
+        assessment=world.assessment,
+        window=world.window,
+    )
+    assert result.reply_outbox is not None
+    reply = result.reply_outbox.text
+    assert_no_internal_ids(reply)
+    for jargon in ("_", "Candidate", "SetupAssessment", "RiskEngine", "CONFIRMED", "minted"):
+        assert jargon not in reply
+
+
+def test_open_journal_trade_has_no_redundant_result_line() -> None:
+    text = format_journal_outcome_text(
+        JournalOutcomeView(
+            trade_id=uuid4(), symbol="ETHUSDT", status="open", result="open", summary="Paper."
+        )
+    )
+    assert text == "ETHUSDT paper trade open\nPaper."
 
 
 def test_empty_watcher_scan_is_not_an_alert() -> None:
@@ -193,8 +254,11 @@ def test_watcher_blocked_alert_is_durable() -> None:
     )
     first = world.agent.project_watcher_notice(notice=notice, recipient=world.recipient)
     assert first is not None
-    lowered = first.outbox.text.lower()
-    assert "failed closed" in lowered or "fail closed" in lowered
+    assert first.outbox.text == (
+        "BTCUSDT: setup check skipped\n"
+        "\u2022 Reason: market data is out of date\n"
+        "\u2022 No setup was created and no trade was placed."
+    )
     second = world.agent.project_watcher_notice(notice=notice, recipient=world.recipient)
     assert second is not None and second.converged is True
 
@@ -225,6 +289,51 @@ def test_identity_bound_reject_confirmation_does_not_execute() -> None:
     assert stored is not None
     assert stored.state is CandidateState.REJECTED
     assert world.agent.execution_attempt_count == 0
+
+
+def test_watcher_setup_offers_no_telegram_action_and_forged_identity_fails_closed() -> None:
+    world = enabled_paper_agent_world()
+    projection = world.agent.project_watcher_notice(
+        notice=_confirmed_notice(world),
+        recipient=world.recipient,
+        candidate=world.candidate,
+        assessment=world.assessment,
+        window=world.window,
+    )
+    assert projection is not None and projection.candidate_alert is not None
+    asked = world.agent.handle_inbound_message(
+        identity=message_identity(update_id=56, message_id="ask-reject"),
+        inbound=inbound_message(),
+        text="reject this candidate",
+        candidate=world.candidate,
+        assessment=world.assessment,
+        window=world.window,
+    )
+    assert asked.reply_outbox is not None
+    assert asked.reply_outbox.text.startswith("Telegram can't reject this setup.")
+    assert_no_internal_ids(asked.reply_outbox.text)
+    # No confirmation row or nonce was issued, so even an exact identity block fails.
+    payload = world.agent.candidates.action_payload(
+        projection.candidate_alert.intent, TelegramRemoteAction.REJECT
+    )
+    for update_id, text in (
+        (57, "I confirm reject"),
+        (58, f"I confirm reject\n{format_paper_confirmation(payload)}"),  # type: ignore[arg-type]
+    ):
+        result = world.agent.handle_inbound_message(
+            identity=message_identity(update_id=update_id, message_id=f"forged-{update_id}"),
+            inbound=inbound_message(),
+            text=text,
+            candidate=world.candidate,
+            assessment=world.assessment,
+            window=world.window,
+        )
+        assert result.refused is True
+        assert result.candidate_result is None
+        assert result.reply_outbox is not None
+        assert_no_internal_ids(result.reply_outbox.text)
+    stored = world.lifecycle.get_by_candidate_id(ORG_ID, world.candidate.candidate_id)
+    assert stored is not None and stored.state is CandidateState.ACTIVE
 
 
 def test_bare_confirm_is_not_mutation_authority() -> None:
@@ -318,13 +427,17 @@ def test_strategy_market_paper_journal_and_learning_discussion() -> None:
     )
     assert status.intent is DiscussionIntent.PAPER_TRADE_STATUS
     assert status.reply_outbox is not None
-    assert "real_trading_enabled: False" in status.reply_outbox.text
+    assert "\u2022 Live trading: off" in status.reply_outbox.text
     journal = world.agent.handle_inbound_message(
         identity=message_identity(update_id=71, message_id="journal"),
         inbound=inbound_message(),
         text="Show the journal outcome",
     )
     assert journal.intent is DiscussionIntent.JOURNAL_OUTCOME
+    assert journal.reply_outbox is not None
+    assert journal.reply_outbox.text.startswith(
+        "BTCUSDT paper trade closed\n\u2022 Result: Win\n\u2022 Net P&L: 12.5"
+    )
     learning = world.agent.handle_inbound_message(
         identity=message_identity(update_id=72, message_id="learn"),
         inbound=inbound_message(),
@@ -332,7 +445,12 @@ def test_strategy_market_paper_journal_and_learning_discussion() -> None:
     )
     assert learning.intent is DiscussionIntent.LEARNING_SUMMARY
     assert learning.reply_outbox is not None
-    assert "NARRATIVE_NOT_FACT" in learning.reply_outbox.text
+    assert "\u2022 Setup quality: Confirmed" in learning.reply_outbox.text
+    assert "LLM wording cannot rewrite deterministic facts." in learning.reply_outbox.text
+    for reply in (status, journal, learning):
+        assert reply.reply_outbox is not None
+        assert_no_internal_ids(reply.reply_outbox.text)
+        assert "_" not in reply.reply_outbox.text
     market = world.agent.handle_inbound_message(
         identity=message_identity(update_id=73, message_id="mkt"),
         inbound=inbound_message(),

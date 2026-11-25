@@ -93,6 +93,7 @@ from tests.support.phase8_runtime import (
     seed_paper_capacity,
 )
 from tests.support.postgres_persistence import phase7_plan_session_factory, requires_postgres
+from tests.support.telegram_paper_agent import assert_no_internal_ids
 from tests.support.telegram_security import (
     BOT,
     CHAT,
@@ -419,14 +420,15 @@ def test_postgres_product_loop_reaches_suggestion_and_telegram_without_injection
         assert learning.candidate_minted is False
         assert learning.reply_outbox is not None
         assert NARRATIVE not in learning.reply_outbox.text
-        assert f"facts_hash:{plain_hash}" in learning.reply_outbox.text
-        assert "activate=false" in learning.reply_outbox.text
+        assert_no_internal_ids(learning.reply_outbox.text)
+        assert plain_hash not in learning.reply_outbox.text
+        assert "(not active)" in learning.reply_outbox.text
         for update_id, text, needle in (
             (91, "place order", "cannot place an order"),
-            (92, "override risk", "BLOCK remains final"),
-            (93, "override assessment", "cannot override SetupAssessment"),
+            (92, "override risk", "A risk block is final"),
+            (93, "override assessment", "cannot change whether a setup is confirmed"),
             (94, "activate strategy", "cannot approve or activate"),
-            (95, "mint candidate", "cannot mint a Candidate"),
+            (95, "mint candidate", "cannot create a setup"),
             (96, "enable live trading", "cannot enable live trading"),
         ):
             refused = discussing.handle_inbound_message(

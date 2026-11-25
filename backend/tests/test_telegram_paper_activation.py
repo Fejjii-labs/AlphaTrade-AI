@@ -271,8 +271,8 @@ def test_activation_path_is_idempotent_bounded_and_confirmation_gated() -> None:
     assert first.outbox.idempotency_key == second.outbox.idempotency_key
     world.transport.fail_next(1)
     delivered = world.controller.deliver(limit=10)
-    assert any(not item.accepted for item in delivered)
-    assert any(item.outbox.state is OutboxState.ACKNOWLEDGED for item in delivered)
+    # The setup alert is the only message: no identity-block footer follows it.
+    assert [item.accepted for item in delivered] == [False]
     sent_after_failure = world.transport.send_count
     assert world.controller.deliver(limit=10) == []
     assert world.transport.send_count == sent_after_failure
@@ -317,30 +317,21 @@ def test_activation_path_is_idempotent_bounded_and_confirmation_gated() -> None:
     assert world.agent.execution_attempt_count == 0
     assert world.agent.candidate_mint_attempt_count == 0
     assert world.agent.live_trading_enable_attempt_count == 0
-    approved = world.agent.handle_inbound_message(
-        identity=_identity(update_id=40, message_id="approve"),
-        inbound=_inbound(),
-        text="I confirm approve",
-        candidate=world.candidate,
-        assessment=world.assessment,
-        window=world.window,
-    )
-    assert approved.telegram_outcome.authorization_intent is not None
-    assert approved.telegram_outcome.authorization_intent.executes is False
-    still_active = world.lifecycle.get_by_candidate_id(ORG_ID, world.candidate.candidate_id)
-    assert still_active is not None and still_active.state is CandidateState.ACTIVE
-    rejected = world.agent.handle_inbound_message(
-        identity=_identity(update_id=41, message_id="reject"),
-        inbound=_inbound(),
-        text="I confirm reject",
-        candidate=world.candidate,
-        assessment=world.assessment,
-        window=world.window,
-    )
-    assert rejected.candidate_result is not None
-    assert rejected.candidate_result.candidate_mutated is True
+    # A Watcher setup presents no Telegram action, so named confirmations fail closed.
+    for update_id, text in ((40, "I confirm approve"), (41, "I confirm reject")):
+        refused = world.agent.handle_inbound_message(
+            identity=_identity(update_id=update_id, message_id=f"confirm-{update_id}"),
+            inbound=_inbound(),
+            text=text,
+            candidate=world.candidate,
+            assessment=world.assessment,
+            window=world.window,
+        )
+        assert refused.refused is True
+        assert refused.candidate_result is None
+        assert refused.telegram_outcome.authorization_intent is None
     final = world.lifecycle.get_by_candidate_id(ORG_ID, world.candidate.candidate_id)
-    assert final is not None and final.state is CandidateState.REJECTED
+    assert final is not None and final.state is CandidateState.ACTIVE
     discussion_audits = [event.event_type for event in world.protocol.store.list_audits()]
     assert "message_applied" in discussion_audits
 
@@ -394,6 +385,16 @@ def test_outbound_rate_limit_defers_without_a_second_send() -> None:
     world = _world(per_chat=1)
     world.controller.arm()
     _project(world)
+    # A second chat message (the setup alert is now a single message).
+    world.protocol.enqueue_outbound(
+        organization_id=world.recipient.organization_id,
+        user_id=world.recipient.user_id,
+        binding_id=world.recipient.binding_id,
+        bot_id=BOT,
+        chat_id=CHAT,
+        text="second message",
+        idempotency_key="paper-reply:rate-limit",
+    )
     first = world.controller.deliver(limit=10)
     assert world.transport.send_count == 1
     assert any(item.error_code == RATE_LIMITED_ERROR for item in first)

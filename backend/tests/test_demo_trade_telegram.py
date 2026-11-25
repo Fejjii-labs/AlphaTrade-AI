@@ -108,7 +108,7 @@ def test_close_text_labels_gross_r_and_shows_net_pnl_only_when_stored() -> None:
         pnl_display=None,
     )
     assert "Strategy: unlabeled" in text
-    assert "Exit: target_hit" in text
+    assert "Exit: Target hit" in text
     assert "Final R (gross, before fees): 1.85R" in text
     assert "Net P&L" not in text
     with_pnl = format_demo_trade_closed_text(
@@ -120,7 +120,7 @@ def test_close_text_labels_gross_r_and_shows_net_pnl_only_when_stored() -> None:
         final_r="1.85R",
         pnl_display="+18.50 USDT",
     )
-    assert "Exit: closed" in with_pnl
+    assert "Exit: Closed" in with_pnl
     assert with_pnl.endswith("Net P&L: +18.50 USDT")
 
 

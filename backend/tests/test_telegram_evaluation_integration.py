@@ -58,7 +58,7 @@ from tests.support.paper_evaluation import (
     make_eval_outcome,
 )
 from tests.support.phase6_fusion import ACCOUNT_ID
-from tests.support.telegram_paper_agent import enabled_paper_agent_world
+from tests.support.telegram_paper_agent import assert_no_internal_ids, enabled_paper_agent_world
 from tests.support.telegram_security import (
     OTHER_ORG,
     inbound_message,
@@ -341,10 +341,11 @@ def test_journal_attribution_learning_keeps_facts_apart_from_narrative() -> None
     assert learning.reply_outbox is not None
     reply = learning.reply_outbox.text
     assert NARRATIVE not in reply
-    assert f"facts_hash:{plain.facts.content_hash}" in reply
-    assert "activate=false" in reply
-    assert "counterfactual_pnl:none" in reply
-    assert str(plain.facts.strategy_overall.average_mfe) in reply
+    assert_no_internal_ids(reply)
+    assert plain.facts.content_hash not in reply
+    assert "(not active)" in reply
+    assert "\u2022 Counterfactual P&L: None" in reply
+    assert f"\u2022 Average MFE: {plain.facts.strategy_overall.average_mfe}" in reply
     journal_reply = agent.handle_inbound_message(
         identity=message_identity(update_id=71, message_id="journal-1"),
         inbound=inbound_message(),
@@ -354,11 +355,11 @@ def test_journal_attribution_learning_keeps_facts_apart_from_narrative() -> None
         window=world.window,
     )
     assert journal_reply.reply_outbox is not None
-    assert str(trade_id) in journal_reply.reply_outbox.text
+    assert_no_internal_ids(journal_reply.reply_outbox.text)
     assert "-1.25" in journal_reply.reply_outbox.text
     for update_id, text, needle in (
         (72, "place order", "cannot place an order"),
-        (73, "override risk", "BLOCK remains final"),
+        (73, "override risk", "A risk block is final"),
         (74, "activate strategy", "cannot approve or activate"),
         (75, "enable live trading", "cannot enable live trading"),
     ):
@@ -516,8 +517,8 @@ def test_watcher_scan_records_evaluation_and_durable_notification(
         window=scan.discussion.window,
     )
     assert learning.reply_outbox is not None
-    assert "facts_hash:" in learning.reply_outbox.text
-    assert "live_executable:false" in learning.reply_outbox.text
+    assert_no_internal_ids(learning.reply_outbox.text)
+    assert "\u2022 Live executable: No" in learning.reply_outbox.text
     summary = query.summary(organization_id=ORG)
     assert summary.facts.watcher.scan_count >= 1
     assert summary.facts.watcher_orchestration_enabled is False

@@ -5,24 +5,21 @@ from __future__ import annotations
 from app.telegram_paper_agent.contracts import DiscussionIntent
 
 _REFUSALS: dict[DiscussionIntent, str] = {
-    DiscussionIntent.REQUEST_EXECUTE: (
-        "Telegram cannot place an order. EXECUTE_PAPER_PLAN is not a Telegram action."
-    ),
+    DiscussionIntent.REQUEST_EXECUTE: "Telegram cannot place an order.",
     DiscussionIntent.REQUEST_APPROVE_STRATEGY: (
-        "Telegram cannot approve or activate a strategy. Strategy approval is a "
-        "separate explicit path and is never implicit in a chat message."
+        "Telegram cannot approve or activate a strategy. That is a separate, explicit step."
     ),
     DiscussionIntent.REQUEST_OVERRIDE_ASSESSMENT: (
-        "Telegram cannot override SetupAssessment. Setup truth stays on the evaluator."
+        "Telegram cannot change whether a setup is confirmed. The setup check decides that."
     ),
     DiscussionIntent.REQUEST_OVERRIDE_RISK: (
-        "Telegram cannot override risk. RiskEngine BLOCK remains final."
+        "Telegram cannot override risk limits. A risk block is final."
     ),
     DiscussionIntent.REQUEST_MINT_CANDIDATE: (
-        "Telegram cannot mint a Candidate. Candidates persist only from CONFIRMED_SETUP."
+        "Telegram cannot create a setup. Setups come only from confirmed scans."
     ),
     DiscussionIntent.REQUEST_ENABLE_LIVE: (
-        "Telegram cannot enable live trading. Real execution stays disabled."
+        "Telegram cannot enable live trading. Live trading stays off."
     ),
 }
 

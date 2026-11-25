@@ -187,3 +187,19 @@ def test_time_uses_berlin_zone_abbreviation_across_dst(instant, expected) -> Non
     assert expected in text
     assert "Ref: abcdef12" in text
     assert "UTC" not in text
+
+
+def test_symbol_line_shows_the_plain_ticker() -> None:
+    # Candidate content carries the canonical instrument id; the owner sees the ticker.
+    text = render_strategy_alert_text(
+        symbol="binance:usdm_futures:perpetual:BTCUSDT",
+        strategy="sfp",
+        direction="long",
+        entry=None,
+        stop=None,
+        target=None,
+        timeframe="1h",
+        at=AT,
+    )
+    assert "Symbol: BTCUSDT" in text.splitlines()
+    assert "binance:" not in text and "usdm" not in text
