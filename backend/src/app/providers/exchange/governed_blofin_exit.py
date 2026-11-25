@@ -179,7 +179,9 @@ def reconcile_demo_exit(
                 != sum((f.quantity for f in entry.fills), Decimal("0"))
             ):
                 raise ValueError("Demo entry history identity mismatch.")
-            entry_created = _time(row.get("createTime"))
+            # Only the blank-client-id TPSL lineage needs these; absent, it is refused.
+            if row.get("createTime") not in (None, ""):
+                entry_created = _time(row.get("createTime"))
             entry_attests_exits = order_attests_plan_exits(row, plan)
             continue
         filled = Decimal(str(row.get("filledSize")))
@@ -289,24 +291,29 @@ def reconcile_demo_exit(
     protection_ids: list[str] = []
     if trigger_categories:
         named = {tpsl_id for _, tpsl_id in exit_order_protection_ids}
-        if len(named) > 1:
-            raise ValueError("Demo exits name more than one protection.")
-        # BloFin's attached TPSL has a blank clientOrderId, so a lookup by the
-        # entry's client id finds nothing; the closing order's algoId names it.
-        lookup = {"tpslId": next(iter(named))} if named else {}
-        history = _account_rows(
-            client.request(
-                "GET",
-                "/api/v1/trade/orders-tpsl-history",
-                params={**(lookup or {"clientOrderId": entry.client_order_id}), "limit": "100"},
-                signed=True,
+
+        def tpsl_history(params: dict[str, str]) -> list[dict[str, Any]]:
+            return _account_rows(
+                client.request(
+                    "GET",
+                    "/api/v1/trade/orders-tpsl-history",
+                    params={**params, "limit": "100"},
+                    signed=True,
+                )
             )
-        )
-        effective = [
-            r
-            for r in history
-            if r.get("state") == "effective" and (not named or r.get("tpslId") in named)
-        ]
+
+        history = tpsl_history({"clientOrderId": entry.client_order_id})
+        effective = [r for r in history if r.get("state") == "effective"]
+        via_named = False
+        if not effective and len(named) == 1:
+            # BloFin's attached TPSL has a blank clientOrderId, so the lookup by
+            # the entry's client id finds nothing; the closing order's algoId names it.
+            via_named = True
+            effective = [
+                r
+                for r in tpsl_history({"tpslId": next(iter(named))})
+                if r.get("state") == "effective" and r.get("tpslId") in named
+            ]
         if len(effective) != 1:
             raise ValueError("Ambiguous effective protection history.")
         row = effective[0]
@@ -314,7 +321,7 @@ def reconcile_demo_exit(
         # Without a client id, lineage needs the entry's own attested TP/SL, a
         # closing order naming this TPSL, and creation just after the entry.
         attached_lineage = (
-            bool(named)
+            via_named
             and entry_attests_exits
             and entry_created is not None
             and row.get("clientOrderId") in (None, "")

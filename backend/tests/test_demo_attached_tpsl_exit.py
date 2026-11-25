@@ -126,9 +126,15 @@ def attached_world(category: str = "tp"):
     def handler(request):
         assert request.method == "GET", "Exit reconciliation cannot place or cancel orders"
         endpoint = request.url.path.rsplit("/", 1)[1]
+        data = deepcopy(responses[endpoint])
         if endpoint == "orders-tpsl-history":
-            tpsl_params.append(dict(request.url.params))
-        return httpx.Response(200, json={"code": "0", "data": deepcopy(responses[endpoint])})
+            params = dict(request.url.params)
+            tpsl_params.append(params)
+            # BloFin filters by the query id; the attached row has a blank client id.
+            for key in ("clientOrderId", "tpslId"):
+                if key in params:
+                    data = [r for r in data if r.get(key) == params[key]]
+        return httpx.Response(200, json={"code": "0", "data": data})
 
     provider = provider_for(handler)
     provider._clock = lambda: EVALUATED_AT + timedelta(seconds=2)
@@ -144,7 +150,10 @@ def test_blofin_attached_tpsl_close_is_verified_via_algo_id(category):
     assert closed.exit_order_protection_ids == (("close-1", "10004687495"),)
     assert closed.fills[0].category == category
     assert closed.fills[0].reported_pnl == Decimal("777.6")
-    assert tpsl_params == [{"tpslId": "10004687495", "limit": "100"}]
+    assert tpsl_params == [
+        {"clientOrderId": "ATentry", "limit": "100"},
+        {"tpslId": "10004687495", "limit": "100"},
+    ]
 
 
 def _mutate(responses, reason):
