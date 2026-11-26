@@ -1,7 +1,7 @@
 ---
 title: "AlphaTrade strategy spec v1"
 subtitle: "D-line, Nested Continuation and SFP: what runs today, and the agreed target design"
-date: "26 November 2026 (draft for review)"
+date: "26 November 2026 (v1.1: corrected after the external review)"
 ---
 
 # How to read this
@@ -28,8 +28,21 @@ The supporting numbers are in *AlphaTrade: one-year strategy backtest report* (2
 - **Daily loss lock:** stops new trades for the day after the daily loss limit.
 - **One position per coin at a time**, across all strategies.
 - **Reward:risk:** at least 1:1 from the edge of the entry zone. The entry zone is the market price ± 10 bps.
-- **Fee rule:** the round-trip fees must be under 20% of the risk. In practice the stop is at least about 0.6% from the entry.
+- **Fee rule:** the round-trip fees must be under 20% of the risk, with the risk measured from the near edge of the entry zone. In practice the stop must be at least about **0.7%** from the mid entry (2 × 0.06% ≤ (d − 0.1%) / 5).
 - **Sizing:** the stop distance sets the size, so the planned loss at the stop equals the configured risk per trade.
+
+## Live configuration (checked on staging, 26 Nov)
+
+| Setting | Value |
+|---|---|
+| Risk per trade | 1% of the demo account |
+| Daily loss lock | 5% of the account |
+| Leverage and margin | 10×, isolated |
+| Positions | one per coin, across all strategies |
+| Strategies scanned | 50: 5 coins × long/short × (D-line 30m and 1h, Nested 30m and 1h, SFP 15m) |
+| Stepped exits for Nested and SFP | built, **switched off** (`GOVERNED_DEMO_LADDER_FAMILIES` empty) |
+
+These are demo settings. The review proposes 0.25% risk per trade, at most 2R open in one direction and a 3R daily stop for real money; that is decided before any real-money start.
 
 ## Exits (target design: the same for all three)
 
@@ -40,7 +53,10 @@ The supporting numbers are in *AlphaTrade: one-year strategy backtest report* (2
 | TP3 | 20% | The next significant structure level beyond TP2 | — |
 | Runner | 15% | Trails the low (long) or high (short) of the **last 5 candles** | Closes when price breaks the trail |
 
-- **Break-even after TP1:** turns a trade into a no-loss trade once it has worked a little. It costs some trades that get stopped out at break-even and then go on to the target. The backtest measures that cost.
+- **Break-even after TP1:** the stop moves to the entry **plus the round-trip costs** (live, `breakeven_stop`), not exactly the entry. It turns a trade into a no-loss trade once it has worked a little, and costs the trades that dip back and then go on to the target.
+  - It probably helps SFP (a return to the entry means the reversal failed) and probably hurts D-line and Nested, whose breakouts often retest the line. The 2–3 year backtest tests it per strategy against "no break-even" and "break-even after TP2".
+- **TP1 does not pay for the fees on a tight stop.** 15% at 1R earns 0.15R, while the round trip costs about 0.17R at a 0.7% stop and 0.12R at 1%. Its real job is to trigger the break-even move.
+- **Runner:** it only starts trailing once **all targets have filled** (live, `partial_exits/demo.py`). Until then its 15% sits at the stop or break-even.
 - **Live today:** D-line already uses this ladder. Nested and SFP still exit at once: full size at one target, or the stop.
 - **Small positions:** a 15% step can fall below BloFin's minimum order size. In that case the steps must merge sensibly. This is part of the build.
 - **Backup stop on BloFin (to build):**
@@ -56,7 +72,8 @@ The supporting numbers are in *AlphaTrade: one-year strategy backtest report* (2
 
 - **Timeframes:** 30m and 1h. 15m is switched off.
 - **Line:** at least 2 touches. The trend on the next timeframe up must agree (30m → 2h, 1h → 4h).
-- **Entry:** market order after a candle closes through the line. Full size.
+- **Entry:** market order after a candle closes through the line. Full size (`entry_mode` "breakout", not the half-size "split").
+- **Second attempts:** after a break-even exit the detector can enter the same line again. These re-entries are part of the backtest result.
 - **Stop:** just beyond the structure low (long) or high (short): the extreme between the line's start and the breakout, plus 1 tick.
 - **Filters:**
   - the structure stop must be at least **1% from the entry**, otherwise the trade is skipped;
@@ -85,7 +102,7 @@ The supporting numbers are in *AlphaTrade: one-year strategy backtest report* (2
 **Live today (since 26 Nov)**
 
 - **Timeframes:** 30m and 1h. 15m is off.
-- **Stage:** N2 and later only. N1 lost money on every timeframe.
+- **Stage:** N2 and later only. N1 lost money on every timeframe. N2+ was positive only on 30m and 1h, and most of that edge is 1h (+43R of +53R).
 - **Entry:** market order after a candle closes beyond the impulse extreme.
 - **Stop:** the pullback extreme (low of the pullback for a long).
 - **Exit:** one target at the measured move (the impulse length added to the extreme), full size.
@@ -110,8 +127,8 @@ The supporting numbers are in *AlphaTrade: one-year strategy backtest report* (2
 **Live today (since 26 Nov)**
 
 - **Timeframe:** 15m.
-- **Levels:** swing highs and lows, equal highs and lows, and the range high/low of the **last 6 candles** (1.5 hours).
-- **Sweep:** at least 0.3% beyond the level, then a close back inside, then a confirmation close.
+- **Levels:** swing highs and lows, equal highs and lows, and the range high/low of the **last 6 candles** (1.5 hours, `level_lookback` 6).
+- **Sweep:** between **0.3% and 5%** beyond the level (`minimum_sweep_depth` 0.003, `maximum_sweep_depth` 0.05), then a close back inside, then a confirmation close.
 - **Stop:** beyond the sweep wick, plus a small buffer (the larger of 0.1% of price or half an ATR).
 - **Exit:** one target at the nearest opposite level, full size.
 
@@ -150,3 +167,12 @@ The supporting numbers are in *AlphaTrade: one-year strategy backtest report* (2
   - I'd treat SFP as experimental until the 2–3 year study finds a version with an edge out of sample.
   - The ideas listed in its open points (confirmation, ATR stop buffer, trend filter, weekly levels, retest entry) are the ones to test first.
 - **In every test, aim for the most profit per trade after fees with a tolerable drawdown, not the highest win rate.** A higher win rate usually comes from smaller wins.
+
+# Changes in v1.1 (26 Nov, after the external review)
+
+- Fee rule: about 0.7%, not 0.6%.
+- Live configuration table added (risk 1%, daily lock 5%, leverage 10× isolated, 50 strategies).
+- Break-even is entry plus costs; TP1's fee coverage and the runner start are stated.
+- D-line: full-size breakout entry and second attempts stated.
+- Nested: N2+ is a 30m/1h result, mostly 1h.
+- SFP: stored level lookback and sweep range stated.

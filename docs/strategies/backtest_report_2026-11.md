@@ -1,7 +1,7 @@
 ---
 title: "AlphaTrade: one-year strategy backtest report"
 subtitle: "D-line, Nested Continuation and SFP on BTC, ETH, ZEC, TAO and HYPE"
-date: "26 November 2026"
+date: "26 November 2026 (v1.1: corrected after the external review)"
 ---
 
 # 1. Summary
@@ -23,7 +23,7 @@ Results are in **R**: one R is the amount risked on a trade. +52R means the trad
    - With a stop under about 0.5% from the entry, those fees take 25% or more of each R.
    - Most of D-line's loss came from those tight-stop trades.
 2. **15-minute charts were too noisy for D-line and Nested.** The same rules on 30m and 1h were profitable.
-3. **Nested's first continuation (N1) lost money on every timeframe.** From the second continuation on (N2+), it was profitable.
+3. **Nested's first continuation (N1) lost money on every timeframe.** From the second continuation on (N2+), it was profitable on 30m and 1h only, and mostly on 1h.
 4. **SFP is the weakest.**
    - The live SFP rarely fired, because its target was usually closer than its stop.
    - A simple "sweep of the previous 4h, 8h or daily high/low and close back" lost money on every combination tested (section 6).
@@ -56,8 +56,12 @@ Results are in **R**: one R is the amount risked on a trade. +52R means the trad
 - Stop and target rounded to the tick.
 - Live checks:
   - reward ≥ 1× risk, measured from the edge of the 10 bps entry zone;
-  - fee rule: fees under 20% of the risk, which means a stop at least about 0.6% away;
+  - fee rule: fees under 20% of the risk, which means a stop at least about 0.7% away;
   - one open position per coin per strategy.
+- **Exceptions in the D-line study** (`dline_1m_study.py`, `analyze1m.py`):
+  - no fee rule and no one-position-per-coin limit;
+  - the retest variant paid a 0.02% maker fee on its entry instead of 0.06%.
+  - The chosen D-line rule (stop at least 1%) already clears the fee rule, so the fee point only affects the tables without that filter. The position limit and the maker fee do affect the D-line numbers; the 2–3 year study redoes them.
 
 **Exits**
 
@@ -66,6 +70,7 @@ Results are in **R**: one R is the amount risked on a trade. +52R means the trad
   - TP2 50%, TP3 20%.
   - 15% runner trailing the last 5 candles.
 - Nested and SFP: one full-size take-profit and stop, as live today.
+- Break-even in the study is exactly the entry, from the next candle. Live uses entry plus costs, right after the TP1 fill.
 
 **Fees and ambiguous candles**
 
@@ -184,7 +189,8 @@ This tests Sofien's SFP rules:
 - **Chosen in-sample:** the rules were picked after looking at the results, so expect weaker live results.
 - **Binance candles stand in for BloFin prices.**
 - **Funding and slippage are not included.**
-- **Overlapping positions across strategies on the same coin are not modelled.**
+- **Overlapping positions across strategies on the same coin are not modelled.** The three results cannot simply be added: live allows one position per coin across all strategies.
+- **The edges are not statistically proven yet.** With roughly 200–460 trades per setup, per-trade means of +0.1R to +0.2R are within about 1–2.5 standard errors of zero. Nested 1h N2+ is the strongest (t ≈ 2.4).
 - **Nested and SFP were tested with today's full-size exits.** The stepped exits Sofien asked for (section 8) still need their own backtest.
 
 # 8. Next steps
