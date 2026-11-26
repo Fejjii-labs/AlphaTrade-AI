@@ -51,7 +51,7 @@ from app.strategy_brain.sfp.detector import detect_sfp  # noqa: E402
 TAKER = Decimal("0.0006")
 ZONE = Decimal("0.001")
 WINDOW = 256
-TF = {"15m": Timeframe.M15, "30m": Timeframe.M30, "1h": Timeframe.H1}
+TF = {"15m": Timeframe.M15, "30m": Timeframe.M30, "1h": Timeframe.H1, "4h": Timeframe.H4}
 
 NESTED_PARAMS = {
     "version": "nested-research/v1", "provisional": True, "pivot_sensitivity": 2,
