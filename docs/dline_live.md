@@ -43,3 +43,13 @@ Governed BloFin demo only, with `GOVERNED_DEMO_DATA_MODE_ENABLED` (which needs
 `RISK_MODEL_V2_ENABLED` and real trading off) and `GOVERNED_DEMO_PARTIAL_EXITS_ENABLED`.
 Internal paper refuses it (`dline_execution_demo_only`). Kill switch, worker pause, the v2
 daily stop, one position per coin and every other demo check apply unchanged.
+
+**Backup stop on BloFin** (`GOVERNED_DEMO_LADDER_BACKUP_STOP`, off by default). Stepped exits
+are closed by the bot with market reduce-only orders, so without this no stop rests on BloFin
+while the bot is down. With it on, the bot keeps one whole-position stop order (`size` -1,
+reduce-only, market on trigger) on BloFin at its current stop: placed after the entry, moved
+in place only to tighten (break-even after TP1, then the runner trail), and cancelled by
+BloFin when the position closes. Its client id is derived from the entry's, and the exit
+proof accepts a close by it only at the approved stop or tighter. Checked on the demo on
+26 Nov 2026 with a small SOL position (size -1 follows a partial close, amend moves it in
+place, a full close cancels it). A failure to place or move it only alerts.

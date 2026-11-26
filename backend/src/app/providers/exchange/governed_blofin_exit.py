@@ -2,6 +2,10 @@
 
 In demo data mode the proof is scoped to the entry's own coin (one entry per coin).
 
+A stepped-exit (ladder) plan has no attached TP/SL, so the only trigger close it
+can have is its BloFin backup stop (client id derived from the entry's). That
+close is accepted at the approved stop or tighter (break-even, trail), never looser.
+
 No order mutations. Flat balances, acknowledgments and trigger acknowledgments
 are insufficient. Unexplained activity or incomplete pages remain operator holds.
 """
@@ -137,6 +141,17 @@ def reconcile_demo_exit(
     )
     if not entry.fills or entry.status not in {"filled", "canceled", "cancelled", "expired"}:
         return None  # A live entry remainder can still add exposure.
+    from app.providers.exchange.governed_blofin_partial_exits import backup_stop_client_id
+    from app.services.partial_exits.paper_terms import is_ladder_payload
+
+    risk_payload = plan.model_dump(mode="json").get("risk_and_exits")
+    ladder = isinstance(risk_payload, dict) and is_ladder_payload(risk_payload)
+    backup_id = backup_stop_client_id(entry.client_order_id)
+    approved_stop = plan.risk_and_exits.stop.value
+
+    def no_looser(trigger: Decimal) -> bool:
+        return trigger >= approved_stop if plan.side is EntrySide.BUY else trigger <= approved_stop
+
     positions = ours(_account_rows(client.request("GET", "/api/v1/account/positions", signed=True)))
     open_positions = []
     for row in positions:
@@ -239,7 +254,16 @@ def reconcile_demo_exit(
             if not isinstance(tpsl_id, str) or len(tpsl_id) > 128:
                 raise ValueError("Unreadable demo closing protection identity.")
             exit_order_protection_ids.append((order_id, tpsl_id))
-        if category in {"tp", "sl"}:
+        if category in {"tp", "sl"} and ladder:
+            if category != "sl":
+                raise ValueError("Demo ladder closed by an unexpected take-profit trigger.")
+            trigger = row.get("slTriggerPrice")
+            if trigger in (None, "") and tpsl_id in (None, ""):
+                raise ValueError("Demo trigger exit names no protection.")
+            if trigger not in (None, "") and not no_looser(Decimal(str(trigger))):
+                raise ValueError("Demo backup stop looser than the approved stop.")
+            trigger_categories.add(category)
+        elif category in {"tp", "sl"}:
             expected = (
                 plan.risk_and_exits.stop.value
                 if category == "sl"
@@ -317,7 +341,46 @@ def reconcile_demo_exit(
     if len({(f.order_id, f.trade_id) for f in fills}) != len(fills):
         raise ValueError("Duplicate demo exit fill identity.")
     protection_ids: list[str] = []
-    if trigger_categories:
+    if trigger_categories and ladder:
+        backup = [
+            row
+            for row in _account_rows(
+                client.request(
+                    "GET",
+                    "/api/v1/trade/orders-tpsl-history",
+                    params={"clientOrderId": backup_id, "limit": "100"},
+                    signed=True,
+                )
+            )
+            if row.get("state") == "effective"
+        ]
+        if len(backup) != 1:
+            raise ValueError("Ambiguous effective backup stop history.")
+        row = backup[0]
+        stop_fills = sum((f.quantity for f in fills if f.category == "sl"), Decimal("0"))
+        trigger_type = row.get("triggerType")
+        if (
+            not row.get("tpslId")
+            or row.get("clientOrderId") != backup_id
+            or (trigger_type not in (None, "") and trigger_type != "sl")
+            or row.get("instId") != plan.execution_instrument
+            or row.get("side") != opposite
+            or row.get("positionSide") != "net"
+            or row.get("marginMode") != expected_margin
+            or str(row.get("reduceOnly")).lower() != "true"
+            or row.get("slTriggerPrice") in (None, "")
+            or not no_looser(Decimal(str(row["slTriggerPrice"])))
+            or (
+                row.get("actualSize") not in (None, "")
+                and _positive(row.get("actualSize")) != stop_fills
+            )
+            or _time(row.get("createTime")) < plan.valid_from
+            # Every closing order that names a TPSL must name this backup stop.
+            or any(tpsl != row.get("tpslId") for _, tpsl in exit_order_protection_ids)
+        ):
+            raise ValueError("Effective backup stop lineage mismatch.")
+        protection_ids.append(str(row["tpslId"]))
+    elif trigger_categories:
         named = {tpsl_id for _, tpsl_id in exit_order_protection_ids}
 
         def tpsl_history(params: dict[str, str]) -> list[dict[str, Any]]:

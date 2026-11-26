@@ -351,6 +351,10 @@ class Settings(BaseSettings):
     # needs GOVERNED_DEMO_PARTIAL_EXITS_ENABLED. Values: nested, sfp.
     governed_demo_ladder_families: Annotated[list[str], NoDecode] = Field(default_factory=list)
     governed_demo_ladder_tp1_r: Decimal = Field(default=Decimal("1"), gt=0, le=5)
+    # Stepped-exit trades also rest one whole-position stop order on BloFin (size -1)
+    # at the bot's current stop, moved with it (break-even, trail): a safety net if the
+    # bot is down. BloFin cancels it when the position closes. Off by default.
+    governed_demo_ladder_backup_stop: bool = False
     # Retention (H5 + the approved data policy). Kept forever: strategies,
     # conversations, journal, trades/orders/fills/plans, paper_decision and
     # paper_trade_* setup events, knowledge, accounts and settings. Candidates
