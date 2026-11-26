@@ -355,6 +355,14 @@ class Settings(BaseSettings):
     # at the bot's current stop, moved with it (break-even, trail): a safety net if the
     # bot is down. BloFin cancels it when the position closes. Off by default.
     governed_demo_ladder_backup_stop: bool = False
+    # Move the stop to break-even plus costs after TP1 (demo ladders). The three-year
+    # backtest (26 Nov 2026) found it cut results for every strategy; false turns it off.
+    governed_demo_ladder_breakeven: bool = True
+    # Nested ladder targets: "measured_move" = TP2 at the measured move, TP3 at the
+    # 1.618 extension (spec v1); "first_level" = TP2 at whichever comes first of the
+    # measured move and the confirmed higher-timeframe (4x the chart) swings, TP3 at
+    # the next one (the setting chosen by the three-year backtest).
+    governed_demo_nested_ladder_targets: Literal["measured_move", "first_level"] = "measured_move"
     # Retention (H5 + the approved data policy). Kept forever: strategies,
     # conversations, journal, trades/orders/fills/plans, paper_decision and
     # paper_trade_* setup events, knowledge, accounts and settings. Candidates

@@ -20,8 +20,8 @@ add to a position. One ``step``:
    closes what is left on our side. A close still live at the venue holds
    too, with no new order; the stop close follows once it is resolved.
 3. The planned stop is computed: initial, breakeven plus costs after a
-   complete TP1, then the closed-candle runner trail. Moves are recorded and
-   never loosen.
+   complete TP1 (unless ``breakeven=False``), then the closed-candle runner
+   trail. Moves are recorded and never loosen.
 4. A crossed stop closes the whole remainder. If the venue position differs
    from the recorded remainder, the step holds, except that a crossed stop
    still closes what is left of the position on the closing side, up to the
@@ -156,12 +156,14 @@ class GovernedDemoPartialExitManager:
         store: DemoExitStore,
         hold: Callable[[UUID], str | None],
         backup_stop: bool = False,
+        breakeven: bool = True,
     ) -> None:
         self._settings = settings
         self._venue = venue
         self._store = store
         self._hold = hold
         self._backup_stop = backup_stop
+        self._breakeven = breakeven
 
     @staticmethod
     def client_prefix(command_id: UUID) -> str:
@@ -249,7 +251,9 @@ class GovernedDemoPartialExitManager:
             self._store.save(command_id, record)
             return DemoStepReport("closed")
 
-        for move in self._planned_moves(state, terms, bars, evaluated_at):
+        for move in self._planned_moves(
+            state, terms, bars, evaluated_at, breakeven=self._breakeven
+        ):
             state = apply_stop_move(state, move).state
         record = replace(record, stop_moves=state.stop_moves)
         self._store.save(command_id, record)
@@ -376,13 +380,15 @@ class GovernedDemoPartialExitManager:
         terms: PartialExitTerms,
         bars: Sequence[ClosedBar],
         evaluated_at: datetime | None,
+        *,
+        breakeven: bool = True,
     ) -> tuple[StopMove, ...]:
         moves: list[StopMove] = []
         working = state
-        breakeven = plan_breakeven_move(working)
-        if breakeven is not None:
-            working = apply_stop_move(working, breakeven).state
-            moves.append(breakeven)
+        breakeven_move = plan_breakeven_move(working) if breakeven else None
+        if breakeven_move is not None:
+            working = apply_stop_move(working, breakeven_move).state
+            moves.append(breakeven_move)
         if (
             terms.runner_rule is None
             or working.pending_target_legs()

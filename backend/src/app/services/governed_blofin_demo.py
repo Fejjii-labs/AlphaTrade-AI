@@ -1161,6 +1161,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     "structure_ladder_tp1_r": Decimal(
                         str(getattr(self._settings, "governed_demo_ladder_tp1_r", 1))
                     ),
+                    "nested_ladder_targets": str(
+                        getattr(
+                            self._settings, "governed_demo_nested_ladder_targets", "measured_move"
+                        )
+                    ),
                 }
                 if structure_ladder
                 else {}
@@ -2479,6 +2484,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 store=self._demo_ladder_store(session, command, terms),
                 hold=lambda organization_id: self._demo_ladder_hold(session, command),
                 backup_stop=backup_stop,
+                breakeven=bool(getattr(self._settings, "governed_demo_ladder_breakeven", True)),
             )
             report = manager.step(
                 DemoLadderPosition(command.organization_id, command.id, terms),

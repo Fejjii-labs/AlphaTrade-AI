@@ -1583,6 +1583,106 @@ def structure_ladder_legs(
     }
 
 
+_FIRST_LEVEL_FORMULAS = (
+    "nested-tp1-r-multiple",
+    "nested-tp2-first-structure-level",
+    "nested-tp3-next-structure-level",
+)
+_HTF_FACTOR = 4  # 15m -> 1h, 30m -> 2h, 1h -> 4h: the next chart up is 4x the trigger
+_HTF_PIVOT_WIDTH = 2
+
+
+def htf_swing_levels(bars: tuple[OhlcvBar, ...], *, is_long: bool) -> list[Decimal]:
+    """Confirmed swing highs (long) or lows (short) of the next chart up.
+
+    The higher chart is built from the trigger candles: four consecutive candles that
+    start on a boundary of the higher chart make one higher candle (UTC-aligned, as
+    the exchange draws them). Incomplete blocks are dropped. A swing needs
+    ``_HTF_PIVOT_WIDTH`` higher candles on each side with a lower high (long) or a
+    higher low (short).
+    """
+
+    if len(bars) < _HTF_FACTOR:
+        return []
+    step = bars[1].interval_start - bars[0].interval_start if len(bars) > 1 else None
+    if step is None or step.total_seconds() <= 0:
+        return []
+    block = step * _HTF_FACTOR
+    epoch = datetime(1970, 1, 1, tzinfo=bars[0].interval_start.tzinfo)
+    highs: list[Decimal] = []
+    lows: list[Decimal] = []
+    i = 0
+    while i + _HTF_FACTOR <= len(bars):
+        start = bars[i].interval_start
+        if (start - epoch) % block:
+            i += 1
+            continue
+        group = bars[i : i + _HTF_FACTOR]
+        if any(group[k].interval_start != start + step * k for k in range(_HTF_FACTOR)):
+            i += 1
+            continue
+        highs.append(max(b.high for b in group))
+        lows.append(min(b.low for b in group))
+        i += _HTF_FACTOR
+    w = _HTF_PIVOT_WIDTH
+    values = highs if is_long else [-low for low in lows]
+    swings = [
+        values[j]
+        for j in range(w, len(values) - w)
+        if values[j] > max(*values[j - w : j], *values[j + 1 : j + w + 1])
+    ]
+    return swings if is_long else [-v for v in swings]
+
+
+def first_level_ladder_legs(
+    *,
+    is_long: bool,
+    entry: Decimal,
+    stop: Decimal,
+    measured_move: Decimal,
+    htf_levels: list[Decimal],
+    tp1_r: Decimal = Decimal("0.75"),
+    runner_lookback_bars: int = 5,
+) -> tuple[tuple[tuple[Decimal, Decimal, str], ...], dict[str, object]] | str:
+    """Nested ladder as chosen by the three-year backtest (26 Nov 2026).
+
+    TP1 15% at ``tp1_r`` R; TP2 50% at the first of the measured move and the
+    higher-chart swings beyond TP1; TP3 20% at the next one beyond TP2 (merged into
+    TP2 at 70% when there is none); TP2 = TP1 + 1R when no level lies beyond TP1;
+    15% runner on a closed-candle trail.
+    """
+
+    from app.services.partial_exits.runner import RUNNER_RULE_ID, RUNNER_RULE_VERSION
+
+    sign = Decimal(1) if is_long else Decimal(-1)
+    risk = (entry - stop) * sign
+    if risk <= 0:
+        return "invalidated_by_price"
+    tp1 = entry + sign * tp1_r * risk
+
+    def beyond(ref: Decimal) -> list[Decimal]:
+        return sorted({p for p in (measured_move, *htf_levels) if (p - ref) * sign > 0},
+                      key=lambda p: p * sign)  # fmt: skip
+
+    levels = beyond(tp1)
+    tp2 = levels[0] if levels else tp1 + sign * risk
+    rest = beyond(tp2)
+    f1, f2, f3 = _FIRST_LEVEL_FORMULAS
+    legs: list[tuple[Decimal, Decimal, str]] = [(tp1, Decimal("0.15"), f1)]
+    if rest:
+        legs += [(tp2, Decimal("0.5"), f2), (rest[0], Decimal("0.2"), f3)]
+    else:
+        legs.append((tp2, Decimal("0.7"), f2))
+    return tuple(legs), {
+        "enabled": True,
+        "activation_target_order": len(legs),
+        "remaining_quantity_fraction": "0.15",
+        "rule_id": RUNNER_RULE_ID,
+        "rule_version": RUNNER_RULE_VERSION,
+        "expression": f"lookback_bars={runner_lookback_bars}",
+    }
+
+
 def nested_extension_target(
     bars: tuple[OhlcvBar, ...], event: object, *, is_long: bool
 ) -> Decimal | None:
@@ -1787,6 +1887,7 @@ def _plan_terms(
     governed_demo_dline: bool = False,
     structure_ladder: bool = False,
     structure_ladder_tp1_r: Decimal = Decimal("1"),
+    nested_ladder_targets: str = "measured_move",
     side_aware_fill: bool = False,
     spread_haircut: Decimal = Decimal("0"),
     min_stop_atr_floor: Decimal = Decimal("0"),
@@ -1907,6 +2008,18 @@ def _plan_terms(
         or (not is_long and target >= entry)
     ):
         return "invalidation_unavailable"
+    if structure_ladder and ladder is None and nested and nested_ladder_targets == "first_level":
+        built = first_level_ladder_legs(
+            is_long=is_long,
+            entry=entry,
+            stop=stop,
+            measured_move=target,
+            htf_levels=htf_swing_levels(assembled.bundle.bars_15m, is_long=is_long),
+            tp1_r=structure_ladder_tp1_r,
+        )
+        if isinstance(built, str):
+            return built
+        ladder, runner = built
     if structure_ladder and ladder is None and (sfp or nested):
         # Demo-only stepped exits (the governed demo caller opts in per family).
         # The single structure target stays the sizing reward and becomes TP2.
