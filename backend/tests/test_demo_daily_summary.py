@@ -310,3 +310,82 @@ def test_racing_workers_queue_one_summary(
     _delivered(world)
     time.sleep(0.2)
     assert sorted(results) == [False, True] and len(world.sent) == 1 and _audit_rows(world) == 1
+
+
+def test_week_lines_net_r_after_fees_and_dollars() -> None:
+    # Long 100 -> 110, stop 95: (10 - 210 * 0.0006) / 5 = 1.97R.
+    assert summary.net_r_after_fees(LONG, D("100"), D("95"), D("110")) == D("1.97")
+    # Short stopped out at 204: (-4 - 404 * 0.0006) / 4 = -1.06R.
+    assert summary.net_r_after_fees(SHORT, D("200"), D("204"), D("204")) == D("-1.06")
+    assert summary.net_r_after_fees(LONG, D("100"), D("100"), D("101")) is None
+    rows = [
+        summary.StrategyWeekRow("D-line", "30m", 3, 2, D("2.50"), D("2500")),
+        summary.StrategyWeekRow("Nested Continuation", "1h", 2, 0, D("-2.12"), D("-2120.4"), 1),
+    ]
+    lines = summary.format_strategy_week_lines(
+        rows, first_day=date(2026, 11, 16), last_day=date(2026, 11, 22)
+    )
+    assert lines == [
+        "Last 7 days by strategy (2026-11-16 to 2026-11-22):",
+        "- D-line 30m: 3 trades, 2 wins (67%), +2.50R, +0.83R per trade, about +$2,500",
+        "- Nested Continuation 1h: 2 trades, 0 wins (0%), -2.12R, -2.12R per trade, "
+        "about -$2,120 (1 without R)",
+        "Week total: 5 trades, +0.38R, about +$380 (after estimated fees)",
+    ]
+    empty = summary.format_strategy_week_lines(
+        [], first_day=date(2026, 11, 16), last_day=date(2026, 11, 22)
+    )
+    assert empty[1] == "No demo trades closed."
+
+
+def test_monday_page_adds_the_week_by_strategy(world: SimpleNamespace) -> None:
+    """Sunday 22 Nov's summary, sent Monday: the 7 days 16-22 Nov by family and timeframe."""
+
+    win = _trade(
+        world,
+        "BTCUSDT",
+        _at(18, 3),
+        strategy_version_id=world.version,
+        status=CLOSED,
+        exit_price=D("110"),
+        planned_risk_amount=D("1000"),
+        exit_time=_at(18, 9),
+    )
+    loss = _trade(
+        world,
+        "ETHUSDT",
+        _at(22, 3),
+        strategy_version_id=world.version,
+        status=CLOSED,
+        direction=SHORT,
+        entry_price=D("200"),
+        planned_stop_price=D("204"),
+        exit_price=D("204"),
+        planned_risk_amount=D("1000"),
+        exit_time=_at(22, 9),
+    )
+    old = _trade(
+        world,
+        "BTCUSDT",
+        _at(15, 3),
+        strategy_version_id=world.version,
+        status=CLOSED,
+        exit_price=D("110"),
+        planned_risk_amount=D("1000"),
+        exit_time=_at(15, 23),
+    )
+    with world.factory() as session:
+        session.add_all([win, loss, old])
+        session.commit()
+    settings = _settings(world.org, world.account)
+    monday = datetime(2026, 11, 23, 0, 16, tzinfo=UTC)
+    assert summary.send_demo_daily_summary_if_due(settings, world.factory, now=monday)
+    text = _delivered(world)
+    assert text.splitlines()[0] == "AlphaTrade DEMO daily summary, 2026-11-22 (UTC)."
+    week = text.split("\n\n", 1)[1].splitlines()
+    family = summary.strategy_family_name(common.StrategyId.HTF_TREND_PULLBACK)
+    assert week == [
+        "Last 7 days by strategy (2026-11-16 to 2026-11-22):",
+        f"- {family} 15m: 2 trades, 1 wins (50%), +0.91R, +0.46R per trade, about +$910",
+        "Week total: 2 trades, +0.91R, about +$910 (after estimated fees)",
+    ]

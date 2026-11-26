@@ -19,6 +19,11 @@ safety-alert background thread (5 s HTTP timeout), so the worker cycle never
 waits on Telegram. A failed send is logged and not retried. Events recorded
 after the summary is queued are not re-sent, and a day that gets no summary on
 the next UTC day is skipped.
+
+On Mondays (the summary of a Sunday) the page also lists the past seven UTC days
+by strategy family and timeframe: closed trades, wins, net R after estimated taker
+fees, and about how many dollars that is (net R times the Journal's planned risk),
+to compare the demo with the backtest report.
 """
 
 from __future__ import annotations
@@ -48,7 +53,7 @@ from app.schemas.common import (
     TradeDirection,
 )
 from app.services.audit_service import AuditService
-from app.services.demo_trade_telegram import demo_trade_pages_enabled
+from app.services.demo_trade_telegram import demo_trade_pages_enabled, strategy_family_name
 from app.services.paper_exit_monitor import ExitMonitorAlert
 from app.services.partial_exits.flags import BLOFIN_DEMO_VENUE
 from app.services.safety_alerts import queue_safety_alert
@@ -61,6 +66,8 @@ SEND_AFTER = timedelta(minutes=15)  # late venue events from just before 00:00 g
 # Reconcile reasons that mean a pending command's venue state was not read this cycle.
 VENUE_MISS_MARKERS = ("unavailable", "unreadable")
 _MAX_ITEMS = 15
+WEEK = timedelta(days=7)
+_TAKER_FEE = Decimal("0.0006")  # BloFin taker, entry and exit; the Journal has no bot fee total
 _LOCK = threading.Lock()
 _DONE: dict[UUID, date] = {}  # per-process shortcut; the audit row is the real guard
 _MISSING_LOGGED: set[UUID] = set()
@@ -73,6 +80,112 @@ class DemoDaySummary:
     tp_fills: tuple[tuple[str, int], ...] = ()  # (level, filled legs)
     closed: tuple[tuple[str, str, Decimal | None], ...] = ()  # (symbol, strategy, R)
     still_open: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyWeekRow:
+    family: str  # "D-line", "Nested Continuation", ...
+    timeframe: str
+    trades: int
+    wins: int
+    net_r: Decimal  # after estimated taker fees, summed over trades with a known R
+    dollars: Decimal  # about: net R times the planned risk
+    without_r: int = 0
+
+
+def net_r_after_fees(
+    direction: TradeDirection, entry: Decimal, stop: Decimal, close: Decimal
+) -> Decimal | None:
+    """R after the 0.06% taker fee on entry and exit. Size cancels out, so none is needed."""
+
+    long = direction is TradeDirection.LONG
+    risk = entry - stop if long else stop - entry
+    if risk <= 0:
+        return None
+    move = close - entry if long else entry - close
+    return ((move - (entry + close) * _TAKER_FEE) / risk).quantize(Decimal("0.01"))
+
+
+def collect_strategy_week(
+    session: Session, *, organization_id: UUID, account_id: UUID, start: datetime, end: datetime
+) -> tuple[StrategyWeekRow, ...]:
+    """Bot demo trades closed in ``[start, end)``, per strategy family and timeframe."""
+
+    rows = session.execute(
+        select(JournalTrade, UserStrategy.setup_type)
+        .outerjoin(UserStrategyVersion, UserStrategyVersion.id == JournalTrade.strategy_version_id)
+        .outerjoin(
+            UserStrategy,
+            and_(
+                UserStrategy.id == UserStrategyVersion.strategy_id,
+                UserStrategy.organization_id == organization_id,
+            ),
+        )
+        .where(
+            JournalTrade.organization_id == organization_id,
+            JournalTrade.account_id == account_id,
+            JournalTrade.source == JournalTradeSource.PAPER_EXECUTION,
+            JournalTrade.execution_lifecycle_id.is_not(None),
+            JournalTrade.status == JournalTradeStatus.CLOSED,
+            JournalTrade.exit_time >= start,
+            JournalTrade.exit_time < end,
+        )
+    ).all()
+    groups: dict[tuple[str, str], list[tuple[Decimal | None, Decimal | None]]] = {}
+    for trade, setup_type in rows:
+        family = strategy_family_name(setup_type) if setup_type is not None else "Other"
+        r = None
+        if None not in (trade.entry_price, trade.planned_stop_price, trade.exit_price):
+            r = net_r_after_fees(
+                trade.direction, trade.entry_price, trade.planned_stop_price, trade.exit_price
+            )
+        groups.setdefault((family, str(trade.timeframe)), []).append((r, trade.planned_risk_amount))
+    out = []
+    for (family, timeframe), items in sorted(groups.items()):
+        known = [(r, risk) for r, risk in items if r is not None]
+        out.append(
+            StrategyWeekRow(
+                family=family,
+                timeframe=timeframe,
+                trades=len(items),
+                wins=sum(1 for r, _risk in known if r > 0),
+                net_r=sum((r for r, _risk in known), Decimal("0")),
+                dollars=sum((r * risk for r, risk in known if risk is not None), Decimal("0")),
+                without_r=len(items) - len(known),
+            )
+        )
+    return tuple(out)
+
+
+def format_strategy_week_lines(
+    rows: Iterable[StrategyWeekRow], *, first_day: date, last_day: date
+) -> list[str]:
+    rows = list(rows)
+    lines = [f"Last 7 days by strategy ({first_day.isoformat()} to {last_day.isoformat()}):"]
+    if not rows:
+        return [*lines, "No demo trades closed."]
+    for row in rows:
+        rate = round(100 * row.wins / row.trades) if row.trades else 0
+        known = row.trades - row.without_r
+        avg = f", {row.net_r / known:+.2f}R per trade" if known else ""
+        lines.append(
+            f"- {row.family} {row.timeframe}: {row.trades} trades, {row.wins} wins ({rate}%), "
+            f"{row.net_r:+.2f}R{avg}, about {_dollars(row.dollars)}"
+            + (f" ({row.without_r} without R)" if row.without_r else "")
+        )
+    total_r = sum((row.net_r for row in rows), Decimal("0"))
+    total_usd = sum((row.dollars for row in rows), Decimal("0"))
+    trades = sum(row.trades for row in rows)
+    lines.append(
+        f"Week total: {trades} trades, {total_r:+.2f}R, about {_dollars(total_usd)} "
+        "(after estimated fees)"
+    )
+    return lines
+
+
+def _dollars(value: Decimal) -> str:
+    sign = "+" if value > 0 else "-" if value < 0 else ""
+    return f"{sign}${abs(value):,.0f}"
 
 
 def reset_demo_daily_summary_memo() -> None:
@@ -268,11 +381,25 @@ def _send_if_due(settings: Settings, factory: sessionmaker[Session], *, now: dat
                     timestamp=now,
                 )
             )
+            message = format_demo_daily_summary_text(summary)
+            if day.weekday() == 6:  # Monday's page (Sunday's summary) adds the week
+                end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=UTC)
+                week = collect_strategy_week(
+                    session,
+                    organization_id=organization_id,
+                    account_id=account_id,
+                    start=end - WEEK,
+                    end=end,
+                )
+                first = day - timedelta(days=6)
+                message += "\n\n" + "\n".join(
+                    format_strategy_week_lines(week, first_day=first, last_day=day)
+                )
             key = f"{DEMO_DAILY_SUMMARY}:{organization_id}:{day.isoformat()}"
             alert = ExitMonitorAlert(
                 code=DEMO_DAILY_SUMMARY,
                 severity="info",
-                message=format_demo_daily_summary_text(summary),
+                message=message,
                 fields={"dedup_key": key, "organization_id": str(organization_id)},
                 telegram_verbatim=True,
                 background=True,
