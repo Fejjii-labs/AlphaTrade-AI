@@ -972,6 +972,30 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             )
         return proof
 
+    def _structure_ladder_enabled(self, policy: object) -> bool:
+        """Nested/SFP stepped exits: opted in per family and needs demo partial exits."""
+
+        from app.schemas.nested_continuation import NestedContinuationSpec
+        from app.strategy_brain.sfp.contracts import SfpSpec
+
+        spec = getattr(policy, "authored_spec", None)
+        family = (
+            "nested"
+            if isinstance(spec, NestedContinuationSpec)
+            else "sfp"
+            if isinstance(spec, SfpSpec)
+            else None
+        )
+        families = {
+            str(f).strip().lower()
+            for f in getattr(self._settings, "governed_demo_ladder_families", [])
+        }
+        return (
+            family is not None
+            and family in families
+            and partial_exits_enabled(self._settings, BLOFIN_DEMO_VENUE)
+        )
+
     def _nested_refusal(
         self, policy: object, assembled: AssembledCanonicalEvidence | None = None
     ) -> str | None:
@@ -1105,6 +1129,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             return "sfp_execution_plan_not_authorized"
         dline_spec = getattr(policy, "authored_spec", None)
         dline = isinstance(dline_spec, DlineLiveSpec)
+        structure_ladder = self._structure_ladder_enabled(policy)
         dline_refusal = self._dline_refusal(policy) or self._nested_refusal(policy, assembled)
         if dline_refusal is not None:
             return dline_refusal
@@ -1130,6 +1155,16 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 if dline
                 else {}
             ),
+            **(
+                {
+                    "structure_ladder": True,
+                    "structure_ladder_tp1_r": Decimal(
+                        str(getattr(self._settings, "governed_demo_ladder_tp1_r", 1))
+                    ),
+                }
+                if structure_ladder
+                else {}
+            ),
         )
         if isinstance(terms, str):
             return terms
@@ -1147,15 +1182,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         entry = snapshot.price
         if (is_long and not stop < entry < target) or (not is_long and not target < entry < stop):
             return "demo_price_invalidates_setup"
-        if sfp:
-            from app.services.automated_paper_loop import _sfp_quote_refusal
-
-            refusal = _sfp_quote_refusal(quote=entry, stop=stop, target=target, is_long=is_long)
-            if refusal is not None:
-                return refusal
+        # Every ladder target on the venue tick, toward the entry.
         dline_targets: list[Decimal] = []
-        if dline:
-            # Every ladder target on the venue tick, toward the entry; R:R to TP2 at the book.
+        if len(terms.risk_and_exits.targets) > 1:
             dline_targets = [
                 (t.price.value / snapshot.tick).to_integral_value(
                     rounding=ROUND_FLOOR if is_long else ROUND_CEILING
@@ -1163,6 +1192,18 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 * snapshot.tick
                 for t in terms.risk_and_exits.targets
             ]
+        if sfp:
+            from app.services.automated_paper_loop import _sfp_quote_refusal
+
+            # With stepped exits the structure target is TP2; TP1 sits nearer by design.
+            quote_target = dline_targets[1] if structure_ladder and dline_targets else target
+            refusal = _sfp_quote_refusal(
+                quote=entry, stop=stop, target=quote_target, is_long=is_long
+            )
+            if refusal is not None:
+                return refusal
+        if dline:
+            # R:R to TP2 at the book.
             tp2 = dline_targets[1]
             risk = (entry - stop) if is_long else (stop - entry)
             reward = (tp2 - entry) if is_long else (entry - tp2)
@@ -1503,12 +1544,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             if account_margin_mode == "isolated":
                 values["margin_mode"] = "ISOLATED"
         values["risk_and_exits"]["targets"][0]["price"]["value"] = target
+        if dline_targets:
+            for row, price in zip(values["risk_and_exits"]["targets"], dline_targets, strict=True):
+                row["price"]["value"] = price
         if dline:
             from app.services.automated_paper_loop import dline_notes
             from app.strategy_brain.dline.runtime import current_signal_from_assembly
 
-            for row, price in zip(values["risk_and_exits"]["targets"], dline_targets, strict=True):
-                row["price"]["value"] = price
             signal = current_signal_from_assembly(assembled, dline_spec)
             if signal is None:
                 return "setup_not_confirmed"

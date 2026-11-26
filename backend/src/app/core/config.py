@@ -345,6 +345,12 @@ class Settings(BaseSettings):
         default_factory=lambda: ["30m", "1h"]
     )
     governed_demo_nested_min_stage: Literal["N1", "N2", "N3", "N4_PLUS"] = "N2"
+    # Stepped exits for Nested/SFP on the BloFin demo (strategy spec v1): families
+    # listed here trade TP1 (~1R, 15%, then break-even) / TP2 50% at the structure
+    # target / TP3 20% at the next structure / 15% runner. Off (empty) by default;
+    # needs GOVERNED_DEMO_PARTIAL_EXITS_ENABLED. Values: nested, sfp.
+    governed_demo_ladder_families: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    governed_demo_ladder_tp1_r: Decimal = Field(default=Decimal("1"), gt=0, le=5)
     # Retention (H5 + the approved data policy). Kept forever: strategies,
     # conversations, journal, trades/orders/fills/plans, paper_decision and
     # paper_trade_* setup events, knowledge, accounts and settings. Candidates
@@ -942,7 +948,10 @@ class Settings(BaseSettings):
         return value
 
     @field_validator(
-        "governed_demo_dline_timeframes", "governed_demo_nested_timeframes", mode="before"
+        "governed_demo_dline_timeframes",
+        "governed_demo_nested_timeframes",
+        "governed_demo_ladder_families",
+        mode="before",
     )
     @classmethod
     def _split_governed_demo_dline_timeframes(cls, value: object) -> object:

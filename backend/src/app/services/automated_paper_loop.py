@@ -85,6 +85,7 @@ from app.signal_fusion.strategy_evaluation_policy import ExecutableStrategyPolic
 from app.workers.watcher_paper_targets import PaperScanTarget
 
 if TYPE_CHECKING:
+    from app.market_contracts.ohlcv import OhlcvBar
     from app.services.risk_policy.grader import GradeDecision
     from app.services.risk_policy.plan_sizing import ActiveProfile, ProfileOpenBook
 
@@ -1526,6 +1527,122 @@ def _sfp_structural_plan(
     return plan.entry, plan.stop, plan.take_profit, detection.setup_id
 
 
+# Stepped exits for Nested and SFP on the governed demo (strategy spec v1, Nov 2026):
+# TP1 at about 1R (15%, then break-even), TP2 50% at the strategy's structure target,
+# TP3 20% at the next structure level (merged into TP2 when there is none), and a 15%
+# runner trailing the last closed candles.
+_STRUCTURE_LADDER_FORMULAS = {
+    "nested": ("nested-tp1-r-multiple", "nested-tp2-measured-move", "nested-tp3-extension-1618"),
+    "sfp": ("sfp-tp1-r-multiple", "sfp-tp2-nearest-opposing", "sfp-tp3-next-opposing"),
+}
+_NESTED_TP3_EXTENSION = Decimal("1.618")
+_TP1_MAX_SHARE_OF_TP2 = Decimal("0.6")
+
+
+def structure_ladder_legs(
+    *,
+    family: str,
+    is_long: bool,
+    entry: Decimal,
+    stop: Decimal,
+    tp2: Decimal,
+    tp3: Decimal | None,
+    tp1_r: Decimal = Decimal("1"),
+    runner_lookback_bars: int = 5,
+) -> tuple[tuple[tuple[Decimal, Decimal, str], ...], dict[str, object]] | str:
+    """TP1/TP2/TP3 legs and the closed-candle runner for a Nested or SFP plan.
+
+    TP1 sits ``tp1_r`` R from the entry, but never past 60% of the way to TP2, so
+    the ladder stays ordered. Prices are raw; the demo planner rounds them to the
+    venue tick.
+    """
+
+    from app.services.partial_exits.runner import RUNNER_RULE_ID, RUNNER_RULE_VERSION
+
+    sign = Decimal(1) if is_long else Decimal(-1)
+    risk = (entry - stop) * sign
+    reach = (tp2 - entry) * sign
+    if risk <= 0:
+        return "invalidated_by_price"
+    if reach <= 0:
+        return "invalidation_unavailable"
+    f1, f2, f3 = _STRUCTURE_LADDER_FORMULAS[family]
+    tp1 = entry + sign * min(tp1_r * risk, reach * _TP1_MAX_SHARE_OF_TP2)
+    legs: list[tuple[Decimal, Decimal, str]] = [(tp1, Decimal("0.15"), f1)]
+    if tp3 is not None and (tp3 - tp2) * sign > 0:
+        legs += [(tp2, Decimal("0.5"), f2), (tp3, Decimal("0.2"), f3)]
+    else:
+        legs.append((tp2, Decimal("0.7"), f2))
+    return tuple(legs), {
+        "enabled": True,
+        "activation_target_order": len(legs),
+        "remaining_quantity_fraction": "0.15",
+        "rule_id": RUNNER_RULE_ID,
+        "rule_version": RUNNER_RULE_VERSION,
+        "expression": f"lookback_bars={runner_lookback_bars}",
+    }
+
+
+def nested_extension_target(
+    bars: tuple[OhlcvBar, ...], event: object, *, is_long: bool
+) -> Decimal | None:
+    """The 1.618 extension of the Nested impulse (anchor to impulse extreme)."""
+
+    try:
+        impulse = bars[event.impulse_index]
+        anchor = bars[event.anchor_index]
+    except (IndexError, AttributeError, TypeError):
+        return None
+    if is_long:
+        span = impulse.high - anchor.low
+        return impulse.high + _NESTED_TP3_EXTENSION * span if span > 0 else None
+    span = anchor.high - impulse.low
+    return impulse.low - _NESTED_TP3_EXTENSION * span if span > 0 else None
+
+
+def sfp_next_opposing_level(
+    assembled: AssembledCanonicalEvidence,
+    spec: object,
+    *,
+    is_long: bool,
+    entry: Decimal,
+    tp2: Decimal,
+) -> Decimal | None:
+    """The nearest fresh opposing level clearly beyond TP2 (at least a quarter of the
+    entry-to-TP2 distance further), from the same closed-evidence levels as the plan."""
+
+    from app.signal_fusion.enums import EvidenceRole
+    from app.strategy_brain.sfp.levels import derive_levels, level_evidence_fresh
+
+    observations = tuple(
+        observation
+        for observation, role in zip(
+            assembled.assessment_command.public_observations,
+            assembled.assessment_command.selected_roles,
+            strict=True,
+        )
+        if role is EvidenceRole.STRUCTURE
+    )
+    levels = derive_levels(
+        assembled.bundle.bars_15m,
+        observations,
+        spec.parameters,
+        evaluated_at=assembled.evaluated_at,
+    )
+    sign = Decimal(1) if is_long else Decimal(-1)
+    gap = abs(tp2 - entry) / 4
+    beyond = [
+        level.price
+        for level in levels
+        if level.kind.support != is_long
+        and level_evidence_fresh(level)
+        and (level.price - tp2) * sign > gap
+    ]
+    if not beyond:
+        return None
+    return min(beyond, key=lambda price: abs(price - tp2))
+
+
 def _sfp_quote_refusal(
     *,
     quote: Decimal,
@@ -1668,6 +1785,8 @@ def _plan_terms(
     internal_paper_sfp: bool = False,
     governed_demo_sfp: bool = False,
     governed_demo_dline: bool = False,
+    structure_ladder: bool = False,
+    structure_ladder_tp1_r: Decimal = Decimal("1"),
     side_aware_fill: bool = False,
     spread_haircut: Decimal = Decimal("0"),
     min_stop_atr_floor: Decimal = Decimal("0"),
@@ -1707,6 +1826,7 @@ def _plan_terms(
     dline_signal = None
     structural_setup_id: UUID | None = None
     nested_target: Decimal | None = None
+    nested_event: object | None = None
     sfp_target: Decimal | None = None
     entry: Decimal
     stop: Decimal | None
@@ -1731,6 +1851,7 @@ def _plan_terms(
         entry = fill_quote
         stop = events[-1].stop
         nested_target = events[-1].targets[0] if events[-1].targets else None
+        nested_event = events[-1]
         structural_setup_id = events[-1].setup_id
     else:
         from app.signal_fusion.first_slice_adapter import FirstSliceEvaluationParams
@@ -1786,6 +1907,26 @@ def _plan_terms(
         or (not is_long and target >= entry)
     ):
         return "invalidation_unavailable"
+    if structure_ladder and ladder is None and (sfp or nested):
+        # Demo-only stepped exits (the governed demo caller opts in per family).
+        # The single structure target stays the sizing reward and becomes TP2.
+        tp3 = (
+            nested_extension_target(assembled.bundle.bars_15m, nested_event, is_long=is_long)
+            if nested
+            else sfp_next_opposing_level(assembled, spec, is_long=is_long, entry=entry, tp2=target)
+        )
+        built = structure_ladder_legs(
+            family="nested" if nested else "sfp",
+            is_long=is_long,
+            entry=entry,
+            stop=stop,
+            tp2=target,
+            tp3=tp3,
+            tp1_r=structure_ladder_tp1_r,
+        )
+        if isinstance(built, str):
+            return built
+        ladder, runner = built
     leverage = Decimal("1")
     margin_mode = MarginMode.CROSS
     sizing_grade = None
