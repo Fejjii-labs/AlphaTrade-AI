@@ -7,6 +7,7 @@ No real network: every HTTP read goes through a MockTransport.
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -605,3 +606,33 @@ def test_exact_scopes_are_never_starved_by_projections(tenant_store) -> None:
     assert projected
     assert all(t.timeframe == "1h" for t in projected)
     assert not any((t.symbol, t.timeframe) in exact for t in projected)
+
+
+def test_cap_smaller_than_exact_scopes_shares_scans_across_every_symbol(
+    tenant_store,
+) -> None:
+    """Staging, 26 Nov: 80 enabled strategies under a cap of 50 left HYPE with no scans."""
+
+    session, org, user = tenant_store
+    for symbol in WATCHLIST:
+        for direction in ("long", "short"):
+            approved(session, org, user, NestedContinuationSpec(symbol=symbol, direction=direction))
+    from structlog.testing import capture_logs
+
+    with capture_logs() as logs:
+        capped = list_watchlist_scan_targets(
+            session, symbols=WATCHLIST, organization_id=org, limit=len(WATCHLIST)
+        )
+    assert sorted(t.symbol for t in capped) == sorted(WATCHLIST)
+    warning = next(e for e in logs if e["event"] == "watcher_scan_cap_exceeded")
+    assert warning["exact_scopes"] == 2 * len(WATCHLIST)
+    assert warning["limit"] == len(WATCHLIST)
+    assert warning["dropped_by_symbol"] == dict.fromkeys(WATCHLIST, 1)
+    # Uneven cap: no symbol gets more than one scope ahead of another.
+    counts = Counter(
+        t.symbol
+        for t in list_watchlist_scan_targets(
+            session, symbols=WATCHLIST, organization_id=org, limit=7
+        )
+    )
+    assert set(counts) == set(WATCHLIST) and max(counts.values()) - min(counts.values()) <= 1

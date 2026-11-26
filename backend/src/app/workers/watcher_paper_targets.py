@@ -7,11 +7,13 @@ Unknown catalog symbols fail closed later at assembly time.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 from uuid import UUID, uuid5
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -27,6 +29,8 @@ from app.signal_fusion.errors import StrategyEvaluationPolicyError
 from app.signal_fusion.strategy_evaluation_policy import ExecutableStrategyPolicy
 from app.watcher.hashing import derive_scan_scope
 from app.workers.watcher_watchlist import ordered_watch_symbols
+
+logger = structlog.get_logger(__name__)
 
 FIRST_SLICE_SYMBOL = "BTCUSDT"
 FIRST_SLICE_TIMEFRAME = Timeframe.M15.value
@@ -290,8 +294,22 @@ def list_watchlist_scan_targets(
             if authored.symbol.strip().upper() == symbol:
                 native.append(_target_from_executable(strategy, executable, symbol=symbol))
                 exact_coverage.add((symbol, _tf(authored.trigger_timeframe), type(authored)))
-    if len(native) >= limit:
-        return tuple(native[:limit])
+    if len(native) > limit:
+        chosen = _fair_share(native, limit)
+        kept = Counter(t.symbol for t in chosen)
+        logger.warning(
+            "watcher_scan_cap_exceeded",
+            exact_scopes=len(native),
+            limit=limit,
+            dropped_by_symbol={
+                symbol: count - kept[symbol]
+                for symbol, count in Counter(t.symbol for t in native).items()
+                if count > kept[symbol]
+            },
+        )
+        return chosen
+    if len(native) == limit:
+        return tuple(native)
     targets: list[PaperScanTarget] = list(native)
     for symbol in enabled_symbols:
         for timeframe in project_timeframes:
@@ -321,6 +339,24 @@ def list_watchlist_scan_targets(
                 if len(targets) >= limit:
                     return tuple(targets)
     return tuple(targets)
+
+
+def _fair_share(native: list[PaperScanTarget], limit: int) -> tuple[PaperScanTarget, ...]:
+    """Keep ``limit`` exact scopes, taking one per symbol in turn, in the original order.
+
+    A plain ``native[:limit]`` fills the cap symbol by symbol, so the last symbols on
+    the watchlist got no scans at all when more strategies were enabled than the cap.
+    """
+
+    queues: dict[str, list[int]] = {}
+    for index, target in enumerate(native):
+        queues.setdefault(target.symbol, []).append(index)
+    picked: set[int] = set()
+    while len(picked) < limit:
+        for queue in queues.values():
+            if queue and len(picked) < limit:
+                picked.add(queue.pop(0))
+    return tuple(target for index, target in enumerate(native) if index in picked)
 
 
 def _tf(value: object) -> str:
