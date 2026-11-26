@@ -202,9 +202,10 @@ def label(fam, tfs, flt, key):
     return f"{'+'.join(tfs):14s} {f:10s} {key}"
 
 
-def select(root):
-    selection = {}
-    for name in ("dline", "nested", "sfp"):
+def select(root, names=("dline", "nested", "sfp")):
+    path = os.path.join(root, "out", "selection.json")
+    selection = json.load(open(path)) if os.path.exists(path) else {}
+    for name in names:
         fam = Family(root, name)
         table = evaluate_all(fam)
         scored = choose(fam, table)
@@ -229,19 +230,27 @@ def select(root):
                   f"y1 {s['y1']['avg']:+.3f} y2 {s['y2']['avg']:+.3f}")
         if top:
             score, _, tfs, flt, key = top[0]
-            selection[name] = {"tfs": list(tfs), "filter": flt, "key": key, "score": score}
+            selection[name] = {"tfs": list(tfs), "filter": flt, "key": key, "score": score,
+                               "eligible": True}
         else:
-            selection[name] = None
-            print("  none eligible")
+            print("  none eligible; least bad by score with >= 4 trades a month:")
+            rest = [x for x in scored if table[x[2:]]["is"]["pm"] >= 4][:12]
+            for score, _, tfs, flt, key in rest:
+                s = table[(tfs, flt, key)]
+                print(f"  {score:+.3f}  {label(fam, tfs, flt, key)}  {fmt(s['is'])}  "
+                      f"y1 {s['y1']['avg']:+.3f} y2 {s['y2']['avg']:+.3f}")
+            score, _, tfs, flt, key = rest[0]
+            selection[name] = {"tfs": list(tfs), "filter": flt, "key": key, "score": score,
+                               "eligible": False}
         print("\none-at-a-time sensitivity (in-sample R per trade, mean over the other exit choices)")
-        base_tfs, base_flt = (tuple(selection[name]["tfs"]), selection[name]["filter"]) if selection[name] else LIVE[name][:2]
+        base_tfs, base_flt = tuple(selection[name]["tfs"]), selection[name]["filter"]
         for pos, dim in enumerate(("entry", "tp1", "be", "trail", "place")):
             groups = defaultdict(list)
             for (t, f, k), s in table.items():
                 if t == base_tfs and f == base_flt and s["is"]["n"] >= 30:
                     groups[k.split("|")[pos]].append(s["is"]["avg"])
             print(f"  {dim:6s} " + "  ".join(f"{v}: {np.mean(a):+.3f}" for v, a in sorted(groups.items())))
-    json.dump(selection, open(os.path.join(root, "out", "selection.json"), "w"), indent=1)
+    json.dump(selection, open(path, "w"), indent=1)
     print("\nselection:", json.dumps(selection))
 
 
@@ -293,7 +302,8 @@ def final(root):
             tfs, flt, key = tuple(sel["tfs"]), sel["filter"], sel["key"]
             taken = fam.trades(key, tfs, flt)
             chosen[name] = (tfs, flt, key)
-            side_by_side(f"chosen: {label(fam, tfs, flt, key)}", taken)
+            tag = "chosen" if sel.get("eligible", True) else "least bad in-sample (failed the rule)"
+            side_by_side(f"{tag}: {label(fam, tfs, flt, key)}", taken)
             a, b = both(taken, funding=True)
             print(f"\nchosen with estimated funding: IS {a['net']:+.1f}R ({a['avg']:+.3f}R/trade), "
                   f"blind {b['net']:+.1f}R ({b['avg']:+.3f}R/trade)")
@@ -524,5 +534,8 @@ def lvl_final(root):
 
 
 if __name__ == "__main__":
-    {"select": select, "final": final, "lvl-select": lvl_select,
-     "lvl-final": lvl_final}[sys.argv[2]](sys.argv[1])
+    if sys.argv[2] == "select" and len(sys.argv) > 3:
+        select(sys.argv[1], sys.argv[3].split(","))
+    else:
+        {"select": select, "final": final, "lvl-select": lvl_select,
+         "lvl-final": lvl_final}[sys.argv[2]](sys.argv[1])
