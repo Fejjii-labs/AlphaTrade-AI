@@ -338,6 +338,13 @@ class Settings(BaseSettings):
     governed_demo_dline_timeframes: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["30m", "1h"]
     )
+    # Nested on BloFin DEMO (Nov 2026 one-year history study, net of fees): N1, the
+    # first continuation, lost on every timeframe and 15m lost overall; 30m/1h at
+    # stage N2 and later were positive in both halves of the year.
+    governed_demo_nested_timeframes: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["30m", "1h"]
+    )
+    governed_demo_nested_min_stage: Literal["N1", "N2", "N3", "N4_PLUS"] = "N2"
     # Retention (H5 + the approved data policy). Kept forever: strategies,
     # conversations, journal, trades/orders/fills/plans, paper_decision and
     # paper_trade_* setup events, knowledge, accounts and settings. Candidates
@@ -934,10 +941,12 @@ class Settings(BaseSettings):
             return [item.strip().lower() for item in value.split(",") if item.strip()]
         return value
 
-    @field_validator("governed_demo_dline_timeframes", mode="before")
+    @field_validator(
+        "governed_demo_dline_timeframes", "governed_demo_nested_timeframes", mode="before"
+    )
     @classmethod
     def _split_governed_demo_dline_timeframes(cls, value: object) -> object:
-        """Allow a comma-separated string for ``GOVERNED_DEMO_DLINE_TIMEFRAMES``."""
+        """Allow a comma-separated string for the GOVERNED_DEMO_*_TIMEFRAMES lists."""
         if isinstance(value, str):
             return [item.strip().lower() for item in value.split(",") if item.strip()]
         return value

@@ -60,7 +60,14 @@ def test_approved_nested_produces_protected_actual_demo_entry_and_verified_exit(
             (session, ORG, USER), monkeypatch
         )
         account = session.scalar(select(ExecutionAccount))
-        settings = demo_settings(str(account.id))
+        # The fixture is a 15m N1 setup; the live defaults (30m/1h, N2+) are
+        # covered in test_nested_demo_gates.py.
+        settings = demo_settings(str(account.id)).model_copy(
+            update={
+                "governed_demo_nested_timeframes": ["15m", "30m", "1h"],
+                "governed_demo_nested_min_stage": "N1",
+            }
+        )
         # demo_settings() arms autonomous BloFin demo mode (M1 requires it for
         # worker entries); that path refuses without a verifiable risk ledger.
         seed_band_ledger_headroom(session, account.id)

@@ -835,7 +835,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             self._settings, "governed_demo_sfp_enabled", False
         ):
             return _proof(candidate, "skipped", "sfp_execution_plan_not_authorized")
-        dline_refusal = self._dline_refusal(policy)
+        dline_refusal = self._dline_refusal(policy) or self._nested_refusal(policy)
         if dline_refusal is not None:
             return _proof(candidate, "skipped", dline_refusal)
         existing = self._runtime.plan_store.get_by_candidate_scope(
@@ -972,6 +972,37 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             )
         return proof
 
+    def _nested_refusal(
+        self, policy: object, assembled: AssembledCanonicalEvidence | None = None
+    ) -> str | None:
+        """Nested trades on demo only on the configured timeframes and stages.
+
+        One-year history (Nov 2026, net of fees): N1 lost on every timeframe and
+        15m lost overall; 30m/1h from stage N2 were positive. With ``assembled``
+        the confirmed setup's stage is read from the same detector the plan uses.
+        """
+
+        from app.schemas.nested_continuation import NestedContinuationSpec
+        from app.strategy_brain.detector import detect_nested
+
+        spec = getattr(policy, "authored_spec", None)
+        if not isinstance(spec, NestedContinuationSpec):
+            return None
+        allowed = getattr(self._settings, "governed_demo_nested_timeframes", ["30m", "1h"])
+        if spec.trigger_timeframe.value not in {str(tf).strip() for tf in allowed}:
+            return "nested_timeframe_disabled_on_demo"
+        if assembled is None:
+            return None
+        events = detect_nested(assembled.bundle.bars_15m, spec, evaluated_at=assembled.evaluated_at)
+        if not events or events[-1].state.value != "CONFIRMED":
+            return None  # the plan path refuses unconfirmed setups itself
+        order = ("N1", "N2", "N3", "N4_PLUS")
+        minimum = str(getattr(self._settings, "governed_demo_nested_min_stage", "N2"))
+        stage = events[-1].stage
+        if stage not in order or minimum not in order or order.index(stage) < order.index(minimum):
+            return "nested_stage_below_minimum_on_demo"
+        return None
+
     def _dline_refusal(self, policy: object) -> str | None:
         """D-line trades only under demo data mode with demo partial exits (its ladder).
 
@@ -1074,7 +1105,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             return "sfp_execution_plan_not_authorized"
         dline_spec = getattr(policy, "authored_spec", None)
         dline = isinstance(dline_spec, DlineLiveSpec)
-        dline_refusal = self._dline_refusal(policy)
+        dline_refusal = self._dline_refusal(policy) or self._nested_refusal(policy, assembled)
         if dline_refusal is not None:
             return dline_refusal
         # Read structure with the same ATR floor, without changing the evidence
