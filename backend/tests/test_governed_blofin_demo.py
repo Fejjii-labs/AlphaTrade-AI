@@ -568,6 +568,14 @@ def test_worker_venue_fills_journal_restart_and_protection(
                 assert reservation is not None
                 assert reservation.release_state is RiskReservationReleaseState.RELEASED
                 assert not blocked
+                # A proven-unsent command is finished: it leaves the reconcile window.
+                loop = GovernedBloFinDemoLoop(
+                    runtime._canonical_runtime,
+                    settings,
+                    FrozenClock(EVALUATED_AT),
+                    provider=provider,
+                )
+                assert _pending_ids(loop, session) == []
             assert session.scalar(select(func.count()).select_from(ExecutionFillFact)) == 0
             assert session.scalar(select(func.count()).select_from(JournalTrade)) == 0
         return
@@ -605,6 +613,9 @@ def test_worker_venue_fills_journal_restart_and_protection(
         if behavior in {"rejected", "unfilled"}:
             assert fill_count == trade_count == 0
             assert opened_pages == []
+            # Rejected: no position, out of the window. An unfilled order still live
+            # on BloFin can still fill, so it stays.
+            assert _pending_ids(loop, session) == ([] if behavior == "rejected" else [command.id])
         else:
             assert fill_count == trade_count == 1
             # One open page, from the reconcile that first journals the entry,
@@ -1258,3 +1269,16 @@ def test_widened_zone_rounds_inward_and_keeps_the_observed_prices(
     lower, upper = _widened_zone(low, high, tick)
     assert (lower, upper) == (Decimal(expected[0]), Decimal(expected[1]))
     assert lower <= low <= high <= upper
+
+
+def _pending_ids(loop: GovernedBloFinDemoLoop, session: object) -> list[object]:
+    """Commands reconcile_pending would reconcile this cycle (audit C-1)."""
+
+    seen: list[object] = []
+    original = loop.reconcile_command
+    loop.reconcile_command = lambda _session, *, command_id: seen.append(command_id) or "seen"  # type: ignore[method-assign]
+    try:
+        loop.reconcile_pending(session)
+    finally:
+        loop.reconcile_command = original  # type: ignore[method-assign]
+    return seen

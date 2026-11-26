@@ -30,6 +30,7 @@ from app.db.models import (
     ExecutionAccount,
     ExecutionCommand,
     ExecutionProjection,
+    ExecutionReceipt,
     GovernedDemoLifecycleResolution,
     JournalTrade,
     KillSwitchState,
@@ -65,7 +66,12 @@ from app.schemas.common import (
     PaperAlertType,
     TradeDirection,
 )
-from app.schemas.execution_protocol import ExecutionCommandOutcome, VenueSubmitEffectState
+from app.schemas.execution_protocol import (
+    ExecutionCommandOutcome,
+    ExecutionReceiptState,
+    VenueSendDisposition,
+    VenueSubmitEffectState,
+)
 from app.schemas.risk import KillSwitchMutationRequest
 from app.schemas.trade_plan import (
     AuthorizationChannel,
@@ -152,6 +158,7 @@ from app.signal_fusion.ports import Clock
 from app.signal_fusion.strategy_evaluation_policy import ExecutableStrategyPolicy
 from app.workers.watcher_paper_targets import PaperScanTarget
 
+RECONCILE_WINDOW = 20  # unresolved demo commands reconciled per cycle, oldest first
 logger = logging.getLogger(__name__)
 DEMO_POLICY = "governed-blofin-demo/v1"
 # Slippage allowance (bps) added on both sides of the authorized entry zone; equal to
@@ -2600,6 +2607,26 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     ExecutionCommand.outcome == ExecutionCommandOutcome.ALLOW,
                     TradePlanRevision.execution_venue == "BLOFIN_DEMO",
                     TradePlanRevision.execution_policy_version == DEMO_POLICY,
+                    # Commands that provably opened no position are finished: never
+                    # sent, rejected by BloFin, or cancelled with nothing filled. Left
+                    # in, they filled this 20-slot window for good (audit C-1).
+                    ~select(VenueSubmitEffect.id)
+                    .where(
+                        VenueSubmitEffect.command_id == ExecutionCommand.id,
+                        (VenueSubmitEffect.state == VenueSubmitEffectState.PROVEN_UNSENT)
+                        | (
+                            VenueSubmitEffect.reconciliation_disposition
+                            == VenueSendDisposition.REJECTED.value
+                        ),
+                    )
+                    .exists(),
+                    ~select(ExecutionProjection.id)
+                    .join(ExecutionReceipt, ExecutionReceipt.id == ExecutionProjection.receipt_id)
+                    .where(
+                        ExecutionReceipt.command_id == ExecutionCommand.id,
+                        ExecutionProjection.state == ExecutionReceiptState.CANCELLED,
+                    )
+                    .exists(),
                     (
                         GovernedDemoLifecycleResolution.id.is_(None)
                         | (
@@ -2627,10 +2654,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 .order_by(
                     GovernedDemoLifecycleResolution.id.is_not(None), ExecutionCommand.created_at
                 )
-                .limit(20)
+                .limit(RECONCILE_WINDOW)
             )
         )
         session.commit()
+        if len(ids) >= RECONCILE_WINDOW:
+            # Newer commands wait while the window is full; say so (audit C-1).
+            logger.warning("governed_demo_reconcile_window_full window=%s", RECONCILE_WINDOW)
         if self._uses_demo_risk_v2():
             try:
                 equity = self._get_provider().read_demo_equity()
