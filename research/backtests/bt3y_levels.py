@@ -96,7 +96,7 @@ def main() -> None:
     funding = load_funding(os.path.join(root, "funding"), symbol)
     ema4 = ema(bars["4h"]["c"], 50)
     tick = TICK[symbol]
-    meta, net, fund, exit_ms, entry_ms, stop_pct = [], [], [], [], [], []
+    meta, net, fund, exit_ms, stop_pct = [], [], [], [], []
     t0 = time.time()
     for trig in TRIGGERS:
         b = bars[trig]

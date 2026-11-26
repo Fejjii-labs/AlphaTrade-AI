@@ -163,22 +163,6 @@ def live_checks(sign: int, entry: float, stop: float, ladder) -> str | None:
     return None
 
 
-def build_ladder(sign: int, entry: float, stop: float, tp1_r: float, levels, tick: float):
-    """Spec ladder: TP1 15% at ``tp1_r`` R, TP2 50% and TP3 20% at the first two
-    ``levels`` beyond TP1 (TP3 merged into TP2 when there is one level), runner 15%.
-    Returns (ladder, fallback): without any level beyond TP1, TP2 sits 1R beyond TP1.
-    """
-    risk = (entry - stop) * sign
-    tp1 = entry + sign * tp1_r * risk
-    beyond = sorted({round(p / tick) * tick for p in levels if (p - tp1) * sign > tick},
-                    key=lambda p: p * sign)
-    if not beyond:
-        return [(tp1, 0.15), (tp1 + sign * risk, 0.70)], True
-    if len(beyond) == 1:
-        return [(tp1, 0.15), (beyond[0], 0.70)], False
-    return [(tp1, 0.15), (beyond[0], 0.50), (beyond[1], 0.20)], False
-
-
 def simulate(M: Minutes, bars: dict, tf: str, sign: int, entry_ms: int, entry: float,
              stop: float, ladder, *, be: bool, trail: int | None, maker: bool = False,
              fill_minute_stop_only: bool = False, funding=None, slip_bps: float = 0.0):

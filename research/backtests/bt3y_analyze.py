@@ -533,9 +533,72 @@ def lvl_final(root):
           f"positive in-sample {np.mean(x > 0):.0%}, blind {np.mean(y > 0):.0%}, both {np.mean((x > 0) & (y > 0)):.0%}")
 
 
+def extras(root):
+    """Checks quoted in the report: yearly results with a standard error, the average effect
+    of each choice in both periods, and the chosen settings combined without SFP."""
+    selection = json.load(open(os.path.join(root, "out", "selection.json")))
+    fams = {n: Family(root, n) for n in ("dline", "nested", "sfp")}
+
+    def line(title, taken):
+        cells = []
+        for n in ("y1", "y2", "blind"):
+            v = np.array([f.m["net"][i, k] for f, i, k in period(taken, n)])
+            se = v.std(ddof=1) / np.sqrt(len(v)) if len(v) > 1 else float("nan")
+            cells.append(f"{len(v)} | {v.sum():+.1f}R | {v.mean() if len(v) else 0:+.3f} ± {se:.3f}")
+        print(f"| {title} | " + " | ".join(cells) + " |")
+
+    print("| | y1 trades | net | per trade ± s.e. | y2 trades | net | per trade ± s.e. "
+          "| blind trades | net | per trade ± s.e. |\n" + "|---" * 10 + "|")
+    for name, fam in fams.items():
+        tfs, flt, key = LIVE[name]
+        line(f"{name} live today", fam.trades(key, tfs, flt))
+        sel = selection[name]
+        line(f"{name} chosen", fam.trades(sel["key"], tuple(sel["tfs"]), sel["filter"]))
+    print("\naverage effect of each choice: mean R per trade over every setting with >= 30 "
+          "trades in the period (single timeframes)")
+    for name, fam in fams.items():
+        table = evaluate_all(fam, names=("is", "blind"))
+        print(f"\n{name}\n| choice | value | in-sample | blind |\n|---|---|---|---|")
+        groups = defaultdict(lambda: defaultdict(list))
+        for (tfs, flt, key), st in table.items():
+            if len(tfs) != 1:
+                continue
+            e, tp1, be, trail, place = key.split("|")
+            dims = {"timeframe": tfs[0], "filter": flt, "entry": e, "tp1": tp1}
+            if tp1 != "live":
+                dims.update({"break-even": be, "trail": trail, "placement": place})
+            for d, v in dims.items():
+                for n in ("is", "blind"):
+                    if st[n]["n"] >= 30:
+                        groups[(d, str(v))][n].append(st[n]["avg"])
+        for (d, v), g in groups.items():
+            a, b = (f"{np.mean(g[n]):+.3f} ({len(g[n])})" if g[n] else "n/a" for n in ("is", "blind"))
+            print(f"| {d} | {v} | {a} | {b} |")
+    print(f"\nchosen D-line + Nested together, no SFP\n\n{SBS_HEAD}")
+    cands = []
+    for name in ("dline", "nested"):
+        fam, sel = fams[name], selection[name]
+        k = fam.kidx[sel["key"]]
+        ok = fam.mask(tuple(sel["tfs"]), sel["filter"]) & ~np.isnan(fam.m["net"][:, k])
+        if name != "nested":
+            ok &= fam.m["stop_pct"][:, k] >= sel["filter"]
+        cands += [(fam, i, k) for i in np.flatnonzero(ok)]
+    cands.sort(key=lambda c: c[0].m["entry_ms"][c[1], c[2]])
+    taken = one_per_coin(cands)
+    side_by_side("chosen D-line + Nested", taken)
+    for name in ("dline", "nested"):
+        side_by_side(f"  of which {name}", [c for c in taken if c[0].name == name])
+    nested = fams["nested"]
+    sel = selection["nested"]
+    with_trend = nested.c["trend"] == nested.c["sign"]
+    print(f"\nNested chosen, only with the 4h trend (seen after the fact, not selected)\n\n{SBS_HEAD}")
+    side_by_side("with 4h trend only", nested.trades(sel["key"], tuple(sel["tfs"]), sel["filter"],
+                                                    extra=with_trend))
+
+
 if __name__ == "__main__":
     if sys.argv[2] == "select" and len(sys.argv) > 3:
         select(sys.argv[1], sys.argv[3].split(","))
     else:
         {"select": select, "final": final, "lvl-select": lvl_select,
-         "lvl-final": lvl_final}[sys.argv[2]](sys.argv[1])
+         "lvl-final": lvl_final, "extras": extras}[sys.argv[2]](sys.argv[1])
