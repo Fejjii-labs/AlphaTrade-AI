@@ -7,6 +7,8 @@ Usage:
     python download_klines.py <out_dir> <SYMBOLS,...> <intervals,...> <first YYYY-MM> <last YYYY-MM-DD>
 Example (one year, the five demo coins):
     python download_klines.py data BTCUSDT,ETHUSDT,ZECUSDT,TAOUSDT,HYPEUSDT 1m,15m,30m,1h,2h,4h 2025-11 2026-11-24
+The pseudo-interval ``funding`` fetches the monthly funding-rate archives instead
+(<SYMBOL>-fundingRate-<YYYY-MM>.csv; there are no daily funding archives).
 Downloads are untrusted data: keep the folder separate from code.
 """
 
@@ -46,6 +48,13 @@ def main() -> None:
     days = [end.replace(day=1) + timedelta(days=i) for i in range(end.day)]
     for symbol in symbols.split(","):
         for interval in intervals.split(","):
+            if interval == "funding":
+                for m in [*months, f"{end.year:04d}-{end.month:02d}"]:
+                    name = f"{symbol}-fundingRate-{m}"
+                    if not os.path.exists(os.path.join(out_dir, name + ".csv")):
+                        if not fetch(f"{BASE}/monthly/fundingRate/{symbol}/{name}.zip", out_dir):
+                            print("missing", name, flush=True)
+                continue
             for m in months:
                 name = f"{symbol}-{interval}-{m}"
                 if not os.path.exists(os.path.join(out_dir, name + ".csv")):
