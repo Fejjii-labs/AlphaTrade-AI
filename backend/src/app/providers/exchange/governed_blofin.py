@@ -756,7 +756,9 @@ class GovernedBloFinDemoProvider:
             raise ValueError("Ambiguous demo submit identity.")
         return order_id
 
-    def partial_exit_venue(self, plan: TradePlanRevision) -> BloFinDemoReduceOnlyVenue:
+    def partial_exit_venue(
+        self, plan: TradePlanRevision, *, entry_client_order_id: str | None = None
+    ) -> BloFinDemoReduceOnlyVenue:
         from app.providers.exchange.governed_blofin_partial_exits import (
             BloFinDemoReduceOnlyVenue,
         )
@@ -768,6 +770,7 @@ class GovernedBloFinDemoProvider:
             plan=plan,
             require_identity=self._require_close_identity,
             per_instrument=self.flat_per_instrument,
+            entry_client_order_id=entry_client_order_id,
         )
 
     def _require_close_identity(self) -> None:

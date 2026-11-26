@@ -11,14 +11,22 @@ and POST /api/v1/trade/order-tpsl).
 Reads: our closing orders (pending + bounded history since ``valid_from``,
 filtered by client id prefix), their fills, the net position, the last traded
 price (``GET /api/v1/market/tickers``) and public candles for the runner.
+
+Backup stop (``GOVERNED_DEMO_LADDER_BACKUP_STOP``): one standalone stop order
+(``POST /api/v1/trade/order-tpsl``, ``size`` -1 = the whole position, reduce-only,
+market on trigger) named ``backup_stop_client_id(entry client id)``, moved in place
+with ``POST /api/v1/trade/amend-tpsl``. Checked on the demo on 26 Nov 2026 (SOL):
+size -1 is accepted and follows the position after a partial close, the amend
+moves the trigger in place, and BloFin cancels the stop when the position closes.
 """
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Any
 
 from app.core.exchange_safety import is_allowlisted_demo_host
@@ -46,6 +54,12 @@ _STATES: dict[str, CloseState] = {
 }
 
 
+def backup_stop_client_id(entry_client_order_id: str) -> str:
+    """The backup stop's client id, derived from the entry's: ``bs`` + 24 hex."""
+
+    return "bs" + hashlib.sha256(entry_client_order_id.encode()).hexdigest()[:24]
+
+
 @dataclass(frozen=True, slots=True)
 class DemoClosedBar:
     interval_start: datetime
@@ -62,11 +76,15 @@ class BloFinDemoReduceOnlyVenue:
         plan: TradePlanRevision,
         require_identity: Callable[[], None],
         per_instrument: bool = False,
+        entry_client_order_id: str | None = None,
     ) -> None:
         self._client = client
         self._plan = plan
         self._require_identity = require_identity
         self._client_ids: dict[str, str] = {}
+        self._backup_id = (
+            backup_stop_client_id(entry_client_order_id) if entry_client_order_id else None
+        )
         # Demo data mode: other coins' positions belong to other bot trades.
         self._per_instrument = per_instrument
 
@@ -182,6 +200,73 @@ class BloFinDemoReduceOnlyVenue:
         if len(rows) != 1 or rows[0].get("instId", self._instrument) != self._instrument:
             raise ValueError("Ambiguous demo ticker.")
         return _positive(rows[0].get("last"))
+
+    def backup_stop(self) -> tuple[str, Decimal] | None:
+        """(tpslId, trigger) of our resting backup stop on this coin, or None."""
+
+        if self._backup_id is None:
+            raise ValueError("No entry identity for a backup stop.")
+        rows = _account_rows(
+            self._client.request(
+                "GET",
+                "/api/v1/trade/orders-tpsl-pending",
+                params={"instId": self._instrument, "limit": "100"},
+                signed=True,
+            )
+        )
+        ours = [row for row in rows if row.get("clientOrderId") == self._backup_id]
+        if not ours:
+            return None
+        if len(ours) != 1 or not ours[0].get("tpslId"):
+            raise ValueError("Ambiguous demo backup stop.")
+        return str(ours[0]["tpslId"]), _positive(ours[0].get("slTriggerPrice"))
+
+    def backup_trigger(self, stop: Decimal) -> Decimal:
+        """The stop on the instrument's tick, never looser (long up, short down)."""
+
+        tick = self._plan.instrument_rules.tick_size
+        rounding = ROUND_CEILING if self._plan.side is EntrySide.BUY else ROUND_FLOOR
+        return (stop / tick).to_integral_value(rounding=rounding) * tick
+
+    def place_backup_stop(self, trigger: Decimal) -> None:
+        self._backup_guard(trigger)
+        body = {
+            "instId": self._instrument,
+            "marginMode": demo_order_margin_mode(
+                self._plan.risk_and_exits.margin_assumption_id, str(self._plan.margin_mode.value)
+            ),
+            "positionSide": "net",
+            "side": self.close_side,
+            "slTriggerPrice": format(trigger, "f"),
+            "slOrderPrice": "-1",
+            "size": "-1",
+            "reduceOnly": "true",
+            "clientOrderId": self._backup_id,
+        }
+        data = self._client.request("POST", "/api/v1/trade/order-tpsl", body=body, signed=True)
+        rows = _rows(data)
+        if len(rows) != 1 or str(rows[0].get("code", "0")) != "0":
+            raise ValueError("Demo backup stop rejected.")
+
+    def amend_backup_stop(self, tpsl_id: str, trigger: Decimal) -> None:
+        self._backup_guard(trigger)
+        body = {
+            "instId": self._instrument,
+            "tpslId": tpsl_id,
+            "newSlTriggerPrice": format(trigger, "f"),
+            "newSlOrderPrice": "-1",
+        }
+        data = self._client.request("POST", "/api/v1/trade/amend-tpsl", body=body, signed=True)
+        rows = _rows(data)
+        if not rows or any(str(row.get("code", "0")) != "0" for row in rows):
+            raise ValueError("Demo backup stop move rejected.")
+
+    def _backup_guard(self, trigger: Decimal) -> None:
+        if not is_allowlisted_demo_host(self._client.base_url):
+            raise ValueError("Backup stops are allowed on the BloFin demo host only.")
+        if self._backup_id is None or not trigger.is_finite() or trigger <= 0:
+            raise ValueError("Invalid demo backup stop.")
+        self._require_identity()
 
     def closed_bars(self, *, evaluated_at: datetime, limit: int) -> tuple[DemoClosedBar, ...]:
         timeframe = Timeframe(self._plan.timeframe)

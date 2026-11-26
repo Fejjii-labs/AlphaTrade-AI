@@ -29,6 +29,13 @@ add to a position. One ``step``:
    reached is closed for its unfilled quantity. A close the venue refuses
    (including a failed account identity check) is sent no further.
 
+Backup stop (opt-in, ``backup_stop=True``): after the closes are decided, one
+whole-position stop order rests on BloFin at the current stop, placed if missing
+and moved only to tighten (break-even, trail). It is a safety net for when the
+bot is down; BloFin cancels it when the position closes. It is skipped when the
+venue position differs from the record or the stop is already crossed (the bot
+closes then), and a failure only alerts: it never holds or blocks a close.
+
 Client order ids are ``pe`` + 20 hex of SHA-256(command id) + ``t<leg>`` or ``x`` +
 ``n<attempt>``, where the attempt counts our earlier orders for that leg. A
 restart therefore reuses the id of a close that was never accepted, and a
@@ -44,7 +51,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from app.core.config import Settings
@@ -148,11 +155,13 @@ class GovernedDemoPartialExitManager:
         venue: DemoReduceOnlyVenue,
         store: DemoExitStore,
         hold: Callable[[UUID], str | None],
+        backup_stop: bool = False,
     ) -> None:
         self._settings = settings
         self._venue = venue
         self._store = store
         self._hold = hold
+        self._backup_stop = backup_stop
 
     @staticmethod
     def client_prefix(command_id: UUID) -> str:
@@ -282,9 +291,37 @@ class GovernedDemoPartialExitManager:
                     )
                 )
         placed, alerts = self._place(closes, close_side)
+        if (
+            self._backup_stop
+            and not closes
+            and held_quantity > 0
+            and reason in (None, *STOP_ONLY_HOLD_REASONS)
+        ):
+            synced, failed = self._sync_backup_stop(stop, long=long)
+            placed, alerts = placed + synced, alerts + failed
         if reason is not None:
             return DemoStepReport("held", reason, alerts, placed)
         return DemoStepReport("managed", alerts=alerts, placed=placed)
+
+    def _sync_backup_stop(
+        self, stop: Decimal, *, long: bool
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Place the BloFin backup stop if missing; move it only to tighten."""
+
+        venue: Any = self._venue
+        try:
+            trigger = venue.backup_trigger(stop)
+            current = venue.backup_stop()
+            if current is None:
+                venue.place_backup_stop(trigger)
+                return ("backup_stop",), ()
+            tpsl_id, resting = current
+            if (trigger > resting) if long else (trigger < resting):
+                venue.amend_backup_stop(tpsl_id, trigger)
+                return ("backup_stop_moved",), ()
+        except Exception:
+            return (), ("backup_stop_failed",)
+        return (), ()
 
     def _hold_with_stop(
         self,

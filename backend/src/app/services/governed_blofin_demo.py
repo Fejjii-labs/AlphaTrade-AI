@@ -2455,7 +2455,15 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if hold is not None and hold not in STOP_ONLY_HOLD_REASONS:
             return f"demo_ladder_held_{hold}"
         try:
-            venue = self._get_provider().partial_exit_venue(plan)
+            backup_stop = bool(getattr(self._settings, "governed_demo_ladder_backup_stop", False))
+            # With the backup stop off, nothing changes: no entry identity is passed.
+            venue = (
+                self._get_provider().partial_exit_venue(
+                    plan, entry_client_order_id=evidence.client_order_id
+                )
+                if backup_stop
+                else self._get_provider().partial_exit_venue(plan)
+            )
             bars: tuple[object, ...] = ()
             now = self._clock.now()
             if terms.runner_rule is not None:
@@ -2470,6 +2478,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 venue=venue,
                 store=self._demo_ladder_store(session, command, terms),
                 hold=lambda organization_id: self._demo_ladder_hold(session, command),
+                backup_stop=backup_stop,
             )
             report = manager.step(
                 DemoLadderPosition(command.organization_id, command.id, terms),
