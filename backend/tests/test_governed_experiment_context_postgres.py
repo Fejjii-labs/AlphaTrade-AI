@@ -172,6 +172,10 @@ def make_loop(world, monkeypatch, *, before_fence=None):
             "autonomous_blofin_demo_enabled": True,
             "watcher_paper_staging_activation": True,
             "watcher_orchestration_enabled": True,
+            # The fixture's Nested signal is 15m N1; this file tests the order path,
+            # not the demo timeframe/stage gate (see test_nested_demo_gates.py).
+            "governed_demo_nested_timeframes": ["15m", "30m", "1h"],
+            "governed_demo_nested_min_stage": "N1",
         }
     )
 
