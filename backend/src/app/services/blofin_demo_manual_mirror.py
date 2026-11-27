@@ -1333,6 +1333,7 @@ class _BotEntry:
     direction: TradeDirection
     entry_time: datetime
     entry_price: Decimal
+    trade_id: uuid.UUID | None = None
 
 
 def _utc(when: datetime) -> datetime:
@@ -1348,6 +1349,7 @@ def _bot_entries(
         JournalTrade.direction,
         JournalTrade.entry_time,
         JournalTrade.entry_price,
+        JournalTrade.id,
     ).where(
         JournalTrade.organization_id == organization_id,
         JournalTrade.source == JournalTradeSource.PAPER_EXECUTION,
@@ -1358,9 +1360,34 @@ def _bot_entries(
     if since is not None:
         query = query.where(JournalTrade.entry_time >= since - _BOT_ENTRY_WINDOW)
     return [
-        _BotEntry(_symbol(symbol), direction, _utc(entry_time), entry_price)
-        for symbol, direction, entry_time, entry_price in session.execute(query).all()
+        _BotEntry(_symbol(symbol), direction, _utc(entry_time), entry_price, trade_id)
+        for symbol, direction, entry_time, entry_price, trade_id in session.execute(query).all()
     ]
+
+
+def _bot_match(
+    bots: list[_BotEntry],
+    *,
+    symbol: str,
+    direction: TradeDirection,
+    entry_time: datetime | None,
+    entry_price: Decimal | None,
+) -> _BotEntry | None:
+    if entry_time is None or entry_price is None or entry_price <= 0:
+        return None
+    coin = _symbol(symbol)
+    entry_time = _utc(entry_time)
+    return next(
+        (
+            bot
+            for bot in bots
+            if bot.symbol == coin
+            and bot.direction is direction
+            and abs(bot.entry_time - entry_time) <= _BOT_ENTRY_WINDOW
+            and abs(bot.entry_price - entry_price) <= entry_price * _BOT_PRICE_TOLERANCE
+        ),
+        None,
+    )
 
 
 def _bot_owned(
@@ -1371,17 +1398,42 @@ def _bot_owned(
     entry_time: datetime | None,
     entry_price: Decimal | None,
 ) -> bool:
-    if entry_time is None or entry_price is None or entry_price <= 0:
-        return False
-    coin = _symbol(symbol)
-    entry_time = _utc(entry_time)
-    return any(
-        bot.symbol == coin
-        and bot.direction is direction
-        and abs(bot.entry_time - entry_time) <= _BOT_ENTRY_WINDOW
-        and abs(bot.entry_price - entry_price) <= entry_price * _BOT_PRICE_TOLERANCE
-        for bot in bots
+    return (
+        _bot_match(
+            bots, symbol=symbol, direction=direction, entry_time=entry_time, entry_price=entry_price
+        )
+        is not None
     )
+
+
+BOT_PNL_TAG = "blofin-realized-pnl"
+
+
+def _fill_bot_pnl(session: Session, bot: _BotEntry | None, draft: MirrorDraft) -> bool:
+    """Write BloFin's own result onto a closed bot trade that has none (audit H-7).
+
+    Only a fully closed position with verified BloFin figures, and only a bot row
+    already closed by the exit proof with no net P&L yet: never overwrites.
+    """
+
+    if (
+        bot is None
+        or bot.trade_id is None
+        or draft.status is not JournalTradeStatus.CLOSED
+        or not draft.verified
+        or draft.net_pnl is None
+    ):
+        return False
+    trade = session.get(JournalTrade, bot.trade_id)
+    if trade is None or trade.status is not JournalTradeStatus.CLOSED or trade.net_pnl is not None:
+        return False
+    trade.net_pnl = draft.net_pnl
+    trade.gross_pnl = draft.gross_pnl
+    trade.fees = draft.fees
+    trade.funding = draft.funding
+    trade.result = draft.result
+    trade.tags = [*(trade.tags or []), BOT_PNL_TAG]
+    return True
 
 
 def _claim_manual(row: JournalTrade, draft: MirrorDraft, *, user_id: uuid.UUID) -> bool:
@@ -1864,6 +1916,15 @@ class BloFinDemoManualMirror:
         for draft in built.closed:
             if bot_owned(draft):
                 bot_skipped += 1
+                bot = _bot_match(
+                    bots,
+                    symbol=draft.symbol,
+                    direction=draft.direction,
+                    entry_time=draft.entry_time,
+                    entry_price=draft.entry_price,
+                )
+                if _fill_bot_pnl(session, bot, draft):
+                    updated += 1
                 continue
             claimed = [row for row in rows if _claim_manual(row, draft, user_id=user_id)]
             target = by_ref.get(draft.external_ref)

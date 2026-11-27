@@ -2905,3 +2905,31 @@ def test_price_move_side_adds_the_fee_back_before_reading_the_direction() -> Non
     # Short: price down 0.10, same fee.
     assert _price_move_side({**row, "closeAveragePrice": "99.9"}) == "sell"
     assert _price_move_side({**row, "fee": None}) == "sell"  # no fee: realizedPnl sign as is
+
+
+def test_a_closed_bot_trade_gets_blofins_own_result(session: Session) -> None:
+    """Audit H-7: BloFin's realizedPnl, fee and funding land on the bot's trade."""
+
+    from app.services.blofin_demo_manual_mirror import BOT_PNL_TAG
+
+    bot = _bot_trade(session)
+    _apply(session, _FIXTURE["long"])
+    session.refresh(bot)
+    assert _mirrored(session) == []  # still no duplicate manual row
+    assert bot.net_pnl is not None and bot.fees is not None
+    assert bot.result in {TradeResult.WIN, TradeResult.LOSS, TradeResult.BREAKEVEN}
+    assert BOT_PNL_TAG in (bot.tags or [])
+
+
+def test_an_open_or_already_filled_bot_trade_is_left_alone(session: Session) -> None:
+    open_bot = _bot_trade(session, status=JournalTradeStatus.OPEN)
+    _apply(session, _FIXTURE["long"])
+    session.refresh(open_bot)
+    assert open_bot.net_pnl is None and open_bot.result is TradeResult.OPEN
+
+
+def test_a_bot_trade_with_a_result_is_never_overwritten(session: Session) -> None:
+    bot = _bot_trade(session, net_pnl=Decimal("12.34"), result=TradeResult.WIN)
+    _apply(session, _FIXTURE["long"])
+    session.refresh(bot)
+    assert bot.net_pnl == Decimal("12.34")
