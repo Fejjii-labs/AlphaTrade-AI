@@ -9,6 +9,8 @@ import type {
   AuthResponse,
   LoginResponse,
   TwoFactorLoginResponse,
+  TwoFactorConfirm,
+  TwoFactorDisableFactor,
   TwoFactorRecoveryCodes,
   TwoFactorSetup,
   TwoFactorStatus,
@@ -265,17 +267,22 @@ export const api = {
       }),
     twoFactor: {
       status: () => apiFetch<TwoFactorStatus>("/auth/two-factor", { auth: true }),
-      setup: () => apiFetch<TwoFactorSetup>("/auth/two-factor/setup", { method: "POST", auth: true }),
+      setup: (password: string) =>
+        apiFetch<TwoFactorSetup>("/auth/two-factor/setup", {
+          method: "POST",
+          body: JSON.stringify({ password }),
+          auth: true,
+        }),
       confirm: (code: string) =>
-        apiFetch<TwoFactorRecoveryCodes>("/auth/two-factor/confirm", {
+        apiFetch<TwoFactorConfirm>("/auth/two-factor/confirm", {
           method: "POST",
           body: JSON.stringify({ code }),
           auth: true,
         }),
-      disable: (code: string) =>
+      disable: (password: string, factor: TwoFactorDisableFactor) =>
         apiFetch<MessageResponse>("/auth/two-factor/disable", {
           method: "POST",
-          body: JSON.stringify({ code }),
+          body: JSON.stringify({ password, ...factor }),
           auth: true,
         }),
       regenerateRecoveryCodes: (code: string) =>

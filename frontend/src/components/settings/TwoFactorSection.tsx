@@ -11,8 +11,10 @@ import { SettingsUnavailable } from "@/components/settings/SettingsReadout";
 import { api } from "@/lib/api";
 import { friendlyError } from "@/lib/api/client";
 import type { TwoFactorSetup, TwoFactorStatus } from "@/lib/api/types";
+import { setTokens } from "@/lib/auth/session";
 
-type Mode = "idle" | "setup" | "disable" | "regenerate";
+/** start: password before a secret is shown; setup: QR + first code; disable: password + factor. */
+type Mode = "idle" | "start" | "setup" | "disable" | "regenerate";
 
 /** Settings > Account: turn two-factor sign-in (authenticator app) on or off. */
 export function TwoFactorSection() {
@@ -22,6 +24,8 @@ export function TwoFactorSection() {
   const [setup, setSetup] = useState<TwoFactorSetup | null>(null);
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [useRecovery, setUseRecovery] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -44,6 +48,8 @@ export function TwoFactorSection() {
   function reset(next: Mode = "idle") {
     setMode(next);
     setCode("");
+    setPassword("");
+    setUseRecovery(false);
     setError(null);
   }
 
@@ -60,28 +66,36 @@ export function TwoFactorSection() {
     }
   }
 
-  const startSetup = () =>
-    run(async () => {
-      setRecoveryCodes(null);
-      setSetup(await api.auth.twoFactor.setup());
-      reset("setup");
-    }, "Couldn't start setup.");
-
   const submitCode = (event: React.FormEvent) => {
     event.preventDefault();
     const clean = code.replace(/\s/g, "");
     void run(async () => {
+      if (mode === "start") {
+        setRecoveryCodes(null);
+        setSetup(await api.auth.twoFactor.setup(password));
+        reset("setup");
+        return;
+      }
       if (mode === "setup") {
         const result = await api.auth.twoFactor.confirm(clean);
+        // Turning 2FA on signs out every other session; keep this one on the new tokens.
+        setTokens(result.tokens.access_token, result.tokens.refresh_token || undefined);
         setSetup(null);
         setRecoveryCodes(result.recovery_codes);
-        setNotice("Two-factor sign-in is on.");
+        setNotice(
+          result.revoked_sessions > 1
+            ? "Two-factor sign-in is on. Your other sessions were signed out."
+            : "Two-factor sign-in is on.",
+        );
       } else if (mode === "regenerate") {
         const result = await api.auth.twoFactor.regenerateRecoveryCodes(clean);
         setRecoveryCodes(result.recovery_codes);
         setNotice("New recovery codes. The old ones no longer work.");
       } else if (mode === "disable") {
-        await api.auth.twoFactor.disable(clean);
+        await api.auth.twoFactor.disable(
+          password,
+          useRecovery ? { recovery_code: code.trim() } : { code: clean },
+        );
         setRecoveryCodes(null);
         setNotice("Two-factor sign-in is off.");
       }
@@ -129,31 +143,72 @@ export function TwoFactorSection() {
 
         {mode !== "idle" ? (
           <form onSubmit={submitCode} className="space-y-3">
-            <div className="space-y-2">
-              <Label htmlFor="two-factor-code">
-                {mode === "setup" ? "Code from the app" : "Current authenticator code"}
-              </Label>
-              <Input
-                id="two-factor-code"
-                type="text"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9 ]{6,7}"
-                maxLength={7}
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                aria-invalid={error ? true : undefined}
-                aria-describedby={error ? "two-factor-error" : undefined}
-                required
-              />
-            </div>
+            {mode === "start" || mode === "disable" ? (
+              <div className="space-y-2">
+                <Label htmlFor="two-factor-password">Current password</Label>
+                <Input
+                  id="two-factor-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={error ? "two-factor-error" : undefined}
+                  required
+                />
+              </div>
+            ) : null}
+            {mode !== "start" ? (
+              <div className="space-y-2">
+                <Label htmlFor="two-factor-code">
+                  {mode === "setup"
+                    ? "Code from the app"
+                    : useRecovery
+                      ? "Recovery code"
+                      : "Current authenticator code"}
+                </Label>
+                <Input
+                  key={useRecovery ? "recovery" : "totp"}
+                  id="two-factor-code"
+                  type="text"
+                  inputMode={useRecovery ? "text" : "numeric"}
+                  autoComplete="one-time-code"
+                  pattern={useRecovery ? undefined : "[0-9 ]{6,7}"}
+                  maxLength={useRecovery ? 32 : 7}
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={error ? "two-factor-error" : undefined}
+                  required
+                />
+                {mode === "disable" ? (
+                  <button
+                    type="button"
+                    className="text-xs text-accent hover:underline"
+                    onClick={() => {
+                      setUseRecovery((current) => !current);
+                      setCode("");
+                      setError(null);
+                    }}
+                  >
+                    {useRecovery ? "Use authenticator code" : "Lost your phone? Use a recovery code"}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <div className="flex flex-wrap gap-2">
               <Button
                 type="submit"
                 variant={mode === "disable" ? "destructive" : "default"}
                 disabled={busy}
               >
-                {mode === "setup" ? "Turn on" : mode === "disable" ? "Turn off" : "Get new codes"}
+                {mode === "start"
+                  ? "Continue"
+                  : mode === "setup"
+                    ? "Turn on"
+                    : mode === "disable"
+                      ? "Turn off"
+                      : "Get new codes"}
               </Button>
               <Button
                 type="button"
@@ -187,8 +242,12 @@ export function TwoFactorSection() {
                   Turn off
                 </Button>
               </>
+            ) : status.enrolment_available === false ? (
+              <p className="text-sm text-text-secondary" data-testid="two-factor-unavailable">
+                Two-factor sign-in isn&apos;t available on this server yet.
+              </p>
             ) : (
-              <Button disabled={busy} onClick={() => void startSetup()}>
+              <Button disabled={busy} onClick={() => reset("start")}>
                 Turn on two-factor sign-in
               </Button>
             )}

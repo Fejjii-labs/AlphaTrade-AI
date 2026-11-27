@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from app.schemas.auth import AuthResponse
+from app.schemas.auth import AuthResponse, TokenPair
 from app.schemas.common import ORMModel, StrictModel
 
 TwoFactorMethod = Literal["totp", "recovery_code"]
@@ -51,6 +51,10 @@ class TwoFactorLoginResponse(AuthResponse):
 
 class TwoFactorStatusResponse(ORMModel):
     enabled: bool
+    enrolment_available: bool = Field(
+        default=True,
+        description="False when the server refuses new enrolment (no encryption key set).",
+    )
     enabled_at: datetime | None = None
     pending_setup: bool = False
     recovery_codes_remaining: int = 0
@@ -76,3 +80,34 @@ class TwoFactorRecoveryCodesResponse(ORMModel):
     """Shown once. Only digests are stored."""
 
     recovery_codes: list[str]
+
+
+_PASSWORD = Field(min_length=1, max_length=1024, description="The account's current password.")
+_CODE = Field(default=None, pattern=r"^\s*\d{3}\s?\d{3}\s*$")
+
+
+class TwoFactorSetupRequest(StrictModel):
+    """Starting setup reveals a secret, so it needs the password, not only a session."""
+
+    password: str = _PASSWORD
+
+
+class TwoFactorDisableRequest(StrictModel):
+    """Password plus a current authenticator code, or one recovery code (lost phone)."""
+
+    password: str = _PASSWORD
+    code: str | None = _CODE
+    recovery_code: str | None = Field(default=None, min_length=8, max_length=32)
+
+    @model_validator(mode="after")
+    def _exactly_one_factor(self) -> TwoFactorDisableRequest:
+        if (self.code is None) == (self.recovery_code is None):
+            raise ValueError("Send exactly one of code or recovery_code.")
+        return self
+
+
+class TwoFactorConfirmResponse(TwoFactorRecoveryCodesResponse):
+    """2FA is on. Every other session was signed out; ``tokens`` replaces this one."""
+
+    tokens: TokenPair
+    revoked_sessions: int = Field(ge=0)

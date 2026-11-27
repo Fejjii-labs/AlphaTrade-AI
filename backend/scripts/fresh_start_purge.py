@@ -155,6 +155,7 @@ KEEP_TABLES: dict[str, str] = {
     "user_two_factor": "2FA enrolment (encrypted TOTP secret)",
     "two_factor_recovery_codes": "2FA recovery codes (hashed)",
     "two_factor_trusted_devices": "2FA remembered devices",
+    "two_factor_used_pending_tokens": "2FA single-use sign-in tokens",
     "telegram_security_bindings": "Telegram account binding",
     "telegram_security_enrollment_challenges": "Telegram enrollment",
     "telegram_security_action_nonces": "Telegram replay protection",

@@ -46,6 +46,7 @@ from app.security.tenant import TenantContext
 from app.security.token_denylist import AccessTokenDenylist, get_access_token_denylist
 from app.security.tokens import decode_access_token
 from app.services.audit_service import AuditService
+from app.services.two_factor_service import revoke_trusted_devices
 
 logger = structlog.get_logger(__name__)
 
@@ -205,15 +206,22 @@ class AccountService:
         row.consumed_at = datetime.now(UTC)
         user.hashed_password = hash_password(data.new_password, self._settings)
         revoked = self._refresh_tokens.revoke_all_active_for_user(user.id)
+        # A new password also ends every "remember this device" grant for 2FA.
+        revoked_devices = revoke_trusted_devices(self._session, user.id)
         if access_token:
             self._denylist_access_token(access_token)
         self._record_event(
             AuditEventType.AUTH_PASSWORD_RESET_COMPLETED,
             user_id=user.id,
             result=AuditResult.SUCCESS,
-            metadata={"revoked_sessions": revoked},
+            metadata={"revoked_sessions": revoked, "revoked_two_factor_devices": revoked_devices},
         )
-        logger.info("password_reset_completed", user_id=str(user.id), revoked_sessions=revoked)
+        logger.info(
+            "password_reset_completed",
+            user_id=str(user.id),
+            revoked_sessions=revoked,
+            revoked_two_factor_devices=revoked_devices,
+        )
         return "Password updated successfully. Please sign in again."
 
     def create_invitation(

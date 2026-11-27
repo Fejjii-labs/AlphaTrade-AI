@@ -140,6 +140,7 @@ from app.db.trade_candidate_summaries import TradeCandidateSummaryRow  # noqa: F
 from app.db.two_factor import (  # noqa: F401
     TwoFactorRecoveryCodeRow,
     TwoFactorTrustedDeviceRow,
+    TwoFactorUsedPendingTokenRow,
     UserTwoFactorRow,
 )
 from app.db.voice_realtime import VoiceSessionReservation  # noqa: F401

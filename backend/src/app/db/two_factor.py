@@ -66,3 +66,23 @@ class TwoFactorTrustedDeviceRow(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TwoFactorUsedPendingTokenRow(Base):
+    """A redeemed sign-in pending token (by ``jti``): each one opens one session only.
+
+    Written in the same transaction that holds the ``user_two_factor`` row lock,
+    so two concurrent redemptions of one token cannot both succeed (the second
+    either sees this row or fails on the primary key). Expired rows are pruned
+    per user on the next redemption.
+    """
+
+    __tablename__ = "two_factor_used_pending_tokens"
+    __table_args__ = (Index("ix_two_factor_used_pending_tokens_user_id", "user_id"),)
+
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -136,7 +136,8 @@ def create_two_factor_pending_token(
     """Token proving the password step passed. It is not an access token.
 
     ``decode_access_token`` refuses it (its type is not ``access``), so it can
-    only be redeemed at the second login step, once (its jti is denylisted).
+    only be redeemed at the second login step, once (its jti is recorded in
+    ``two_factor_used_pending_tokens`` under the user's row lock).
     """
     ttl_seconds = settings.two_factor_pending_token_seconds
     token, _ = _encode_purpose_token(

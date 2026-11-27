@@ -1,6 +1,6 @@
 """two-factor authentication: TOTP enrolment, recovery codes, remembered devices
 
-Three new tables; no existing table changes. The TOTP secret is stored as
+Four new tables (the fourth records redeemed sign-in pending tokens); no existing table changes. The TOTP secret is stored as
 AES-GCM ciphertext and recovery codes as keyed digests (app.security.two_factor).
 
 Revision ID: a34twofactorauth001
@@ -94,9 +94,33 @@ def upgrade() -> None:
         ["user_id"],
         unique=False,
     )
+    op.create_table(
+        "two_factor_used_pending_tokens",
+        sa.Column("jti", sa.String(length=64), nullable=False),
+        sa.Column("user_id", sa.Uuid(), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("used_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.id"],
+            name="fk_two_factor_used_pending_tokens_user_id_users",
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("jti", name="pk_two_factor_used_pending_tokens"),
+    )
+    op.create_index(
+        "ix_two_factor_used_pending_tokens_user_id",
+        "two_factor_used_pending_tokens",
+        ["user_id"],
+        unique=False,
+    )
 
 
 def downgrade() -> None:
+    op.drop_index(
+        "ix_two_factor_used_pending_tokens_user_id", table_name="two_factor_used_pending_tokens"
+    )
+    op.drop_table("two_factor_used_pending_tokens")
     op.drop_index(
         "ix_two_factor_trusted_devices_user_id", table_name="two_factor_trusted_devices"
     )

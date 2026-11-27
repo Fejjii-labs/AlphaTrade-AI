@@ -2322,6 +2322,8 @@ export interface TwoFactorLoginResponse extends AuthResponse {
 
 export interface TwoFactorStatus {
   enabled: boolean;
+  /** False when the server refuses new enrolment (no encryption key configured). */
+  enrolment_available?: boolean;
   enabled_at?: string | null;
   pending_setup: boolean;
   recovery_codes_remaining: number;
@@ -2340,6 +2342,15 @@ export interface TwoFactorSetup {
 export interface TwoFactorRecoveryCodes {
   recovery_codes: string[];
 }
+
+/** 2FA turned on: every other session was signed out; `tokens` replaces this one. */
+export interface TwoFactorConfirm extends TwoFactorRecoveryCodes {
+  tokens: TokenPair;
+  revoked_sessions: number;
+}
+
+/** Turning 2FA off: the password plus a current app code, or one recovery code. */
+export type TwoFactorDisableFactor = { code: string } | { recovery_code: string };
 
 export interface MeResponse {
   user: User;

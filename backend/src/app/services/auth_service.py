@@ -124,8 +124,7 @@ class AuthService:
         """Second login step: redeem the pending token with a TOTP or recovery code."""
         payload = decode_two_factor_pending_token(data.pending_token, self._settings)
         jti = str(payload["jti"])
-        if self._denylist.is_denied(jti):
-            raise AuthError("This sign-in has already been used. Sign in again.")
+        pending_expires_at = datetime.fromtimestamp(int(payload["exp"]), UTC)
         user_id = uuid.UUID(str(payload["sub"]))
         organization_id = uuid.UUID(str(payload["org_id"]))
         user = self._users.get(user_id)
@@ -143,9 +142,10 @@ class AuthService:
             organization_id=organization_id,
             code=data.code,
             recovery_code=data.recovery_code,
+            # Single use, recorded in this transaction (not the optional denylist).
+            pending_jti=jti,
+            pending_expires_at=pending_expires_at,
         )
-        # Single use: the pending token cannot open a second session.
-        self._denylist.add(jti, ttl_seconds=self._settings.two_factor_pending_token_seconds)
         tokens = self._issue_tokens(user=user, organization_id=org.id)
         device_token, device_expires_at = (
             two_factor.remember_device(user_id=user_id) if data.remember_device else (None, None)
@@ -304,6 +304,13 @@ class AuthService:
                 expires_in=tokens.expires_in,
             )
         return tokens
+
+    def issue_session_tokens(self, *, user_id: uuid.UUID, organization_id: uuid.UUID) -> TokenPair:
+        """A fresh session for an already-authenticated user (after 2FA is turned on)."""
+        user = self._users.get(user_id)
+        if user is None or not user.is_active:
+            raise AuthError("Account is unavailable.")
+        return self._issue_tokens(user=user, organization_id=organization_id)
 
     def _two_factor(self) -> TwoFactorService:
         return TwoFactorService(self._session, self._settings, audit_service=self._audit)

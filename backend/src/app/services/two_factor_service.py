@@ -7,6 +7,12 @@ lock code checks for ``two_factor_lockout_seconds``), refuses a replayed TOTP
 step or a used recovery code, and audits the outcome. Codes, secrets and digests
 are never logged or audited.
 
+Enrolment and disable also need the account password (a stolen access token
+alone cannot enrol another phone or turn 2FA off). Outside ``local`` the server
+refuses new enrolment until ``TWO_FACTOR_ENCRYPTION_KEY`` is set. A secret that
+no longer decrypts (key changed) is a server fault: it answers 503
+``two_factor_unavailable`` and never counts as a wrong code.
+
 Step-up hook: a later "require a fresh code before a sensitive action" (for
 example arming real trading) should call ``verify_code_for_action`` with a new
 ``TwoFactorAction`` member; it already applies the lock, replay guard and audit.
@@ -21,17 +27,19 @@ from enum import StrEnum
 
 import structlog
 from fastapi import status
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings
+from app.core.config import Environment, Settings
 from app.core.errors import AppError, AuthError, ConflictError
 from app.db.models import User as UserModel
 from app.db.two_factor import (
     TwoFactorRecoveryCodeRow,
     TwoFactorTrustedDeviceRow,
+    TwoFactorUsedPendingTokenRow,
     UserTwoFactorRow,
 )
+from app.repositories.refresh_tokens import RefreshTokenRepository
 from app.schemas.audit import AuditRecordCreate
 from app.schemas.common import ActorType, AuditEventType, AuditResult, AuditSeverity
 from app.schemas.two_factor import (
@@ -39,6 +47,7 @@ from app.schemas.two_factor import (
     TwoFactorSetupResponse,
     TwoFactorStatusResponse,
 )
+from app.security.passwords import verify_password
 from app.security.tokens import create_two_factor_device_token, decode_two_factor_device_token
 from app.security.two_factor import (
     TOTP_DIGITS,
@@ -81,6 +90,33 @@ class TwoFactorLockedError(AppError):
     code = "two_factor_locked"
 
 
+class TwoFactorPasswordError(AppError):
+    """Wrong current password on a 2FA settings action (400: the session is fine)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    code = "current_password_invalid"
+
+
+class TwoFactorUnavailableError(AppError):
+    """Server-side fault: enrolment not configured, or a stored secret is unreadable."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    code = "two_factor_unavailable"
+
+
+def revoke_trusted_devices(session: Session, user_id: uuid.UUID) -> int:
+    """Revoke every live remembered-device grant for ``user_id`` (no commit)."""
+    result = session.execute(
+        update(TwoFactorTrustedDeviceRow)
+        .where(
+            TwoFactorTrustedDeviceRow.user_id == user_id,
+            TwoFactorTrustedDeviceRow.revoked_at.is_(None),
+        )
+        .values(revoked_at=datetime.now(UTC))
+    )
+    return int(getattr(result, "rowcount", 0) or 0)
+
+
 @dataclass(frozen=True)
 class _Actor:
     user_id: uuid.UUID
@@ -113,8 +149,9 @@ class TwoFactorService:
 
     def status(self, user_id: uuid.UUID) -> TwoFactorStatusResponse:
         row = self._session.get(UserTwoFactorRow, user_id)
+        available = self.enrolment_available()
         if row is None:
-            return TwoFactorStatusResponse(enabled=False)
+            return TwoFactorStatusResponse(enabled=False, enrolment_available=available)
         now = datetime.now(UTC)
         codes = self._session.scalar(
             select(func.count())
@@ -136,6 +173,7 @@ class TwoFactorService:
         locked_until = _aware(row.locked_until)
         return TwoFactorStatusResponse(
             enabled=row.enabled_at is not None,
+            enrolment_available=available,
             enabled_at=_aware(row.enabled_at),
             pending_setup=row.enabled_at is None,
             recovery_codes_remaining=int(codes or 0) if row.enabled_at else 0,
@@ -143,13 +181,26 @@ class TwoFactorService:
             locked_until=locked_until if locked_until and locked_until > now else None,
         )
 
+    def enrolment_available(self) -> bool:
+        """Outside ``local``, new enrolment needs a dedicated encryption key.
+
+        With only the ``JWT_SECRET``-derived key, rotating ``JWT_SECRET`` would make
+        every stored secret unreadable. Existing enrolments keep working either way.
+        """
+        return self._settings.environment is Environment.LOCAL or bool(
+            self._settings.two_factor_encryption_key.strip()
+        )
+
     # --------------------------------------------------------------- enrolment
 
     def start_setup(
-        self, *, user_id: uuid.UUID, organization_id: uuid.UUID
+        self, *, user_id: uuid.UUID, organization_id: uuid.UUID, password: str
     ) -> TwoFactorSetupResponse:
-        """Create (or replace) a pending secret. Refused while 2FA is on."""
+        """Create (or replace) a pending secret. Needs the password; refused while 2FA is on."""
+        self._require_enrolment_available()
         user = self._require_user(user_id)
+        actor = _Actor(user_id, organization_id)
+        self._require_password(user, password, actor, action=TwoFactorAction.CONFIRM_SETUP)
         row = self._session.get(UserTwoFactorRow, user_id, with_for_update=True)
         if row is not None and row.enabled_at is not None:
             raise ConflictError("Two-factor authentication is already on.")
@@ -163,9 +214,7 @@ class TwoFactorService:
             row.last_used_step = None
         self._session.flush()
         self._record(
-            AuditEventType.AUTH_TWO_FACTOR_SETUP_STARTED,
-            _Actor(user_id, organization_id),
-            result=AuditResult.SUCCESS,
+            AuditEventType.AUTH_TWO_FACTOR_SETUP_STARTED, actor, result=AuditResult.SUCCESS
         )
         uri = otpauth_uri(
             secret_b32=secret, account_name=user.email, issuer=self._settings.two_factor_issuer
@@ -180,7 +229,13 @@ class TwoFactorService:
 
     def confirm_setup(
         self, *, user_id: uuid.UUID, organization_id: uuid.UUID, code: str
-    ) -> TwoFactorRecoveryCodesResponse:
+    ) -> tuple[list[str], int]:
+        """Turn 2FA on. Returns the new recovery codes and how many sessions were revoked.
+
+        Every refresh token of the user is revoked: sessions opened before 2FA
+        must not outlive it. The caller issues a fresh session for this request.
+        """
+        self._require_enrolment_available()
         row = self._session.get(UserTwoFactorRow, user_id, with_for_update=True)
         if row is None or row.enabled_at is not None:
             raise ConflictError("Start two-factor setup first.")
@@ -190,15 +245,41 @@ class TwoFactorService:
         )
         row.enabled_at = datetime.now(UTC)
         codes = self._replace_recovery_codes(user_id)
+        revoked = RefreshTokenRepository(self._session).revoke_all_active_for_user(user_id)
         self._session.flush()
-        self._record(AuditEventType.AUTH_TWO_FACTOR_ENABLED, actor, result=AuditResult.SUCCESS)
-        logger.info("two_factor_enabled", user_id=str(user_id))
-        return TwoFactorRecoveryCodesResponse(recovery_codes=codes)
+        self._record(
+            AuditEventType.AUTH_TWO_FACTOR_ENABLED,
+            actor,
+            result=AuditResult.SUCCESS,
+            metadata={"revoked_sessions": revoked},
+        )
+        logger.info("two_factor_enabled", user_id=str(user_id), revoked_sessions=revoked)
+        return codes, revoked
 
-    def disable(self, *, user_id: uuid.UUID, organization_id: uuid.UUID, code: str) -> None:
-        row = self._require_enabled(user_id)
+    def disable(
+        self,
+        *,
+        user_id: uuid.UUID,
+        organization_id: uuid.UUID,
+        password: str,
+        code: str | None = None,
+        recovery_code: str | None = None,
+    ) -> str:
+        """Turn 2FA off: password plus a current TOTP code or one recovery code.
+
+        A recovery code is accepted so a user who lost the phone can turn 2FA
+        off and enrol a new one. Returns the method used.
+        """
+        if (code is None) == (recovery_code is None):
+            raise ValueError("Send exactly one of code or recovery_code.")
         actor = _Actor(user_id, organization_id)
-        self._verify(row, actor, code=code, recovery_code=None, action=TwoFactorAction.DISABLE)
+        self._require_password(
+            self._require_user(user_id), password, actor, action=TwoFactorAction.DISABLE
+        )
+        row = self._require_enabled(user_id)
+        method = self._verify(
+            row, actor, code=code, recovery_code=recovery_code, action=TwoFactorAction.DISABLE
+        )
         self._session.query(TwoFactorRecoveryCodeRow).filter(
             TwoFactorRecoveryCodeRow.user_id == user_id
         ).delete(synchronize_session=False)
@@ -210,8 +291,10 @@ class TwoFactorService:
             actor,
             result=AuditResult.SUCCESS,
             severity=AuditSeverity.HIGH,
+            metadata={"method": method},
         )
-        logger.info("two_factor_disabled", user_id=str(user_id))
+        logger.info("two_factor_disabled", user_id=str(user_id), method=method)
+        return method
 
     def regenerate_recovery_codes(
         self, *, user_id: uuid.UUID, organization_id: uuid.UUID, code: str
@@ -252,18 +335,41 @@ class TwoFactorService:
         organization_id: uuid.UUID,
         code: str | None,
         recovery_code: str | None,
+        pending_jti: str,
+        pending_expires_at: datetime,
     ) -> str:
-        """Second login step. Returns the method used (``totp`` / ``recovery_code``)."""
+        """Second login step. Returns the method used (``totp`` / ``recovery_code``).
+
+        The pending token is single use: its ``jti`` is recorded in this
+        transaction, under the ``user_two_factor`` row lock, before tokens are
+        issued. It does not depend on the access-token denylist.
+        """
         row = self._session.get(UserTwoFactorRow, user_id, with_for_update=True)
         if row is None or row.enabled_at is None:
             raise AuthError("Two-factor authentication is not on for this account.")
-        return self._verify(
+        if self._session.get(TwoFactorUsedPendingTokenRow, pending_jti) is not None:
+            raise AuthError("This sign-in has already been used. Sign in again.")
+        method = self._verify(
             row,
             _Actor(user_id, organization_id),
             code=code,
             recovery_code=recovery_code,
             action=TwoFactorAction.LOGIN,
         )
+        now = datetime.now(UTC)
+        self._session.execute(
+            delete(TwoFactorUsedPendingTokenRow).where(
+                TwoFactorUsedPendingTokenRow.user_id == user_id,
+                TwoFactorUsedPendingTokenRow.expires_at < now,
+            )
+        )
+        self._session.add(
+            TwoFactorUsedPendingTokenRow(
+                jti=pending_jti, user_id=user_id, expires_at=pending_expires_at, used_at=now
+            )
+        )
+        self._session.flush()
+        return method
 
     def verify_code_for_action(
         self,
@@ -350,15 +456,54 @@ class TwoFactorService:
         return codes
 
     def _revoke_devices(self, user_id: uuid.UUID) -> int:
-        result = self._session.execute(
-            update(TwoFactorTrustedDeviceRow)
-            .where(
-                TwoFactorTrustedDeviceRow.user_id == user_id,
-                TwoFactorTrustedDeviceRow.revoked_at.is_(None),
+        return revoke_trusted_devices(self._session, user_id)
+
+    def _require_enrolment_available(self) -> None:
+        if not self.enrolment_available():
+            raise TwoFactorUnavailableError(
+                "Two-factor sign-in can't be turned on yet: the server has no "
+                "two-factor encryption key. Ask an administrator."
             )
-            .values(revoked_at=datetime.now(UTC))
+
+    def _require_password(
+        self, user: UserModel, password: str, actor: _Actor, *, action: TwoFactorAction
+    ) -> None:
+        if verify_password(password, user.hashed_password, self._settings):
+            return
+        self._record(
+            AuditEventType.AUTH_TWO_FACTOR_FAILED,
+            actor,
+            result=AuditResult.FAILURE,
+            severity=AuditSeverity.MEDIUM,
+            metadata={"action": action.value, "method": "password"},
         )
-        return int(getattr(result, "rowcount", 0) or 0)
+        logger.info("two_factor_password_failed", user_id=str(actor.user_id), action=action.value)
+        raise TwoFactorPasswordError("Current password is incorrect.")
+
+    def _require_readable_secret(
+        self, row: UserTwoFactorRow, actor: _Actor, *, action: TwoFactorAction
+    ) -> str:
+        """Decrypt the secret; a failure is a server fault, never a wrong code.
+
+        Checked before either method: recovery-code digests use the same key, so
+        an unreadable secret also means recovery codes would never match.
+        """
+        try:
+            return decrypt_totp_secret(
+                row.secret_ciphertext, user_id=actor.user_id, settings=self._settings
+            )
+        except TwoFactorSecretError:
+            logger.error("two_factor_secret_unreadable", user_id=str(actor.user_id))
+            self._record(
+                AuditEventType.AUTH_TWO_FACTOR_FAILED,
+                actor,
+                result=AuditResult.FAILURE,
+                severity=AuditSeverity.HIGH,
+                metadata={"action": action.value, "reason": "secret_unreadable"},
+            )
+            raise TwoFactorUnavailableError(
+                "Two-factor sign-in is unavailable for this account. Contact support."
+            ) from None
 
     def _verify(
         self,
@@ -383,9 +528,10 @@ class TwoFactorService:
                 "Too many wrong codes. Try again later.",
                 details={"retry_after_seconds": int((locked_until - now).total_seconds()) + 1},
             )
+        secret = self._require_readable_secret(row, actor, action=action)
         method = "totp" if code is not None else "recovery_code"
         accepted = (
-            self._accept_totp(row, actor.user_id, code)
+            self._accept_totp(row, secret, code)
             if code is not None
             else self._accept_recovery_code(actor.user_id, recovery_code or "", now)
         )
@@ -402,14 +548,7 @@ class TwoFactorService:
         )
         return method
 
-    def _accept_totp(self, row: UserTwoFactorRow, user_id: uuid.UUID, code: str) -> bool:
-        try:
-            secret = decrypt_totp_secret(
-                row.secret_ciphertext, user_id=user_id, settings=self._settings
-            )
-        except TwoFactorSecretError:
-            logger.error("two_factor_secret_unreadable", user_id=str(user_id))
-            return False
+    def _accept_totp(self, row: UserTwoFactorRow, secret: str, code: str) -> bool:
         step = match_totp_step(secret, code)
         if step is None or (row.last_used_step is not None and step <= row.last_used_step):
             return False
