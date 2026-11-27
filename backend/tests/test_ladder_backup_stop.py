@@ -95,10 +95,11 @@ def test_moved_to_breakeven_after_tp1_and_never_loosened() -> None:
     store = MemoryStore()
     manager = _manager(venue, store)
     first = manager.step(_position())
-    # The step that sends a close does not touch the backup stop.
-    assert first.placed == (_client("t1"),) and venue.backup_calls == []
+    # The step that sends TP1 also places the backup stop (audit H-1).
+    assert first.placed == (_client("t1"), "backup_stop")
+    assert venue.backup_calls == [("place", Decimal("95"))]
     manager.step(_position())  # TP1 fill read: stop to breakeven 100.5
-    assert venue.backup_calls == [("place", Decimal("100.5"))]
+    assert venue.backup_calls[-1] == ("amend", Decimal("100.5"))
     venue.resting = ("tpsl-1", Decimal("95"))  # e.g. an older stop still resting
     manager.step(_position())
     assert venue.backup_calls[-1] == ("amend", Decimal("100.5"))
