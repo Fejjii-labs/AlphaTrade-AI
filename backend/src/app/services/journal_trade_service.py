@@ -488,7 +488,7 @@ class JournalTradeService:
         """Partial exits recorded for this trade's execution, oldest first."""
         if row.execution_lifecycle_id is None:
             return []
-        events = self._session.scalars(
+        rows = self._session.scalars(
             select(PositionExitEventRow)
             .where(
                 PositionExitEventRow.organization_id == row.organization_id,
@@ -502,12 +502,16 @@ class JournalTradeService:
             )
             .limit(200)
         )
+        events = list(rows)
+        per_contract = self._coins_per_contract(row) if events else Decimal("1")
         return [
             JournalTradeExitEvent(
                 kind=event.event_kind,
                 fill_kind=event.fill_kind,
                 leg=event.leg_order,  # Already 1-based: TP1, TP2, ...
-                quantity=event.quantity,
+                # Audit M-15: BloFin demo exits are recorded in contracts; the trade
+                # size beside them is in coins, so show the exits in coins too.
+                quantity=None if event.quantity is None else event.quantity * per_contract,
                 price=event.price,
                 stop_reason=event.stop_reason,
                 previous_stop=event.previous_stop,
@@ -516,6 +520,21 @@ class JournalTradeService:
             )
             for event in events
         ]
+
+    def _coins_per_contract(self, row: JournalTrade) -> Decimal:
+        """Coins per contract for a BloFin demo plan sized in contracts, else 1."""
+
+        from app.db.models import ExecutionCommand, TradePlanRevision
+
+        plan = self._session.scalar(
+            select(TradePlanRevision)
+            .join(ExecutionCommand, ExecutionCommand.revision_id == TradePlanRevision.id)
+            .where(
+                ExecutionCommand.id == row.execution_lifecycle_id,
+                ExecutionCommand.organization_id == row.organization_id,
+            )
+        )
+        return coins_per_contract(plan)
 
     def update(
         self,
@@ -983,3 +1002,22 @@ def _coerce_venue_value(field_name: str, value: object) -> object:
     if field_name in {"entry_time", "exit_time"} and isinstance(value, str):
         return datetime.fromisoformat(value)
     return value
+
+
+def coins_per_contract(plan: object | None) -> Decimal:
+    """Coins per contract for a BloFin demo plan sized in contracts, else 1 (audit M-15)."""
+
+    payload = getattr(plan, "semantic_payload", None)
+    if getattr(plan, "execution_venue", None) != "BLOFIN_DEMO" or not isinstance(payload, dict):
+        return Decimal("1")
+    quantity = payload.get("quantity")
+    rules = payload.get("instrument_rules")
+    if not isinstance(quantity, dict) or quantity.get("unit") != "CONTRACTS":
+        return Decimal("1")
+    try:
+        multiplier = Decimal(
+            str((rules if isinstance(rules, dict) else {}).get("contract_multiplier"))
+        )
+    except ArithmeticError:
+        return Decimal("1")
+    return multiplier if multiplier.is_finite() and multiplier > 0 else Decimal("1")

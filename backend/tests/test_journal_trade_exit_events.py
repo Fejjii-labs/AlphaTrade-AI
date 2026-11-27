@@ -32,6 +32,12 @@ from tests.test_partial_exit_persistence import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_plan_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    # SQLite here has only the exit-event table; the plan lookup is tested below.
+    monkeypatch.setattr(JournalTradeService, "_coins_per_contract", lambda self, row: Decimal("1"))
+
+
 @pytest.fixture
 def session() -> Session:
     engine = create_engine(
@@ -84,3 +90,38 @@ def test_other_organizations_exits_are_never_shown(session: Session) -> None:
     _record(session, organization_id=OTHER_ORG)
     service = JournalTradeService(session, audit_service=None)  # type: ignore[arg-type]
     assert service._exit_events(_trade()) == []
+
+
+def test_blofin_demo_exits_are_shown_in_coins_not_contracts(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Audit M-15: on BTC one contract is 0.001 BTC; TP1 of 500 contracts is 0.5 BTC."""
+
+    _record(session)
+    monkeypatch.setattr(
+        JournalTradeService, "_coins_per_contract", lambda self, row: Decimal("0.001")
+    )
+    service = JournalTradeService(session, audit_service=None)  # type: ignore[arg-type]
+    fill, move = service._exit_events(_trade())
+    assert fill.quantity == Decimal("0.500") * Decimal("0.001")
+    assert move.quantity is None
+
+
+def test_coins_per_contract_reads_only_blofin_demo_contract_plans() -> None:
+    from app.services.journal_trade_service import coins_per_contract
+
+    def plan(venue: str, unit: str, multiplier: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            execution_venue=venue,
+            semantic_payload={
+                "quantity": {"value": "1087", "unit": unit},
+                "instrument_rules": {"contract_multiplier": multiplier},
+            },
+        )
+
+    assert coins_per_contract(plan("BLOFIN_DEMO", "CONTRACTS", "0.001")) == Decimal("0.001")
+    assert coins_per_contract(plan("BLOFIN_DEMO", "BASE", "0.001")) == 1
+    assert coins_per_contract(plan("PAPER_INTERNAL", "CONTRACTS", "0.001")) == 1
+    assert coins_per_contract(plan("BLOFIN_DEMO", "CONTRACTS", "bad")) == 1
+    assert coins_per_contract(plan("BLOFIN_DEMO", "CONTRACTS", "0")) == 1
+    assert coins_per_contract(None) == 1
