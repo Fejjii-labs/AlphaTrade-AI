@@ -418,3 +418,57 @@ def test_monday_page_adds_the_week_by_strategy(world: SimpleNamespace) -> None:
         f"\u2022 {family} 15m: 2 trades, 1 won (50%), +0.91R, +0.46R per trade (\u2248 +$910)",
         "Week total: 2 trades, +0.91R after fees (\u2248 +$910)",
     ]
+
+
+def _close_recorded(w: SimpleNamespace, trade: Any, at: datetime) -> Any:
+    return models.JournalLifecycleEvent(
+        organization_id=w.org, user_id=w.user, account_id=w.account,
+        event_type=common.JournalLifecycleEventType.CLOSE,
+        execution_lifecycle_id=trade.execution_lifecycle_id, source_system="test",
+        source_aggregate="execution-command", source_event_id=f"close:{uuid4()}",
+        source_event_version=1, payload={}, content_hash="c" * 64, created_at=at,
+    )  # fmt: skip
+
+
+def test_a_close_recorded_after_the_summary_appears_in_the_next_one(
+    world: SimpleNamespace,
+) -> None:
+    """Audit M-10: stopped at 23:50 on the 23rd, proven at 00:20 after the 23rd's
+    summary (sent 00:16). It used to appear in no summary at all."""
+
+    settings, send = _settings(world.org, world.account), summary.send_demo_daily_summary_if_due
+    with world.factory() as session:
+        late = _trade(world, "BTCUSDT", _at(23, 20), status=OPEN)
+        session.add(late)
+        session.commit()
+        late_id = late.id
+    assert send(settings, world.factory, now=DUE)  # the 23rd: BTC still open
+    first = _delivered(world)
+    assert "BTC long" in first.split("Still open")[1]
+    with world.factory() as session:
+        trade = session.get(models.JournalTrade, late_id)
+        trade.status, trade.exit_price, trade.exit_time = CLOSED, D("90"), _at(23, 23, 50)
+        session.add(_close_recorded(world, trade, DUE + timedelta(minutes=4)))
+        session.commit()
+    summary.reset_demo_daily_summary_memo()
+    assert send(settings, world.factory, now=DUE + timedelta(days=1))  # the 24th
+    second = _delivered(world)
+    assert "Closed earlier, recorded late (1)" in second
+    assert "❌ BTC long" in second and "closed 23 Nov" in second
+    assert "Still open (0)" in second
+
+
+def test_a_close_recorded_before_the_summary_is_not_repeated(world: SimpleNamespace) -> None:
+    settings, send = _settings(world.org, world.account), summary.send_demo_daily_summary_if_due
+    with world.factory() as session:
+        trade = _trade(world, "BTCUSDT", _at(23, 20), status=CLOSED, exit_price=D("90"))
+        trade.exit_time = _at(23, 23, 50)
+        session.add(trade)
+        session.flush()
+        session.add(_close_recorded(world, trade, _at(23, 23, 51)))
+        session.commit()
+    assert send(settings, world.factory, now=DUE)
+    assert "Closed (1)" in _delivered(world)
+    summary.reset_demo_daily_summary_memo()
+    assert send(settings, world.factory, now=DUE + timedelta(days=1))
+    assert "recorded late" not in _delivered(world)
