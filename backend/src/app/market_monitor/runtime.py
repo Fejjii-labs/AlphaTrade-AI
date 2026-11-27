@@ -237,6 +237,7 @@ class SymbolMonitorRuntime:
         if self._in_backoff(evaluated):
             self._reason = MonitorReason.BACKOFF
             return self._project(evaluated)
+        self._resync_if_beyond_lookback(evaluated)
         try:
             self._fetch_and_ingest(evaluated)
             self._refresh_ohlcv(evaluated)
@@ -306,6 +307,31 @@ class SymbolMonitorRuntime:
     def project(self, now: datetime) -> SymbolMonitorSnapshot:
         """Re-evaluate freshness without a provider fetch."""
         return self._project(now.astimezone(UTC))
+
+    def _resync_if_beyond_lookback(self, now: datetime) -> None:
+        """Open a fresh epoch when the stream is further behind than a catch-up can read.
+
+        The catch-up read is capped at ``_MAX_LOOKBACK``. When the last trade (or the
+        reconnect watermark) is older than that, the gap can never be bridged and the
+        monitor stays stale, refusing every scan until the worker restarts (staging,
+        27 Nov 2026). A fresh epoch is what a restart does: continuity is dropped and
+        evidence restarts from now, never stitched across the gap.
+        """
+
+        cursor = self._assembler.cursor
+        anchor = (
+            self._watermark_time
+            if cursor.reconnect_state is ReconnectState.RECONNECTING
+            else cursor.last_event_at
+        )
+        if anchor is None or now - anchor <= _MAX_LOOKBACK:
+            return
+        logger.warning(
+            "market_monitor_resync_after_long_gap",
+            symbol=self.instrument.provider_symbol,
+            gap_seconds=round((now - anchor).total_seconds(), 1),
+        )
+        self._rebind(self.instrument, now)
 
     def _maybe_recover_primary(self, now: datetime) -> InstrumentIdentity | None:
         del now
