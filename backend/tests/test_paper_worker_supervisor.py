@@ -1403,3 +1403,38 @@ def test_consecutive_failures_reset_on_success_and_slow_the_loop() -> None:
     assert supervisor.run_round().watcher.consecutive_failures == 0
     assert [failure_backoff_multiplier(n) for n in (0, 4, 5, 6, 7, 50)] == [1, 1, 2, 4, 8, 8]
     assert failure_backoff_interval(15.0, 7) == 120.0
+
+
+def test_a_component_failing_repeatedly_pages_once_per_escalation() -> None:
+    """Audit M-9: a worker that is alive but failing is not silent."""
+
+    from app.workers.paper_worker import PaperWorkerSupervisor
+
+    paged: list[tuple[str, int]] = []
+    supervisor = PaperWorkerSupervisor(
+        watcher_cycle=lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+        telegram_cycle=lambda: None,  # type: ignore[arg-type,return-value]
+        on_failing=lambda name, streak, error: paged.append((name, streak)),
+    )
+    for _ in range(6):
+        supervisor._fail(supervisor._watcher, RuntimeError("database unavailable"))
+    assert paged == [("watcher", 5)]
+
+
+def test_the_page_text_and_code(monkeypatch) -> None:
+    from app.core.config import Settings
+    from app.services import safety_alerts
+    from app.workers import paper_worker
+
+    sent: list[object] = []
+    monkeypatch.setattr(
+        "app.services.safety_alerts.deliver_safety_alert",
+        lambda settings, alert, **kw: sent.append(alert) or True,
+    )
+    assert paper_worker.page_component_failing(Settings(_env_file=None), "watcher", 5, "x: y")
+    (alert,) = sent
+    assert alert.code == "worker_component_failing"
+    assert alert.message.splitlines()[0].endswith(
+        "The bot's scanning and trade management has failed 5 cycles in a row."
+    )
+    assert "worker_component_failing" in safety_alerts.TELEGRAM_SAFETY_DEFAULT_CODES
