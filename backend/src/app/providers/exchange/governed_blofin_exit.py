@@ -30,6 +30,9 @@ from app.providers.exchange.governed_blofin import (
 )
 from app.schemas.trade_plan import EntrySide, TradePlanRevision
 
+# BloFin's terminal cancel states; partially_canceled = partly filled (audit H-5).
+_CANCELLED = frozenset({"canceled", "cancelled", "expired", "partially_canceled"})
+
 
 class DemoPositionLineageError(ValueError):
     """Account inventory cannot be explained by this exclusive owned entry."""
@@ -230,7 +233,7 @@ def reconcile_demo_exit(
         filled = Decimal(str(row.get("filledSize")))
         if not filled.is_finite() or filled < 0:
             raise ValueError("Unreadable demo order fill total.")
-        if filled == 0 and row.get("state") in {"canceled", "cancelled", "expired"}:
+        if filled == 0 and row.get("state") in _CANCELLED:
             continue
         if (
             row.get("instId") != plan.execution_instrument
@@ -238,7 +241,7 @@ def reconcile_demo_exit(
             or row.get("positionSide") != "net"
             or row.get("marginMode") != expected_margin
             or not (row.get("reduceOnly") is True or row.get("reduceOnly") == "true")
-            or row.get("state") not in {"filled", "canceled", "cancelled", "expired"}
+            or row.get("state") not in {"filled", *_CANCELLED}
             or filled <= 0
             or _time(row.get("createTime")) < plan.valid_from
         ):

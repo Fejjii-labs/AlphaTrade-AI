@@ -2584,6 +2584,18 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             else "demo_closed_reconciled_sample_unavailable"
         )
 
+    def _reconcile_isolated(self, session: Session, command_id: UUID) -> str:
+        """One command's failure never stops the others (audit H-4)."""
+
+        try:
+            return self.reconcile_command(session, command_id=command_id)
+        except Exception:
+            logger.error(
+                "governed_demo_reconcile_command_failed command_id=%s", command_id, exc_info=True
+            )
+            session.rollback()
+            return "demo_reconcile_failed"
+
     def reconcile_pending(self, session: Session) -> tuple[str, ...]:
         from app.experiments.models import ExperimentSampleRow
         from app.experiments.native_producer import ORIGIN
@@ -2675,7 +2687,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     UUID(self._settings.governed_blofin_demo_account_id),
                     equity,
                 )
-        governed = tuple(self.reconcile_command(session, command_id=identity) for identity in ids)
+        governed = tuple(self._reconcile_isolated(session, identity) for identity in ids)
         # Aged manual demo entries are outside governed lineage but still gate
         # every governed entry via has_demo_entry_history; resolve proven-closed ones.
         from app.services.stale_demo_entry_reconciliation import (

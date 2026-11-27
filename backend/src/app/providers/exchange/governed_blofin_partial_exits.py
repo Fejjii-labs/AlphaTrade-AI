@@ -51,6 +51,8 @@ _STATES: dict[str, CloseState] = {
     "canceled": "canceled",
     "cancelled": "canceled",
     "expired": "canceled",
+    # BloFin: partly filled, rest cancelled (audit H-5); ``filled`` carries the fills.
+    "partially_canceled": "canceled",
 }
 
 
