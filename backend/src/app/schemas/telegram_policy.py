@@ -135,3 +135,6 @@ class TelegramPolicyOptions(StrictModel):
     symbols: tuple[TelegramFilterOption, ...]
     strategies: tuple[TelegramFilterOption, ...]
     setup_stages: tuple[TelegramFilterOption, ...]
+    # One choice per strategy family ("D-line", "Nested", "SFP"): the stored
+    # identifiers of every listed strategy of that family, for strategy_subscriptions.
+    strategy_families: tuple[TelegramFilterOption, ...] = ()

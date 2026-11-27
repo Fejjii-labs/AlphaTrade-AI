@@ -3642,7 +3642,8 @@ export type TelegramPolicyEventType =
   | "SFP_CONFIRMED"
   | "SFP_INVALIDATED"
   | "SFP_EXPIRED"
-  | "SFP_BLOCKED_BY_RISK";
+  | "SFP_BLOCKED_BY_RISK"
+  | "SFP_LEVEL_APPROACH";
 
 /** Backend Policy V2: nested PATCH is a full replacement, null lists allow all. */
 export interface TelegramNotificationPolicyV2 {
@@ -3677,6 +3678,8 @@ export interface TelegramPolicyOptions {
   symbols: TelegramFilterOption[];
   strategies: TelegramFilterOption[];
   setup_stages: TelegramFilterOption[];
+  /** One choice per strategy family (D-line, Nested, SFP); absent on older APIs. */
+  strategy_families?: TelegramFilterOption[];
 }
 
 export interface NotificationPreferences {

@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,24 +13,55 @@ import { telegramPolicyFixture } from "./settings/telegram-policy.fixture";
 import { api } from "@/lib/api";
 import { makeWatcherMonitoringSnapshot } from "@/lib/watcher-monitoring-fixtures";
 import { appConfig } from "@/lib/config";
-import type { NotificationPreferences } from "@/lib/api/types";
+import type {
+  NotificationPreferences,
+  TelegramNotificationPolicyV2,
+} from "@/lib/api/types";
 
+/** The saved state after setup alerts were muted: event types emptied, the rest kept. */
+const mutedPolicy = {
+  ...telegramPolicyFixture,
+  event_types: [],
+  strategy_subscriptions: null,
+  symbol_subscriptions: null,
+  minimum_quality: 50,
+  quiet_hours: null,
+} satisfies TelegramNotificationPolicyV2;
 const prefs: NotificationPreferences = {
   in_app_enabled: true,
   webhook_enabled: false,
-  telegram_enabled: true,
-  min_severity: "info",
-  enabled_alert_types: ["setup_detected", "risk_warning"],
-  quiet_hours_enabled: true,
-  quiet_hours_start: "22:00",
-  quiet_hours_end: "07:00",
-  timezone: "Europe/Berlin",
-  digest_mode: "immediate",
+  telegram_enabled: false,
+  min_severity: "warning",
+  enabled_alert_types: ["setup_signal_detected"],
+  quiet_hours_enabled: false,
+  timezone: "UTC",
+  digest_mode: "disabled",
+  telegram_policy: mutedPolicy,
 };
+const DLINE = [
+  "11111111-1111-4111-8111-111111111111",
+  "22222222-2222-4222-8222-222222222222",
+];
+const NESTED = ["33333333-3333-4333-8333-333333333333"];
+const options = {
+  symbols: [
+    { label: "BTCUSDT", values: ["BTCUSDT"] },
+    { label: "ETHUSDT", values: ["ETHUSDT"] },
+  ],
+  strategies: [{ label: "D-line BTCUSDT long 15m 207db2d63d4e", values: DLINE }],
+  setup_stages: [{ label: "N2", values: ["N2"] }],
+  strategy_families: [
+    { label: "D-line", values: DLINE },
+    { label: "Nested", values: NESTED },
+  ],
+};
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}/i;
+
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.spyOn(api.notifications, "preferences").mockResolvedValue(prefs);
   vi.spyOn(api.notifications, "updatePreferences").mockResolvedValue(prefs);
+  vi.spyOn(api.notifications, "telegramOptions").mockResolvedValue(options);
   vi.spyOn(api.alerts, "deliveryStatus").mockResolvedValue({
     delivery_enabled: false,
     webhook_enabled: false,
@@ -53,6 +85,18 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+
+function lastWrite() {
+  return vi.mocked(api.notifications.updatePreferences).mock.calls.at(-1)?.[0];
+}
+async function mount(saved: NotificationPreferences = prefs) {
+  vi.mocked(api.notifications.preferences).mockResolvedValue(saved);
+  render(<NotificationSettingsPanel />);
+  return screen.findByTestId("setup-alerts-form");
+}
+function save() {
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+}
 
 describe("Private-chat Telegram enrollment", () => {
   const challenge = {
@@ -127,202 +171,195 @@ describe("Private-chat Telegram enrollment", () => {
   });
 });
 
-describe("Trader notification settings", () => {
-  it("distinguishes saved Telegram preferences from delivery availability and shows existing alert preferences", async () => {
-    render(<NotificationSettingsPanel />);
-    await screen.findByLabelText("Minimum alert severity");
-    expect(screen.getByTestId("settings-telegram-state")).toHaveTextContent(
-      "API delivery disabled",
+describe("Alerts card", () => {
+  it("shows plain delivery facts and none of the removed technical controls", async () => {
+    const form = await mount();
+    const always = screen.getByTestId("always-sent");
+    for (const label of ["Trade opened", "Trade closed", "Daily summary"]) {
+      expect(within(always).getByText(label).closest("li")).toHaveTextContent("Always sent");
+    }
+    expect(within(always).getByText("Safety alerts").closest("li")).toHaveTextContent(
+      "Always on",
     );
-    expect(
-      screen.getByText("Telegram preference").parentElement,
-    ).toHaveTextContent("On");
-    expect(screen.getByText("Alert types").parentElement).toHaveTextContent(
-      "setup detected, risk warning",
+    expect(screen.getByTestId("settings-telegram-state")).toHaveTextContent("Not connected");
+    expect(within(form).getByRole("switch", { name: "Setup alerts" })).toHaveAttribute(
+      "aria-checked",
+      "false",
     );
-    expect(screen.getByText("Quiet hours").parentElement).toHaveTextContent(
-      "22:00 – 07:00 (Europe/Berlin)",
-    );
-    expect(
-      screen.getByText("Delivery frequency").parentElement,
-    ).toHaveTextContent("immediate");
-    expect(
-      screen.getByText(/Message delivery has not been verified here/),
-    ).toBeInTheDocument();
-    expect(screen.queryByTestId("notifications-never-trade-copy")).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /test/i }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("labels omitted quiet hours and delivery frequency as unavailable", async () => {
-    vi.mocked(api.notifications.preferences).mockResolvedValue({
-      in_app_enabled: true,
-      webhook_enabled: false,
-      telegram_enabled: false,
-      min_severity: "warning",
-    });
-    render(<NotificationSettingsPanel />);
-    await screen.findByLabelText("Minimum alert severity");
-    expect(screen.getByText("Quiet hours").parentElement).toHaveTextContent(
-      "Unavailable",
-    );
-    expect(
-      screen.getByText("Delivery frequency").parentElement,
-    ).toHaveTextContent("Unavailable");
-    expect(
-      screen.getByTestId("settings-notification-context"),
-    ).toHaveTextContent("Unavailable");
-  });
-
-  it("shows all alert types only when the API explicitly returns a null filter", async () => {
-    vi.mocked(api.notifications.preferences).mockResolvedValue({
-      ...prefs,
-      enabled_alert_types: null,
-    });
-    render(<NotificationSettingsPanel />);
-    await screen.findByLabelText("Minimum alert severity");
-    expect(screen.getByText("Alert types").parentElement).toHaveTextContent(
-      "All alert types",
-    );
-  });
-
-  it("preserves an explicitly empty alert-type preference", async () => {
-    vi.mocked(api.notifications.preferences).mockResolvedValue({
-      ...prefs,
-      enabled_alert_types: [],
-    });
-    render(<NotificationSettingsPanel />);
-    await screen.findByLabelText("Minimum alert severity");
-    expect(screen.getByText("Alert types").parentElement).toHaveTextContent(
-      "None selected",
-    );
-  });
-
-  it("keeps preferences available when delivery status fails and retries the read", async () => {
-    vi.mocked(api.alerts.deliveryStatus).mockRejectedValueOnce(
-      new Error("offline"),
-    );
-    render(<NotificationSettingsPanel />);
-    await screen.findByRole("button", { name: "Retry telegram state" });
-    expect(screen.getByLabelText("Minimum alert severity")).toBeEnabled();
-    expect(screen.getByTestId("settings-telegram-state")).toHaveTextContent(
-      "Unavailable",
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Retry telegram state" }),
-    );
-    await screen.findByText("API delivery disabled");
-  });
-
-  it("keeps Telegram state visible when alert preferences fail", async () => {
-    vi.mocked(api.notifications.preferences).mockRejectedValue(
-      new Error("offline"),
-    );
-    render(<NotificationSettingsPanel />);
-    await screen.findByText("Alert preferences unavailable.");
-    expect(screen.getByTestId("settings-telegram-state")).toHaveTextContent(
-      "API delivery disabled",
-    );
+    const text = document.body.textContent ?? "";
+    for (const removed of [
+      /quality/i,
+      /cooldown/i,
+      /severity/i,
+      /stage/i,
+      /Other saved policy filters/,
+      /Watcher alert context/,
+      /Telegram preference/,
+      /Delivery frequency/,
+      /Policy V2/,
+    ]) {
+      expect(text).not.toMatch(removed);
+    }
+    expect(text).not.toMatch(UUID);
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(api.notifications.updatePreferences).not.toHaveBeenCalled();
   });
 
-  it("reports a failed save without displaying an unsaved preference", async () => {
-    vi.mocked(api.notifications.updatePreferences).mockRejectedValue(
-      new Error("Forbidden"),
+  it("turns setup alerts on with the pre-mute defaults and clears hidden blockers", async () => {
+    const form = await mount();
+    fireEvent.click(within(form).getByRole("switch", { name: "Setup alerts" }));
+    save();
+    await screen.findByText("Alert settings saved.");
+    expect(lastWrite()).toEqual({
+      telegram_enabled: true,
+      min_severity: "info",
+      enabled_alert_types: null,
+      digest_mode: "immediate",
+      telegram_policy: {
+        ...mutedPolicy,
+        event_types: null,
+        severities: null,
+        setup_stages: null,
+        minimum_severity: "INFO",
+        minimum_quality: null,
+        forming_alerts: true,
+        confirmed_alerts: true,
+        risk_alerts: true,
+        paper_trade_opened: true,
+        paper_trade_closed: true,
+        stop_event: true,
+        partial_profit_event: true,
+        daily_review_event: true,
+        // Repeat limits are kept.
+        cooldown_seconds: 120,
+        duplicate_suppression_seconds: 86400,
+      },
+    });
+  });
+
+  it("turns setup alerts off by emptying event types and nothing else", async () => {
+    const form = await mount({ ...prefs, telegram_policy: telegramPolicyFixture });
+    fireEvent.click(within(form).getByRole("switch", { name: "Setup alerts" }));
+    save();
+    await screen.findByText("Alert settings saved.");
+    expect(lastWrite()).toEqual({
+      telegram_policy: { ...telegramPolicyFixture, event_types: [] },
+    });
+  });
+
+  it("keeps the muted state when only quiet hours change, mirroring them to channel routing", async () => {
+    const form = await mount();
+    fireEvent.click(within(form).getByRole("switch", { name: "Quiet hours" }));
+    fireEvent.change(within(form).getByLabelText("Time zone"), {
+      target: { value: "Europe/Berlin" },
+    });
+    save();
+    await screen.findByText("Alert settings saved.");
+    expect(lastWrite()).toEqual({
+      quiet_hours_enabled: true,
+      quiet_hours_start: "22:00",
+      quiet_hours_end: "07:00",
+      timezone: "Europe/Berlin",
+      telegram_policy: {
+        ...mutedPolicy,
+        quiet_hours: { start: "22:00", end: "07:00", timezone: "Europe/Berlin" },
+      },
+    });
+    expect(lastWrite()?.telegram_policy?.event_types).toEqual([]);
+  });
+
+  it("rejects an unknown quiet-hours time zone without saving", async () => {
+    const form = await mount();
+    fireEvent.click(within(form).getByRole("switch", { name: "Quiet hours" }));
+    fireEvent.change(within(form).getByLabelText("Time zone"), {
+      target: { value: "Mars/Olympus" },
+    });
+    save();
+    await screen.findByText("Enter a time zone such as Europe/Berlin.");
+    expect(api.notifications.updatePreferences).not.toHaveBeenCalled();
+  });
+
+  it("filters by strategy family and coin by name, storing the identifiers underneath", async () => {
+    const form = await mount({
+      ...prefs,
+      telegram_policy: { ...telegramPolicyFixture, symbol_subscriptions: null },
+    });
+    const strategies = await within(form).findByRole("group", { name: "Strategies" });
+    expect(strategies).toHaveTextContent("D-line");
+    expect(strategies).not.toHaveTextContent("207db2d63d4e");
+    fireEvent.click(within(strategies).getByRole("button", { name: "D-line" }));
+    fireEvent.click(
+      within(within(form).getByRole("group", { name: "Coins" })).getByRole("button", {
+        name: "ETHUSDT",
+      }),
     );
+    save();
+    await screen.findByText("Alert settings saved.");
+    expect(lastWrite()?.telegram_policy).toMatchObject({
+      strategy_subscriptions: DLINE,
+      symbol_subscriptions: ["ETHUSDT"],
+      event_types: telegramPolicyFixture.event_types,
+    });
+  });
+
+  it("flags a saved strategy filter that no longer matches and lets it be cleared", async () => {
+    const form = await mount({
+      ...prefs,
+      telegram_policy: {
+        ...telegramPolicyFixture,
+        strategy_subscriptions: ["99999999-9999-4999-8999-999999999999"],
+      },
+    });
+    const note = await within(form).findByRole("note");
+    expect(note).toHaveTextContent("no longer matches");
+    expect(note).not.toHaveTextContent(UUID);
+    fireEvent.click(within(note).getByRole("button", { name: "Allow all" }));
+    save();
+    await screen.findByText("Alert settings saved.");
+    expect(lastWrite()?.telegram_policy?.strategy_subscriptions).toBeNull();
+  });
+
+  it("reports a failed save", async () => {
+    vi.mocked(api.notifications.updatePreferences).mockRejectedValue(new Error("Forbidden"));
+    const form = await mount();
+    fireEvent.click(within(form).getByRole("switch", { name: "Setup alerts" }));
+    save();
+    await screen.findByText("Your changes could not be saved. Please try again.");
+    expect(screen.queryByText("Alert settings saved.")).not.toBeInTheDocument();
+  });
+
+  it("keeps the alert settings usable when the Telegram status read fails", async () => {
+    vi.mocked(api.alerts.deliveryStatus).mockRejectedValueOnce(new Error("offline"));
+    await mount();
+    await screen.findByRole("button", { name: "Retry telegram status" });
+    expect(screen.getByTestId("settings-telegram-state")).toHaveTextContent(
+      "Status unavailable",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry telegram status" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-telegram-state")).toHaveTextContent("Not connected"),
+    );
+  });
+
+  it("keeps Telegram state and the always-sent list when alert settings fail", async () => {
+    vi.mocked(api.notifications.preferences).mockRejectedValue(new Error("offline"));
     render(<NotificationSettingsPanel />);
-    const select = await screen.findByLabelText("Minimum alert severity");
-    fireEvent.change(select, { target: { value: "critical" } });
-    await screen.findByText(
-      "Preferences could not be saved. Please try again.",
-    );
-    expect(select).toHaveValue("info");
-    expect(select).toBeEnabled();
-    expect(screen.queryByText("Preferences saved.")).not.toBeInTheDocument();
+    await screen.findByText("Alert settings unavailable.");
+    expect(screen.getByTestId("always-sent")).toHaveTextContent("Trade opened");
+    expect(screen.queryByTestId("setup-alerts-form")).not.toBeInTheDocument();
   });
 
-  it("clears preferences when the refresh after a successful save fails", async () => {
+  it("clears the form if the read after saving fails", async () => {
     vi.mocked(api.notifications.preferences)
       .mockResolvedValueOnce(prefs)
       .mockRejectedValue(new Error("offline"));
     render(<NotificationSettingsPanel />);
-    fireEvent.change(await screen.findByLabelText("Minimum alert severity"), {
-      target: { value: "critical" },
-    });
-    await screen.findByText("Alert preferences unavailable.");
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
-  });
-});
-
-describe("Policy V2 settings integration", () => {
-  it("loads the backend policy, refreshes the saved values and never exposes credentials", async () => {
-    const initial = {
-      ...prefs,
-      telegram_policy: telegramPolicyFixture,
-      telegram_chat_id: "private-recipient",
-    };
-    const updated = {
-      ...initial,
-      telegram_policy: {
-        ...telegramPolicyFixture,
-        minimum_severity: "ACTION" as const,
-      },
-    };
-    vi.mocked(api.notifications.preferences)
-      .mockResolvedValueOnce(initial)
-      .mockResolvedValue(updated);
-    render(<NotificationSettingsPanel />);
-    fireEvent.change(
-      await screen.findByLabelText("Minimum Telegram severity"),
-      { target: { value: "ACTION" } },
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Save Telegram policy" }),
-    );
-    await screen.findByText("Telegram policy saved.");
-    expect(screen.getByLabelText("Minimum Telegram severity")).toHaveValue(
-      "ACTION",
-    );
-    expect(screen.queryByText("private-recipient")).not.toBeInTheDocument();
-    expect(screen.getByTestId("settings-telegram-state")).toHaveTextContent(
-      "API delivery disabled",
-    );
-    expect(api.notifications.updatePreferences).toHaveBeenCalledExactlyOnceWith(
-      { telegram_enabled: true, telegram_policy: updated.telegram_policy },
-    );
-  });
-
-  it("labels absent V2 support unavailable and does not offer its controls", async () => {
-    render(<NotificationSettingsPanel />);
-    await screen.findByText(/Telegram Policy V2 settings: Unavailable/);
-    expect(screen.queryByTestId("telegram-policy-v2")).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Save Telegram policy" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("clears stale V2 controls if the read after saving fails", async () => {
-    vi.mocked(api.notifications.preferences)
-      .mockResolvedValueOnce({
-        ...prefs,
-        telegram_policy: telegramPolicyFixture,
-      })
-      .mockRejectedValue(new Error("offline"));
-    render(<NotificationSettingsPanel />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Save Telegram policy" }),
-    );
-    await screen.findByText("Alert preferences unavailable.");
-    await waitFor(() =>
-      expect(
-        screen.queryByTestId("telegram-policy-v2"),
-      ).not.toBeInTheDocument(),
-    );
-    expect(screen.getByTestId("settings-telegram-state")).toHaveTextContent(
-      "API delivery disabled",
-    );
+    const form = await screen.findByTestId("setup-alerts-form");
+    fireEvent.click(within(form).getByRole("switch", { name: "Setup alerts" }));
+    save();
+    await screen.findByText("Alert settings unavailable.");
+    expect(screen.queryByTestId("setup-alerts-form")).not.toBeInTheDocument();
   });
 });
 
@@ -349,8 +386,7 @@ describe("Worker Telegram delivery", () => {
       }],
     });
     render(<NotificationSettingsPanel snapshot={snapshot} />);
-    await screen.findByText(stale ? "API delivery disabled" : "Enabled on worker");
-    expect(screen.queryByText(/Reported strategies|49ae657c4173/)).not.toBeInTheDocument();
-    expect(screen.getByText("Reported markets")).toBeInTheDocument();
+    await screen.findByText(stale ? "Not connected" : "Connected");
+    expect(screen.queryByText(/49ae657c4173|Reported markets/)).not.toBeInTheDocument();
   });
 });
