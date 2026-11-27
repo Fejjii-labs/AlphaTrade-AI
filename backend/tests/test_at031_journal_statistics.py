@@ -546,6 +546,26 @@ def test_group_by_strategy_and_strategy_version(
     assert v2_bucket["metrics"]["wins"] == 1
 
 
+def test_bot_trades_with_only_a_version_group_under_its_strategy(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    """Bot trades record the strategy version only; Stats showed them as Unassigned."""
+
+    test_client, factory = client
+    headers = _auth(test_client, "stats-a@test.example")
+    strategy_id, (v1, _v2) = _seed_strategy_with_versions(factory, name="D-line HYPEUSDT 1h")
+    _closed_trade(factory, strategy_version_id=v1, result=TradeResult.WIN, net_pnl="50")
+    _closed_trade(factory, strategy_version_id=v1, result=TradeResult.LOSS, net_pnl="-20")
+    _closed_trade(factory, result=TradeResult.WIN, net_pnl="5")  # truly unassigned
+
+    by_strategy = _stats(test_client, headers, group_by="strategy")
+    named = next(b for b in by_strategy["buckets"] if b["group_id"] == str(strategy_id))
+    assert named["label"] == "D-line HYPEUSDT 1h"
+    assert named["metrics"]["trade_count"] == 2
+    unassigned = next(b for b in by_strategy["buckets"] if b["key"] == "unassigned")
+    assert unassigned["metrics"]["trade_count"] == 1
+
+
 def test_group_by_symbol_regime_source_and_pagination(
     client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
