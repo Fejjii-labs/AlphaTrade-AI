@@ -183,3 +183,26 @@ def test_open_trade_windows_skip_the_closed_window_cache() -> None:
         start=now - timedelta(seconds=40), end=now - timedelta(seconds=5), **kwargs
     )
     assert len(source.evidence_cache) == 1
+
+
+def test_gap_longer_than_the_lookback_resyncs_instead_of_staying_stale() -> None:
+    """Staging 27 Nov 2026: a 21-minute Watcher cycle left BTC more than 10 minutes
+    behind. The catch-up read is capped at 10 minutes, so it could never reach the
+    last trade and the monitor stayed stale (every scan refused) until a restart."""
+
+    now = _now()
+    paused_at = now - timedelta(minutes=15)
+    rows = [_row(1, paused_at - timedelta(seconds=1))]
+    rows += _tape(paused_at, seconds=15 * 60, per_second=1, first_id=2)
+    source = _CountingSource(rows)
+    runtime = _runtime(source, paused_at - timedelta(seconds=10))
+    runtime._fetch_and_ingest(paused_at)
+    before = runtime._assembler.connection_identity
+
+    snapshot = runtime.tick(now)
+    if snapshot.reason is not MonitorReason.OK:  # a warm-up tick is allowed
+        snapshot = runtime.tick(now + timedelta(seconds=1))
+
+    assert runtime._assembler.connection_identity != before  # a fresh epoch, like a restart
+    assert runtime._reason is MonitorReason.OK
+    assert runtime._assembler.cursor.reconnect_state is not ReconnectState.RECONNECTING

@@ -29,6 +29,7 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Collection
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Final
@@ -435,6 +436,8 @@ class JournalStatisticsService:
         annotated: list[tuple[JournalTradeStatsRow, TradeRuleCompliance, ExecutionActor]],
         group_by: JournalStatsGroupBy,
     ) -> list[JournalStatsBucket]:
+        if group_by is JournalStatsGroupBy.STRATEGY:
+            annotated = self._strategy_from_version(annotated)
         labels = self._resolve_labels([a[0] for a in annotated], group_by)
         grouped: dict[tuple[str, uuid.UUID | None, str], list[JournalTradeStatsRow]] = defaultdict(
             list
@@ -454,6 +457,38 @@ class JournalStatisticsService:
         # Deterministic order: largest sample first, then label, then key.
         buckets.sort(key=lambda b: (-b.metrics.trade_count, b.label.lower(), b.key))
         return buckets
+
+    def _strategy_from_version(
+        self,
+        annotated: list[tuple[JournalTradeStatsRow, TradeRuleCompliance, ExecutionActor]],
+    ) -> list[tuple[JournalTradeStatsRow, TradeRuleCompliance, ExecutionActor]]:
+        """Bot trades record their strategy version but not the strategy; group them by
+        the version's strategy instead of "Unassigned" (Trades → Stats, 27 Nov 2026).
+        Grouping only; nothing stored is changed."""
+
+        version_ids = {
+            row.strategy_version_id
+            for row, _compliance, _actor in annotated
+            if row.user_strategy_id is None and row.strategy_version_id is not None
+        }
+        if not version_ids:
+            return annotated
+        rows = self._session.execute(
+            select(UserStrategyVersion.id, UserStrategyVersion.strategy_id).where(
+                UserStrategyVersion.id.in_(version_ids)
+            )
+        ).all()
+        owner: dict[uuid.UUID, uuid.UUID] = {row[0]: row[1] for row in rows}
+        return [
+            (
+                replace(row, user_strategy_id=owner[row.strategy_version_id])
+                if row.user_strategy_id is None and row.strategy_version_id in owner
+                else row,
+                compliance,
+                actor,
+            )
+            for row, compliance, actor in annotated
+        ]
 
     def _resolve_labels(
         self,

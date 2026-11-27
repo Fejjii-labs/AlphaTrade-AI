@@ -180,6 +180,9 @@ class _Component:
         self.idle_wait = idle_wait
         self.lock = threading.Lock()
         self.status = "idle"
+        # Watcher cycles in a row that ran but did not scan (refused or degraded).
+        # They are not failures, so they never reached the M-9 page (27 Nov 2026).
+        self.not_scanning_in_row = 0
         self.last_heartbeat_at: datetime | None = None
         self.last_scan_at: datetime | None = None
         self.last_delivery_at: datetime | None = None
@@ -745,6 +748,30 @@ class PaperWorkerSupervisor:
 
     def _succeed(self, component: _Component, outcome: CycleOutcome) -> None:
         now = self._clock()
+        not_scanning = 0
+        if component.name == "watcher":
+            with component.lock:
+                if outcome.status in {"refused", "degraded"} and not outcome.record_scan:
+                    component.not_scanning_in_row += 1
+                else:
+                    component.not_scanning_in_row = 0
+                not_scanning = component.not_scanning_in_row
+        if not_scanning in _NOT_SCANNING_ALERT_STREAKS or (
+            not_scanning > _NOT_SCANNING_ALERT_STREAKS[-1]
+            and not_scanning % _NOT_SCANNING_ALERT_STREAKS[-1] == 0
+        ):
+            reason = outcome.error[:80] or outcome.status
+            logger.critical(
+                "paper_worker_watcher_not_scanning",
+                cycles=not_scanning,
+                reason=reason,
+                paper_only=True,
+            )
+            if self._on_failing is not None:
+                try:
+                    self._on_failing(component.name, not_scanning, f"scans refused ({reason})")
+                except Exception:
+                    logger.warning("paper_worker_failing_alert_failed", component=component.name)
         with component.lock:
             component.status = outcome.status
             component.last_heartbeat_at = now
@@ -1394,6 +1421,8 @@ def _reconcile_demo_while_idle(
 # Consecutive failed cycles at which a component escalates to a critical log
 # line; after the last one, every further multiple of it escalates again (I7).
 _FAILURE_ESCALATION_STREAKS = (5, 20, 80)
+# Refused watcher cycles come every ~30 s: 40 is about 20 minutes without a scan.
+_NOT_SCANNING_ALERT_STREAKS = (40, 160)
 # From this many consecutive failures the inter-cycle wait doubles, capped at
 # 8x the poll interval (2 min at 15 s, well inside one 15 m bar).
 _FAILURE_BACKOFF_AFTER = 5
