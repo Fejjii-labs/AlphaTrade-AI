@@ -1036,9 +1036,13 @@ class WatcherPaperRuntime:
         # new scanning is refused or the organization kill switch is active.
         if not self._enabled or self._session_factory is None or self._settings is None:
             return
-        reconcile_governed_demo_once(
-            self._settings, self._session_factory, self._clock, self._canonical_runtime
-        )
+        try:
+            reconcile_governed_demo_once(
+                self._settings, self._session_factory, self._clock, self._canonical_runtime
+            )
+        except Exception:
+            # Scanning still runs; the next cycle retries the reconcile (audit H-4).
+            logger.error("governed_demo_reconcile_cycle_failed", exc_info=True)
 
     def _activation_refusal(self) -> WatcherPaperCycleReport | None:
         gate = self._activation_gate

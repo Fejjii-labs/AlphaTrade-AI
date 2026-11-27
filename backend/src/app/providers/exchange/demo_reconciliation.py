@@ -232,6 +232,8 @@ def reconcile_native(
         filled = number(order.get("filledSize"), field="filledSize")
         require(0 <= filled <= plan.quantity.value, "order_filled_quantity_invalid")
         state = order.get("state")
+        if state == "partially_canceled":
+            state = "canceled"  # BloFin: partly filled, rest cancelled (audit H-5)
         require(
             state
             in {
