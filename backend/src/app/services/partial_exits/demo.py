@@ -31,10 +31,11 @@ add to a position. One ``step``:
 
 Backup stop (opt-in, ``backup_stop=True``): after the closes are decided, one
 whole-position stop order rests on BloFin at the current stop, placed if missing
-and moved only to tighten (break-even, trail). It is a safety net for when the
-bot is down; BloFin cancels it when the position closes. It is skipped when the
-venue position differs from the record or the stop is already crossed (the bot
-closes then), and a failure only alerts: it never holds or blocks a close.
+and moved only to tighten (break-even, trail), also in a step that sends target
+closes. It is a safety net for when the bot is down; BloFin cancels it when the
+position closes. It is skipped when the venue position differs from the record
+or the stop is already crossed (the bot closes then), and a failure pages
+Telegram: it never holds or blocks a close.
 
 Client order ids are ``pe`` + 20 hex of SHA-256(command id) + ``t<leg>`` or ``x`` +
 ``n<attempt>``, where the attempt counts our earlier orders for that leg. A
@@ -295,9 +296,12 @@ class GovernedDemoPartialExitManager:
                     )
                 )
         placed, alerts = self._place(closes, close_side)
+        # The backup stop is synced in the same step as target closes: with size -1 it
+        # follows the position as targets fill (audit H-1). Only a crossed stop skips it,
+        # because the bot is closing the whole remainder itself.
         if (
             self._backup_stop
-            and not closes
+            and not _crossed(mark, stop, long=long)
             and held_quantity > 0
             and reason in (None, *STOP_ONLY_HOLD_REASONS)
         ):
