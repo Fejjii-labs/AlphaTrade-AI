@@ -56,6 +56,11 @@ class RegisterRequest(StrictModel):
 class LoginRequest(StrictModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=128)
+    device_token: str | None = Field(
+        default=None,
+        max_length=2048,
+        description="Remember-device token from an earlier two-factor login (optional).",
+    )
 
 
 class RefreshRequest(StrictModel):

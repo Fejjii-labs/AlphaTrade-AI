@@ -778,6 +778,17 @@ class Settings(BaseSettings):
     password_min_length: int = 12
     password_max_length: int = 128
     bcrypt_max_password_bytes: int = 72
+    # --- Two-factor authentication (TOTP) ---
+    # Base64url 32-byte key for TOTP secrets at rest and recovery-code digests.
+    # Empty: derived from JWT_SECRET (HKDF, two-factor label). Set it so that a
+    # JWT_SECRET rotation does not invalidate enrolments. See docs/auth_two_factor.md.
+    two_factor_encryption_key: str = Field(default="", repr=False)
+    two_factor_issuer: str = Field(default="AlphaTrade AI", min_length=1, max_length=64)
+    two_factor_pending_token_seconds: int = Field(default=300, ge=60, le=900)
+    two_factor_max_failures: int = Field(default=5, ge=1, le=100)
+    two_factor_failure_window_seconds: int = Field(default=900, ge=60, le=86_400)
+    two_factor_lockout_seconds: int = Field(default=900, ge=60, le=86_400)
+    two_factor_remember_device_days: int = Field(default=30, ge=1, le=90)
 
     # --- Journal → RAG (optional learning loop) ---
     journal_rag_sync_enabled: bool = True
@@ -1160,6 +1171,14 @@ class Settings(BaseSettings):
                 "jwt_secret is a known weak placeholder; use a long random value "
                 f"in {self.environment.value} environments."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_two_factor_key(self) -> Settings:
+        """A configured two-factor key must be base64url for exactly 32 bytes."""
+        from app.security.two_factor import validate_two_factor_key
+
+        validate_two_factor_key(self)
         return self
 
     @model_validator(mode="after")

@@ -2305,6 +2305,42 @@ export interface AuthResponse {
   tokens: TokenPair;
 }
 
+/** Password accepted; finish with POST /auth/login/two-factor. */
+export interface TwoFactorChallengeResponse {
+  two_factor_required: true;
+  pending_token: string;
+  expires_in: number;
+  methods: Array<"totp" | "recovery_code">;
+}
+
+export type LoginResponse = AuthResponse | TwoFactorChallengeResponse;
+
+export interface TwoFactorLoginResponse extends AuthResponse {
+  device_token?: string | null;
+  device_token_expires_at?: string | null;
+}
+
+export interface TwoFactorStatus {
+  enabled: boolean;
+  enabled_at?: string | null;
+  pending_setup: boolean;
+  recovery_codes_remaining: number;
+  remembered_devices: number;
+  locked_until?: string | null;
+}
+
+export interface TwoFactorSetup {
+  manual_key: string;
+  otpauth_uri: string;
+  qr_svg_data_uri: string;
+  digits: number;
+  period_seconds: number;
+}
+
+export interface TwoFactorRecoveryCodes {
+  recovery_codes: string[];
+}
+
 export interface MeResponse {
   user: User;
   organization: Organization;

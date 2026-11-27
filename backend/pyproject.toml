@@ -27,6 +27,8 @@ dependencies = [
     "defusedxml>=0.7.1",
     "openai==3.28.0",
     "httpx2==2.13.1",
+    "cryptography>=44.0.0",
+    "segno>=1.6.0",
 ]
 
 [project.optional-dependencies]

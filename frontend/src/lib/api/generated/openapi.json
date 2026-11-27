@@ -3952,6 +3952,14 @@
           "auth_invite_created",
           "auth_invite_accepted",
           "auth_invite_revoked",
+          "auth_two_factor_setup_started",
+          "auth_two_factor_enabled",
+          "auth_two_factor_disabled",
+          "auth_two_factor_verified",
+          "auth_two_factor_failed",
+          "auth_two_factor_locked",
+          "auth_two_factor_codes_regenerated",
+          "auth_two_factor_devices_revoked",
           "quota_warning",
           "quota_block",
           "quota_updated",
@@ -26329,6 +26337,19 @@
       "LoginRequest": {
         "additionalProperties": false,
         "properties": {
+          "device_token": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Remember-device token from an earlier two-factor login (optional).",
+            "title": "Device Token"
+          },
           "email": {
             "format": "email",
             "title": "Email",
@@ -55638,6 +55659,265 @@
         "title": "TurnOperation",
         "type": "string"
       },
+      "TwoFactorChallengeResponse": {
+        "description": "Password accepted; a second factor is required to finish signing in.",
+        "properties": {
+          "expires_in": {
+            "description": "Pending-token lifetime in seconds.",
+            "exclusiveMinimum": 0.0,
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "methods": {
+            "items": {
+              "enum": [
+                "totp",
+                "recovery_code"
+              ],
+              "type": "string"
+            },
+            "title": "Methods",
+            "type": "array"
+          },
+          "pending_token": {
+            "description": "Short-lived token for POST /auth/login/two-factor.",
+            "title": "Pending Token",
+            "type": "string"
+          },
+          "two_factor_required": {
+            "const": true,
+            "default": true,
+            "title": "Two Factor Required",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pending_token",
+          "expires_in"
+        ],
+        "title": "TwoFactorChallengeResponse",
+        "type": "object"
+      },
+      "TwoFactorCodeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "6-digit authenticator code.",
+            "pattern": "^\\s*\\d{3}\\s?\\d{3}\\s*$",
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "TwoFactorCodeRequest",
+        "type": "object"
+      },
+      "TwoFactorLoginRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "pattern": "^\\s*\\d{3}\\s?\\d{3}\\s*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "pending_token": {
+            "maxLength": 2048,
+            "minLength": 20,
+            "title": "Pending Token",
+            "type": "string"
+          },
+          "recovery_code": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 8,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Code"
+          },
+          "remember_device": {
+            "default": false,
+            "title": "Remember Device",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pending_token"
+        ],
+        "title": "TwoFactorLoginRequest",
+        "type": "object"
+      },
+      "TwoFactorLoginResponse": {
+        "description": "Session tokens, plus a remember-device token when one was requested.",
+        "properties": {
+          "device_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Send as device_token on later logins to skip the code on this device.",
+            "title": "Device Token"
+          },
+          "device_token_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Token Expires At"
+          },
+          "membership_role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MembershipRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "organization": {
+            "$ref": "#/components/schemas/Organization"
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/TokenPair"
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        },
+        "required": [
+          "user",
+          "organization",
+          "tokens"
+        ],
+        "title": "TwoFactorLoginResponse",
+        "type": "object"
+      },
+      "TwoFactorRecoveryCodesResponse": {
+        "description": "Shown once. Only digests are stored.",
+        "properties": {
+          "recovery_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Recovery Codes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "recovery_codes"
+        ],
+        "title": "TwoFactorRecoveryCodesResponse",
+        "type": "object"
+      },
+      "TwoFactorSetupResponse": {
+        "description": "Shown once. The manual key and QR carry the TOTP secret.",
+        "properties": {
+          "digits": {
+            "title": "Digits",
+            "type": "integer"
+          },
+          "manual_key": {
+            "title": "Manual Key",
+            "type": "string"
+          },
+          "otpauth_uri": {
+            "title": "Otpauth Uri",
+            "type": "string"
+          },
+          "period_seconds": {
+            "title": "Period Seconds",
+            "type": "integer"
+          },
+          "qr_svg_data_uri": {
+            "title": "Qr Svg Data Uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "manual_key",
+          "otpauth_uri",
+          "qr_svg_data_uri",
+          "digits",
+          "period_seconds"
+        ],
+        "title": "TwoFactorSetupResponse",
+        "type": "object"
+      },
+      "TwoFactorStatusResponse": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "enabled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled At"
+          },
+          "locked_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locked Until"
+          },
+          "pending_setup": {
+            "default": false,
+            "title": "Pending Setup",
+            "type": "boolean"
+          },
+          "recovery_codes_remaining": {
+            "default": 0,
+            "title": "Recovery Codes Remaining",
+            "type": "integer"
+          },
+          "remembered_devices": {
+            "default": 0,
+            "title": "Remembered Devices",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "TwoFactorStatusResponse",
+        "type": "object"
+      },
       "UnavailableContextMetric": {
         "additionalProperties": false,
         "description": "Capability limitation, not an observation or a zero-valued market fact.",
@@ -62700,6 +62980,7 @@
     },
     "/auth/login": {
       "post": {
+        "description": "Password login. With two-factor on, returns a challenge for ``/auth/login/two-factor``.",
         "operationId": "login_auth_login_post",
         "requestBody": {
           "content": {
@@ -62716,7 +62997,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AuthResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AuthResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TwoFactorChallengeResponse"
+                    }
+                  ],
+                  "title": "Response Login Auth Login Post"
                 }
               }
             },
@@ -62734,6 +63023,48 @@
           }
         },
         "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/login/two-factor": {
+      "post": {
+        "description": "Second login step: authenticator code or one recovery code (per-user lock applies).",
+        "operationId": "login_two_factor_auth_login_two_factor_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwoFactorLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwoFactorLoginResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login Two Factor",
         "tags": [
           "auth"
         ]
@@ -62975,6 +63306,227 @@
           }
         },
         "summary": "Register",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/two-factor": {
+      "get": {
+        "operationId": "two_factor_status_auth_two_factor_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwoFactorStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Two Factor Status",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/two-factor/confirm": {
+      "post": {
+        "description": "Turn 2FA on with a valid code; returns 10 recovery codes (shown once).",
+        "operationId": "confirm_two_factor_setup_auth_two_factor_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwoFactorCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwoFactorRecoveryCodesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Confirm Two Factor Setup",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/two-factor/devices/revoke": {
+      "post": {
+        "description": "Forget every remembered device: the next login on each asks for a code again.",
+        "operationId": "revoke_remembered_devices_auth_two_factor_devices_revoke_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Remembered Devices",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/two-factor/disable": {
+      "post": {
+        "description": "Needs a current authenticator code. Deletes recovery codes, revokes remembered devices.",
+        "operationId": "disable_two_factor_auth_two_factor_disable_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwoFactorCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Disable Two Factor",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/two-factor/recovery-codes": {
+      "post": {
+        "description": "Needs a current authenticator code. Replaces every previous recovery code.",
+        "operationId": "regenerate_recovery_codes_auth_two_factor_recovery_codes_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwoFactorCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwoFactorRecoveryCodesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Regenerate Recovery Codes",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/two-factor/setup": {
+      "post": {
+        "description": "New secret for the authenticator app. Shown once; not on until confirmed.",
+        "operationId": "start_two_factor_setup_auth_two_factor_setup_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwoFactorSetupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Start Two Factor Setup",
         "tags": [
           "auth"
         ]

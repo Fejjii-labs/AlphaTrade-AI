@@ -89,3 +89,93 @@ def decode_access_token(token: str, settings: Settings) -> dict[str, Any]:
     if "actor" in payload and (not isinstance(actor, str) or actor not in _ACCESS_ACTORS):
         raise AuthError("Invalid access token type.")
     return payload
+
+
+_TWO_FACTOR_PENDING = "two_factor_pending"
+_TWO_FACTOR_DEVICE = "two_factor_device"
+
+
+def _encode_purpose_token(
+    *, subject: uuid.UUID, purpose: str, ttl: timedelta, settings: Settings, extra: dict[str, Any]
+) -> tuple[str, str]:
+    jti = str(uuid.uuid4())
+    now = datetime.now(UTC)
+    payload: dict[str, Any] = {
+        "sub": str(subject),
+        "type": purpose,
+        "jti": jti,
+        "iat": now,
+        "exp": now + ttl,
+        **extra,
+    }
+    return jwt.encode(payload, _signing_secret(settings), algorithm=JWT_ALGORITHM), jti
+
+
+def _decode_purpose_token(token: str, *, purpose: str, settings: Settings) -> dict[str, Any]:
+    try:
+        payload = jwt.decode(
+            token,
+            _signing_secret(settings),
+            algorithms=[JWT_ALGORITHM],
+            options={"require": ["exp", "iat", "sub", "type", "jti"]},
+        )
+    except jwt.PyJWTError as exc:
+        raise AuthError("Invalid or expired two-factor token.") from exc
+    if payload.get("type") != purpose:
+        raise AuthError("Invalid two-factor token type.")
+    try:
+        uuid.UUID(str(payload["sub"]))
+    except ValueError as exc:
+        raise AuthError("Invalid or expired two-factor token.") from exc
+    return payload
+
+
+def create_two_factor_pending_token(
+    *, user_id: uuid.UUID, organization_id: uuid.UUID, settings: Settings
+) -> tuple[str, int]:
+    """Token proving the password step passed. It is not an access token.
+
+    ``decode_access_token`` refuses it (its type is not ``access``), so it can
+    only be redeemed at the second login step, once (its jti is denylisted).
+    """
+    ttl_seconds = settings.two_factor_pending_token_seconds
+    token, _ = _encode_purpose_token(
+        subject=user_id,
+        purpose=_TWO_FACTOR_PENDING,
+        ttl=timedelta(seconds=ttl_seconds),
+        settings=settings,
+        extra={"org_id": str(organization_id)},
+    )
+    return token, ttl_seconds
+
+
+def decode_two_factor_pending_token(token: str, settings: Settings) -> dict[str, Any]:
+    payload = _decode_purpose_token(token, purpose=_TWO_FACTOR_PENDING, settings=settings)
+    try:
+        uuid.UUID(str(payload.get("org_id")))
+    except ValueError as exc:
+        raise AuthError("Invalid or expired two-factor token.") from exc
+    return payload
+
+
+def create_two_factor_device_token(
+    *, user_id: uuid.UUID, device_id: uuid.UUID, expires_at: datetime, settings: Settings
+) -> str:
+    """Signed remember-device token naming a revocable ``two_factor_trusted_devices`` row."""
+    token, _ = _encode_purpose_token(
+        subject=user_id,
+        purpose=_TWO_FACTOR_DEVICE,
+        ttl=expires_at - datetime.now(UTC),
+        settings=settings,
+        extra={"did": str(device_id)},
+    )
+    return token
+
+
+def decode_two_factor_device_token(token: str, settings: Settings) -> tuple[uuid.UUID, uuid.UUID]:
+    """Return ``(user_id, device_id)`` from a valid remember-device token."""
+    payload = _decode_purpose_token(token, purpose=_TWO_FACTOR_DEVICE, settings=settings)
+    try:
+        return uuid.UUID(str(payload["sub"])), uuid.UUID(str(payload.get("did")))
+    except ValueError as exc:
+        raise AuthError("Invalid or expired two-factor token.") from exc

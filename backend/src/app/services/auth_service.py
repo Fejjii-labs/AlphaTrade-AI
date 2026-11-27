@@ -23,12 +23,23 @@ from app.repositories.users import UserRepository
 from app.schemas.audit import AuditRecordCreate
 from app.schemas.auth import AuthResponse, LoginRequest, RegisterRequest, TokenPair
 from app.schemas.common import ActorType, AuditEventType, AuditResult, AuditSeverity, MembershipRole
+from app.schemas.two_factor import (
+    TwoFactorChallengeResponse,
+    TwoFactorLoginRequest,
+    TwoFactorLoginResponse,
+)
 from app.security.passwords import hash_password, validate_password, verify_password
 from app.security.tenant import TenantContext
 from app.security.token_denylist import AccessTokenDenylist, get_access_token_denylist
-from app.security.tokens import create_access_token, decode_access_token
+from app.security.tokens import (
+    create_access_token,
+    create_two_factor_pending_token,
+    decode_access_token,
+    decode_two_factor_pending_token,
+)
 from app.services.account_service import AccountService
 from app.services.audit_service import AuditService
+from app.services.two_factor_service import TwoFactorService
 
 logger = structlog.get_logger(__name__)
 
@@ -81,7 +92,8 @@ class AuthService:
         logger.info("user_registered", user_id=str(user.id), organization_id=str(org.id))
         return self._build_auth_response(user, org, tokens, MembershipRole.OWNER)
 
-    def login(self, data: LoginRequest) -> AuthResponse:
+    def login(self, data: LoginRequest) -> AuthResponse | TwoFactorChallengeResponse:
+        """Password step. With 2FA on, returns a challenge unless the device is remembered."""
         user = self._users.get_by_email(str(data.email).lower())
         if user is None or not verify_password(data.password, user.hashed_password, self._settings):
             raise AuthError("Invalid email or password.")
@@ -95,9 +107,56 @@ class AuthService:
         org = self._orgs.get(membership.organization_id)
         if org is None:
             raise AuthError("Organization not found.")
+        two_factor = self._two_factor()
+        if two_factor.is_enabled(user.id) and not two_factor.remembered_device_valid(
+            user_id=user.id, organization_id=org.id, device_token=data.device_token
+        ):
+            pending_token, expires_in = create_two_factor_pending_token(
+                user_id=user.id, organization_id=org.id, settings=self._settings
+            )
+            logger.info("user_login_two_factor_required", user_id=str(user.id))
+            return TwoFactorChallengeResponse(pending_token=pending_token, expires_in=expires_in)
         tokens = self._issue_tokens(user=user, organization_id=org.id)
         logger.info("user_login", user_id=str(user.id), organization_id=str(org.id))
         return self._build_auth_response(user, org, tokens, membership.role)
+
+    def complete_two_factor_login(self, data: TwoFactorLoginRequest) -> TwoFactorLoginResponse:
+        """Second login step: redeem the pending token with a TOTP or recovery code."""
+        payload = decode_two_factor_pending_token(data.pending_token, self._settings)
+        jti = str(payload["jti"])
+        if self._denylist.is_denied(jti):
+            raise AuthError("This sign-in has already been used. Sign in again.")
+        user_id = uuid.UUID(str(payload["sub"]))
+        organization_id = uuid.UUID(str(payload["org_id"]))
+        user = self._users.get(user_id)
+        if user is None or not user.is_active:
+            raise AuthError("Account is unavailable.")
+        if self._settings.must_verify_email and not user.email_verified:
+            raise AuthError("Email address is not verified.")
+        membership = self._memberships.get_for_user_and_org(user_id, organization_id)
+        org = self._orgs.get(organization_id)
+        if membership is None or org is None:
+            raise AuthError("Organization membership not valid for this sign-in.")
+        two_factor = self._two_factor()
+        method = two_factor.verify_login(
+            user_id=user_id,
+            organization_id=organization_id,
+            code=data.code,
+            recovery_code=data.recovery_code,
+        )
+        # Single use: the pending token cannot open a second session.
+        self._denylist.add(jti, ttl_seconds=self._settings.two_factor_pending_token_seconds)
+        tokens = self._issue_tokens(user=user, organization_id=org.id)
+        device_token, device_expires_at = (
+            two_factor.remember_device(user_id=user_id) if data.remember_device else (None, None)
+        )
+        logger.info("user_login", user_id=str(user.id), organization_id=str(org.id), mfa=method)
+        base = self._build_auth_response(user, org, tokens, membership.role)
+        return TwoFactorLoginResponse(
+            **base.model_dump(),
+            device_token=device_token,
+            device_token_expires_at=device_expires_at,
+        )
 
     def refresh(self, refresh_token: str) -> TokenPair:
         token_hash = _hash_refresh_token(refresh_token)
@@ -245,6 +304,9 @@ class AuthService:
                 expires_in=tokens.expires_in,
             )
         return tokens
+
+    def _two_factor(self) -> TwoFactorService:
+        return TwoFactorService(self._session, self._settings, audit_service=self._audit)
 
     def _denylist_access_token(self, access_token: str) -> None:
         if not self._settings.access_token_denylist_enabled:
