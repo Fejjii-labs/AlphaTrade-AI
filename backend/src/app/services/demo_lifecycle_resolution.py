@@ -4,7 +4,8 @@ Called only by governed venue reconciliation; no caller-supplied close API. Dail
 loss allocation and consumed trade counts remain conservative, not replenished.
 """
 
-from datetime import UTC
+from collections.abc import Sequence
+from datetime import UTC, date, datetime
 from decimal import ROUND_FLOOR, Decimal
 from uuid import uuid5
 
@@ -25,7 +26,7 @@ from app.db.models import (
     RiskReservation,
     VenueSubmitEffect,
 )
-from app.providers.exchange.governed_blofin_exit import VerifiedDemoExit
+from app.providers.exchange.governed_blofin_exit import DemoExitFill, VerifiedDemoExit
 from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.audit import AuditRecordCreate
 from app.schemas.canonical_trade_plan import CanonicalTradePlanRevision
@@ -106,6 +107,72 @@ def signed_verified_demo_pnl(
             return net
         return Decimal("-0.00000001")
     return net - funding
+
+
+def demo_fill_fee_cost(fee: Decimal | None) -> Decimal:
+    """A BloFin ``fills-history`` fee as a cost: positive when paid, negative for a rebate.
+
+    Checked on 27 Nov 2026 against 20 real demo fills (BTC, ZEC, HYPE, TAO, SOL):
+    ``fills-history`` reports a paid fee as a positive number. ``positions-history``
+    uses the opposite sign (negative when paid); that endpoint is read only by the
+    manual mirror, which keeps its own rule. Recorded in
+    ``tests/fixtures/blofin_demo_recorded/fills_history.json``.
+    """
+
+    return fee if fee is not None and fee.is_finite() else Decimal("0")
+
+
+def demo_day_realized_pnl(
+    *,
+    day: date | None,
+    close_time: datetime,
+    is_long: bool,
+    entry_price: Decimal,
+    entry_quantity: Decimal,
+    contract_multiplier: Decimal,
+    exit_fills: Sequence[DemoExitFill],
+    entry_fees: Sequence[Decimal] | None,
+    funding: Decimal | None,
+) -> Decimal:
+    """The part of a demo trade's realised P&L charged to the daily loss budget of ``day``.
+
+    The budget counts losses only: the caller charges ``max(0, -result)`` and a
+    winner never offsets an earlier loss on the same day (deliberately cautious).
+
+    Which exit fills count:
+    - fills on ``day`` (UTC);
+    - fills on the day of the final close, when the close is proven on a later UTC
+      day (a stop filled at 23:59 and proven at 00:01 is charged to the day it is
+      recorded, not dropped);
+    - earlier partial exits on other days are not charged again.
+
+    Fees are costs (``demo_fill_fee_cost``); the entry fee is charged in proportion
+    to the quantity counted. ``entry_fees=None`` means the fees are unverified and
+    are left out. Verified funding cash (a credit is negative) counts once the final
+    close is counted.
+    """
+
+    close_day = close_time.astimezone(UTC).date()
+    days = {day, close_day} if day is not None and close_day < day else {day}
+    counted = [f for f in exit_fills if f.occurred_at.astimezone(UTC).date() in days]
+    quantity = sum((f.quantity for f in counted), Decimal("0"))
+    direction = 1 if is_long else -1
+    pnl = (
+        direction
+        * contract_multiplier
+        * sum(((f.price - entry_price) * f.quantity for f in counted), Decimal("0"))
+    )
+    if entry_fees is not None:
+        pnl -= sum((demo_fill_fee_cost(f.fee) for f in counted), Decimal("0"))
+        if entry_quantity > 0:
+            pnl -= (
+                sum((demo_fill_fee_cost(fee) for fee in entry_fees), Decimal("0"))
+                * quantity
+                / entry_quantity
+            )
+    if funding is not None and close_day in days:
+        pnl -= funding
+    return pnl
 
 
 def verified_demo_funding_cash(evidence: VerifiedDemoExit) -> Decimal | None:
@@ -416,23 +483,17 @@ def resolve_verified_demo_exit(
         funding=verified_demo_funding_cash(evidence),
     )
     release_demo_daily_loss(accounting, reservation)
-    day = accounting.demo_loss_utc_date
-    daily_fills = [
-        fill for fill in evidence.fills if fill.occurred_at.astimezone(UTC).date() == day
-    ]
-    daily_quantity = sum((fill.quantity for fill in daily_fills), Decimal("0"))
-    direction = 1 if plan.side is EntrySide.BUY else -1
-    daily_pnl = (
-        direction
-        * plan.instrument_rules.contract_multiplier
-        * sum(((fill.price - entry_price) * fill.quantity for fill in daily_fills), Decimal("0"))
+    daily_pnl = demo_day_realized_pnl(
+        day=accounting.demo_loss_utc_date,
+        close_time=close_time,
+        is_long=plan.side is EntrySide.BUY,
+        entry_price=entry_price,
+        entry_quantity=evidence.entry_quantity,
+        contract_multiplier=plan.instrument_rules.contract_multiplier,
+        exit_fills=evidence.fills,
+        entry_fees=entry_fees if fees is not None else None,
+        funding=verified_demo_funding_cash(evidence),
     )
-    if fees is not None:
-        daily_pnl -= sum((fill.fee or Decimal("0") for fill in daily_fills), Decimal("0"))
-        daily_pnl -= sum(entry_fees, Decimal("0")) * daily_quantity / evidence.entry_quantity
-    funding = verified_demo_funding_cash(evidence)
-    if funding is not None and close_time.astimezone(UTC).date() == day:
-        daily_pnl -= funding
     realized_loss = max(Decimal("0"), -daily_pnl)
     accounting.actual_daily_loss += realized_loss
     accounting.actual_notional -= exposure

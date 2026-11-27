@@ -185,6 +185,10 @@ class DailyRiskAccounting:
         ``blofin-demo-history:`` on ``external_ref``. Tags are not read. A
         closed row contributes zero open exposure. The day's trade count still
         includes that row when its entry time is inside the day.
+
+        This is the display figure (net P&L, winners offset losers, the user's
+        day). It is not the BloFin demo loss budget, which counts gross losses
+        per UTC day (``demo_lifecycle_resolution.demo_day_realized_pnl``).
         """
         scope = (
             JournalTrade.organization_id == organization_id,
