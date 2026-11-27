@@ -228,6 +228,45 @@ def format_loss_reasons_line(reasons: dict[str, int]) -> str:
     return "\U0001f50d Why trades lost: " + ", ".join(parts)
 
 
+def _month_in_review(
+    session: Session, settings: Settings, organization_id: UUID, account_id: UUID, day: date
+) -> str:
+    """The month ending on ``day``: per strategy, loss reasons, lessons (saved for review)."""
+
+    from app.services.demo_monthly_lessons import (
+        format_month_lines,
+        lessons_from,
+        month_review_tags,
+        save_lessons,
+    )
+
+    start = datetime.combine(day.replace(day=1), time.min, tzinfo=UTC)
+    end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=UTC)
+    rows = collect_strategy_week(
+        session, organization_id=organization_id, account_id=account_id, start=start, end=end
+    )
+    reviews = month_review_tags(
+        session, organization_id=organization_id, account_id=account_id, start=start, end=end
+    )
+    lessons = lessons_from(reviews, list(rows))
+    try:
+        user_id = UUID(settings.governed_blofin_demo_user_id)
+    except ValueError:
+        user_id = None
+    if lessons and user_id is not None:
+        save_lessons(
+            session, organization_id=organization_id, user_id=user_id, month=day, lessons=lessons
+        )
+    strategy_lines = (
+        format_strategy_week_lines(rows, first_day=start.date(), last_day=day) if rows else []
+    )
+    lines = format_month_lines(day, reviews, lessons, strategy_lines)
+    reasons = {code: n for code, n in reviews.items() if code in _LOSS_REASON_WORDS}
+    if reasons:
+        lines.insert(len(lines) - len(lessons) - 1, format_loss_reasons_line(reasons))
+    return "\n".join(lines)
+
+
 def reset_demo_daily_summary_memo() -> None:
     with _LOCK:
         _DONE.clear()
@@ -481,6 +520,10 @@ def _send_if_due(settings: Settings, factory: sessionmaker[Session], *, now: dat
                 )
                 if reasons:
                     message += "\n" + format_loss_reasons_line(reasons)
+            if (day + timedelta(days=1)).day == 1:  # the 1st's page adds the month
+                message += "\n\n" + _month_in_review(
+                    session, settings, organization_id, account_id, day
+                )
             key = f"{DEMO_DAILY_SUMMARY}:{organization_id}:{day.isoformat()}"
             alert = ExitMonitorAlert(
                 code=DEMO_DAILY_SUMMARY,
