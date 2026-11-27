@@ -2501,7 +2501,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         except Exception:
             logger.warning("demo_ladder_step_failed command_id=%s", command.id, exc_info=True)
             session.rollback()
+            _alert_ladder_problem(self._settings, session, command, plan, "step_failed")
             return "demo_ladder_unavailable"
+        for problem in report.alerts:
+            _alert_ladder_problem(self._settings, session, command, plan, problem)
         logger.info(
             "demo_ladder_step command_id=%s status=%s reason=%s placed=%s alerts=%s",
             command.id,
@@ -2838,3 +2841,59 @@ def stop_loss_band(settings: Settings, equity: Decimal) -> tuple[Decimal | None,
     ):
         return None, None
     return equity * low / Decimal("100"), equity * high / Decimal("100")
+
+
+_LADDER_PROBLEMS = {
+    "backup_stop_failed": "the backup stop on BloFin could not be placed or moved",
+    "close_place_failed": "BloFin refused a closing order (a target or the stop)",
+    "step_failed": "the bot could not run its exit check (stop and targets) this cycle",
+}
+
+
+def _alert_ladder_problem(
+    settings: Settings,
+    session: Session,
+    command: ExecutionCommand,
+    plan: PlanRevision,
+    problem: str,
+) -> None:
+    """Telegram page for a stepped-exit trade whose protection failed (audit H-2).
+
+    Sent after commit; repeated every 15 minutes while the same problem continues.
+    Never changes the reconcile outcome.
+    """
+
+    detail = _LADDER_PROBLEMS.get(problem)
+    if detail is None:
+        return
+    try:
+        from app.services.demo_trade_telegram import _coin
+        from app.services.paper_exit_monitor import ExitMonitorAlert
+        from app.services.safety_alerts import queue_safety_alert
+
+        side = "long" if plan.side is EntrySide.BUY else "short"
+        trade = f"{_coin(plan.execution_instrument)} {side}"
+        message = "\n".join(
+            [
+                f"\u26a0\ufe0f Demo trade needs a look: {trade}",
+                f"Problem: {detail}.",
+                "The bot keeps managing the trade. If this repeats, check the position on BloFin.",
+            ]
+        )
+        queue_safety_alert(
+            session,
+            settings,
+            ExitMonitorAlert(
+                code="demo_trade_protection_failed",
+                severity="critical",
+                message=message,
+                fields={
+                    "dedup_key": f"demo_trade_protection_failed:{command.id}:{problem}",
+                    "organization_id": str(command.organization_id),
+                },
+                telegram_verbatim=True,
+                background=True,
+            ),
+        )
+    except Exception:
+        logger.warning("demo_ladder_alert_failed command_id=%s", command.id, exc_info=True)

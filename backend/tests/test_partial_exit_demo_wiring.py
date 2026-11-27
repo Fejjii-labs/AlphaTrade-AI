@@ -532,3 +532,65 @@ def test_loop_runs_the_ladder_before_the_missing_protection_kill_switch() -> Non
     managed = source.index("_manage_demo_ladder")
     assert managed < source.index("BloFin demo protection missing")
     assert source.index("reconcile_exit") < managed
+
+
+# Audit H-2: a failed close, backup stop or exit step pages Telegram, not just a log line.
+
+
+def _captured_alerts(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    sent: list[Any] = []
+    monkeypatch.setattr(
+        "app.services.safety_alerts.queue_safety_alert",
+        lambda session, settings, alert: sent.append(alert),
+    )
+    return sent
+
+
+def _named_inputs() -> tuple[Any, Any, Any]:
+    plan, command, evidence = _ladder_inputs()
+    plan.execution_instrument = "BTC-USDT"
+    return plan, command, evidence
+
+
+def test_a_refused_close_pages_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent = _captured_alerts(monkeypatch)
+    venue = LoopVenue(mark=Decimal("110"), fail_place=True)
+    loop, _store = _loop(_demo_settings(True), venue)
+    plan, command, evidence = _named_inputs()
+    assert loop._manage_demo_ladder(None, command, plan, evidence) == "demo_ladder_managed"
+    assert [a.code for a in sent] == ["demo_trade_protection_failed"]
+    alert = sent[0]
+    assert alert.telegram_verbatim and alert.severity == "critical"
+    assert alert.message.splitlines()[0].endswith("Demo trade needs a look: BTC long")
+    assert "refused a closing order" in alert.message
+    assert alert.fields["dedup_key"].endswith(":close_place_failed")
+
+
+def test_a_failed_step_pages_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent = _captured_alerts(monkeypatch)
+
+    class Broken(LoopVenue):
+        def mark_price(self) -> Decimal:
+            raise RuntimeError("tickers unavailable")
+
+    loop, _store = _loop(_demo_settings(True), Broken(mark=Decimal("105")))
+    plan, command, evidence = _named_inputs()
+    session = SimpleNamespace(rollback=lambda: None)
+    assert loop._manage_demo_ladder(session, command, plan, evidence) == "demo_ladder_unavailable"
+    assert [a.fields["dedup_key"].rsplit(":", 1)[1] for a in sent] == ["step_failed"]
+    assert "could not run its exit check" in sent[0].message
+
+
+def test_a_healthy_step_sends_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent = _captured_alerts(monkeypatch)
+    loop, _store = _loop(_demo_settings(True), LoopVenue(mark=Decimal("105")))
+    plan, command, evidence = _named_inputs()
+    assert loop._manage_demo_ladder(None, command, plan, evidence) == "demo_ladder_managed"
+    assert sent == []
+
+
+def test_the_protection_alert_is_mandatory_and_repeats_every_15_minutes() -> None:
+    from app.services import safety_alerts
+
+    assert "demo_trade_protection_failed" in safety_alerts.TELEGRAM_SAFETY_MANDATORY_CODES
+    assert safety_alerts._cooldown("demo_trade_protection_failed").total_seconds() == 900
