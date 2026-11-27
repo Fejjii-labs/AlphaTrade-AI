@@ -606,6 +606,7 @@ def vacuum_tables(
     command = "VACUUM (FULL, ANALYZE)" if full else "VACUUM (ANALYZE)"
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
         connection.execute(text("SET lock_timeout = '10s'"))
+        connection.execute(text("SET statement_timeout = 0"))  # VACUUM may take a while
         for table in tables:
             if table not in allowed:
                 raise ValueError(f"not a retention table: {table}")

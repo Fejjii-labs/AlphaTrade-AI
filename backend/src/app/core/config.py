@@ -640,6 +640,13 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(default=5, ge=0, le=50)
     db_pool_timeout_seconds: int = Field(default=30, ge=1, le=300)
     db_pool_recycle_seconds: int = Field(default=1800, ge=60, le=86400)
+    # Server-side limits on every PostgreSQL connection (audit M-7), so a dropped
+    # connection or a lock wait cannot block a worker thread for good. 0 = no limit.
+    # VACUUM (retention) lifts the statement limit on its own connection.
+    db_connect_timeout_seconds: int = Field(default=10, ge=1, le=120)
+    db_statement_timeout_seconds: int = Field(default=300, ge=0, le=86400)
+    db_lock_timeout_seconds: int = Field(default=60, ge=0, le=3600)
+    db_idle_in_transaction_timeout_seconds: int = Field(default=600, ge=0, le=86400)
     redis_url: str = "redis://localhost:6379/0"
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str = ""
