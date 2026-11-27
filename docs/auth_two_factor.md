@@ -80,6 +80,8 @@ recovery codes share this budget). Wait, then try again.
   JWTs). Generate a key with
   `python -c "import base64,secrets;print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"`.
   A malformed key stops the app at start-up.
+- `scripts/fresh_start_purge.py` keeps all three tables (like `users`), so a
+  fresh-start purge does not turn anyone's 2FA off.
 
 ### Audit
 
