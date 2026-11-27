@@ -97,6 +97,7 @@ _COOLDOWN_SECONDS = {
     "worker_heartbeat_stale": 900,
     "arming_refused": 900,
     "kill_switch_activated": 900,
+    "demo_trade_protection_failed": 900,  # re-sent every 15 min while it keeps failing
     "exit_monitor_heartbeat_missing": 900,
     "exit_monitor_heartbeat_stale": 900,
     "worker_config_degraded": 6 * 3600,
@@ -113,6 +114,7 @@ _DEFAULT_COOLDOWN_SECONDS = 900
 TELEGRAM_SAFETY_MANDATORY_CODES: frozenset[str] = frozenset(
     {
         "kill_switch_activated",
+        "demo_trade_protection_failed",
         "backfill_loss",
         "stale_live_loss",
         "account_equity_stop_sweep_stale",
