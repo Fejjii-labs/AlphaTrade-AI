@@ -153,3 +153,10 @@ def _verify_no_money_movement(account: BloFinAccountProvider) -> None:
             "Refusing BloFin demo key: it carries withdrawal/transfer scope. "
             "Use a read/trade-only demo key."
         )
+    if not permissions.money_scope_known:
+        # Not a refusal: the venue only reports read-only or not, so transfer and
+        # withdraw rights cannot be checked here. Create demo keys without them.
+        logger.warning(
+            "blofin_key_money_scope_not_reported",
+            response_keys=list(permissions.response_keys),
+        )

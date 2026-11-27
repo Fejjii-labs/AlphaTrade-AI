@@ -175,6 +175,8 @@ def parse_account_permissions(payload: Any) -> AccountPermissions:
         can_transfer=has_transfer,
         raw_scopes=tuple(sorted(tokens)),
         response_keys=response_keys,
+        money_scope_known=any(key in row for key in _PERMISSION_FIELDS)
+        or any(key in row for key in ("transfer", "internal_transfer", "withdraw", "withdrawal")),
     )
 
 
