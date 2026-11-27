@@ -10,6 +10,12 @@ from pydantic import Field, model_validator
 from app.schemas.auth import AuthResponse
 from app.schemas.common import ORMModel, StrictModel
 
+TwoFactorMethod = Literal["totp", "recovery_code"]
+
+
+def _all_methods() -> list[TwoFactorMethod]:
+    return ["totp", "recovery_code"]
+
 
 class TwoFactorChallengeResponse(ORMModel):
     """Password accepted; a second factor is required to finish signing in."""
@@ -17,9 +23,7 @@ class TwoFactorChallengeResponse(ORMModel):
     two_factor_required: Literal[True] = True
     pending_token: str = Field(description="Short-lived token for POST /auth/login/two-factor.")
     expires_in: int = Field(gt=0, description="Pending-token lifetime in seconds.")
-    methods: list[Literal["totp", "recovery_code"]] = Field(
-        default_factory=lambda: ["totp", "recovery_code"]
-    )
+    methods: list[TwoFactorMethod] = Field(default_factory=_all_methods)
 
 
 class TwoFactorLoginRequest(StrictModel):

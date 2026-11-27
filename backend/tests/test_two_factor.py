@@ -180,7 +180,8 @@ def test_malformed_two_factor_key_is_refused() -> None:
 
 def test_enrolment_stores_only_ciphertext_and_digests(harness: Harness) -> None:
     access = _register(harness, "enrol@example.com")["tokens"]["access_token"]
-    assert harness.client.get("/auth/two-factor", headers=_bearer(access)).json()["enabled"] is False
+    status = harness.client.get("/auth/two-factor", headers=_bearer(access)).json()
+    assert status["enabled"] is False
 
     setup = harness.client.post("/auth/two-factor/setup", headers=_bearer(access)).json()
     secret = setup["manual_key"]
@@ -397,7 +398,8 @@ def test_disable_requires_current_code(harness: Harness) -> None:
         "/auth/two-factor/disable", headers=_bearer(access), json={"code": harness.code(secret)}
     )
     assert ok.status_code == 200, ok.text
-    assert harness.client.get("/auth/two-factor", headers=_bearer(access)).json()["enabled"] is False
+    status = harness.client.get("/auth/two-factor", headers=_bearer(access)).json()
+    assert status["enabled"] is False
     assert _login(harness, "disable@example.com")["tokens"]["access_token"]
     with harness.sessions() as session:
         assert session.scalars(select(TwoFactorRecoveryCodeRow)).first() is None
