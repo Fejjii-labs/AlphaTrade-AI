@@ -119,5 +119,77 @@ def blind(out_dir):
                 for c in D.COINS if c in sh))
 
 
+
+
+def overview(out_dir):
+    """One line per frozen variant: BTC and all-coin results in both periods, and the gate."""
+    b = json.load(open(os.path.join(out_dir, "blind.json")))
+    years = [(D.ms("2023-11-01"), D.ms("2024-11-01")), (D.ms("2024-11-01"), D.ms("2025-11-01")),
+             D.BLIND]
+    print("| Variant | BTC design | BTC blind | BTC by year (R/trade) | All five design | "
+          "All five blind | Gate |\n|---|---|---|---|---|---|---|")
+    for v in b["variants"]:
+        res = b["result"][v["id"]]
+
+        def tr(p, coins):
+            return [t for c in coins for t in res[p][c]["trades"]]
+
+        bd, bb = summary(tr("design", ["BTCUSDT"]), D.DESIGN), summary(tr("blind", ["BTCUSDT"]), D.BLIND)
+        ad, ab = summary(tr("design", D.COINS), D.DESIGN), summary(tr("blind", D.COINS), D.BLIND)
+        btc_all = tr("design", ["BTCUSDT"]) + tr("blind", ["BTCUSDT"])
+        by_year = [summary([t for t in btc_all if y[0] <= t["entry_ms"] < y[1]], y) for y in years]
+        share = max((x["share"] for x in by_coin_share(tr("blind", D.COINS)).values()), default=0)
+        all_ok = (ad["mean"] > 0 and ab["mean"] >= 0.15 and ab["trades"] >= 50 and share <= 0.5)
+        btc_ok = (all(y["mean"] > 0 for y in by_year) and bb["trades"] >= 25 and bb["mean"] >= 0.15)
+        gate = "pass (all coins)" if all_ok else "pass (BTC only)" if btc_ok else "fail"
+        cell = lambda s: f"{s['trades']} / {fr(s['mean'])}R"  # noqa: E731
+        print(f"| {v['id']} | {cell(bd)} | {cell(bb)} | "
+              f"{' / '.join(fr(y['mean']) for y in by_year)} | {cell(ad)} | {cell(ab)} | {gate} |")
+
+
+def factors(out_dir, min_trades=30):
+    """Average R per trade by choice (stage A) and the average change of each stage-B option."""
+    from statistics import mean
+    rows = {c: json.load(open(os.path.join(out_dir, f"explore_{c}.json"))) for c in D.COINS}
+    nb = len(D.EXEC_TFS) * 7 * 9
+    dims = [("Execution chart", lambda v: v["exec"]),
+            ("Level set", lambda v: "+".join(v["levels"])),
+            ("Entry", lambda v: v["entry"]), ("Stop", lambda v: v["stop"])]
+    print("| Choice | Option | " + " | ".join(c[:-4] for c in D.COINS) + " |")
+    print("|---|---|" + "---|" * len(D.COINS))
+    for name, key in dims:
+        opts = sorted({key(r["v"]) for r in rows["BTCUSDT"][:nb]})
+        for o in opts:
+            cells = []
+            for c in D.COINS:
+                x = [r["s"]["mean"] for r in rows[c][:nb]
+                     if key(r["v"]) == o and r["s"]["trades"] >= min_trades]
+                cells.append(fr(mean(x)) if x else "n/a")
+            print(f"| {name} | {o} | " + " | ".join(cells) + " |")
+    print()
+    print("| Option added | " + " | ".join(f"{c[:-4]} ΔR / trades" for c in D.COINS) + " |")
+    print("|---|" + "---|" * len(D.COINS))
+    names = ["Naked levels (until swept, 5 candles)", "Equal highs/lows", "Same-candle reclaim only",
+             "TP2 at the swept candle's other side", "Volume >= 1.5x", "Confluence >= 2"]
+    for ci, name in enumerate(names):
+        cells = []
+        for c in D.COINS:
+            R = rows[c]
+            pairs = [(R[nb + bi * 6 + ci]["s"], R[bi]["s"]) for bi in range(nb)]
+            pairs = [(a, b) for a, b in pairs if a["trades"] >= min_trades and b["trades"] >= min_trades]
+            if not pairs:
+                cells.append("n/a")
+                continue
+            d = mean(a["mean"] - b["mean"] for a, b in pairs)
+            k = mean(a["trades"] / b["trades"] for a, b in pairs)
+            cells.append(f"{fr(d)}R / {k * 100:.0f}%")
+        print(f"| {name} | " + " | ".join(cells) + " |")
+    for c in D.COINS:
+        ok = [r for r in rows[c] if r["s"]["trades"] >= 40]
+        print(f"\n{c}: {len(ok)} settings with >= 40 trades, {sum(r['s']['mean'] > 0 for r in ok)} "
+              f"positive, best t-stat {max(r['s']['t'] for r in ok):.2f}")
+
+
 if __name__ == "__main__":
-    {"step1": step1, "explore": explore, "blind": blind}[sys.argv[1]](sys.argv[2])
+    {"step1": step1, "explore": explore, "blind": blind, "overview": overview,
+     "factors": factors}[sys.argv[1]](sys.argv[2])

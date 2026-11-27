@@ -5,7 +5,8 @@ Writes <out>/step1.json and the PNG gallery.
 
 Usage: python -I step1.py <data_root> <chart_dir> <out_dir>
 The bot's SFP rows come from ``../sfp_nested_study.py`` (live parameters, 0.3 % minimum
-sweep, 15m): <data_root>/out/sn_sfp_BTCUSDT.json.
+sweep, 15m): <data_root>/out/sn_sfp_BTCUSDT.json, or sn_sfp_BTCUSDT_design.json when the
+replay was run on the design-year candles only (Oct 2023 warm-up to Oct 2025).
 """
 
 from __future__ import annotations
@@ -38,9 +39,11 @@ def pick_evenly(rows, n):
 
 
 def bot_sfp(d, root):
-    path = os.path.join(root, "out", "sn_sfp_BTCUSDT.json")
-    if not os.path.exists(path):
+    paths = [os.path.join(root, "out", f"sn_sfp_BTCUSDT{x}.json") for x in ("", "_design")]
+    paths = [p for p in paths if os.path.exists(p)]
+    if not paths:
         return [], {}, 0
+    path = paths[0]
     rows = [r for r in json.load(open(path)) if r["timeframe"] == "15m"]
     b = d.bars["15m"]
     trades, refused, busy = [], Counter(), 0

@@ -83,3 +83,25 @@ python3 -I ../research/backtests/bt3y_analyze.py $D lvl-final
 Limits: Binance candles stand in for BloFin prices; funding is an estimate from Binance
 funding rates; slippage is not modelled; D-line on 4h is not covered (the detector accepts
 15m, 30m and 1h only).
+
+## SFP research round 1: higher-timeframe levels (`sfp_r1/`)
+
+Results: `docs/strategies/sfp_research_round1.md`; brief:
+`docs/strategies/briefs/sfp_research_round1.md`. Plain numpy + matplotlib, no backend import
+(except the live-bot SFP replay, which reuses `sfp_nested_study.py`). Design years are entries
+from 1 Nov 2023 to 31 Oct 2025; the blind year runs from 1 Nov 2025. The exact commands are
+in section 6 of the report.
+
+| Script | What it does |
+|---|---|
+| `data.py` | Candles (15m, 1h, 4h, 1d; weekly and monthly built from UTC days), 1-minute grid, funding, periods, Tunis time |
+| `levels.py` | Previous 4h / daily / weekly / monthly highs and lows, equal highs/lows, level life, confluence |
+| `signals.py` | First sweep of each level and the close back inside (same or next candle) |
+| `entries.py`, `stops.py`, `exits.py` | Entry a/b/c, stop a/b/c, exit ladders (one small module each, to add variants) |
+| `engine.py` | One variant on one coin: filters, live checks, one position per coin, 1-minute simulation with fees, slippage and funding |
+| `classify.py`, `gallery.py` | Loss reasons and PNG trade charts |
+| `step1.py` | Step 1: failure gallery and loss-reason tables (HTF default and the live bot's SFP) |
+| `explore.py` | Step 2: 882 settings per coin on the design years only |
+| `frozen_variants.json` | The 12 variants fixed before the blind run |
+| `blind_run.py` | Step 3: runs the frozen list once on both periods (refuses if the list is not committed) |
+| `stats.py`, `tables.py` | Summaries and the report's markdown tables |

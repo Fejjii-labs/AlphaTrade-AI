@@ -24,9 +24,10 @@ TRAIL = 5
 
 
 def target_levels(data, tfs, eq_levels, sign: int, t_ms: int, entry: float) -> list[float]:
-    """Untaken HTF prices beyond ``entry`` in the trade direction at ``t_ms``."""
-    h1 = data.bars["1h"]
-    end = int(np.searchsorted(h1["t"], t_ms, side="left"))
+    """Untaken HTF prices beyond ``entry`` in the trade direction at ``t_ms``, judged on the
+    15m candles closed by ``t_ms`` (no look-ahead)."""
+    h1 = data.bars["15m"]
+    end = int(np.searchsorted(h1["t"], t_ms - 15 * 60_000, side="right"))
     out = []
     for tf in tfs:
         b, close = data.bars[tf], data.close[tf]
