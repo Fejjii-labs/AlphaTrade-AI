@@ -2266,6 +2266,47 @@ def _has_scan_authority(organization_id: Any) -> Any:
     )
 
 
+_REVIEW_EVERY = timedelta(minutes=10)
+_LAST_REVIEW: dict[str, datetime] = {}
+
+
+def _review_closed_demo_trades(
+    settings: Settings, session_factory: sessionmaker[Session], loop: object, now: datetime
+) -> None:
+    """Review closed bot trades from BloFin candles every 10 minutes; never raises."""
+
+    last = _LAST_REVIEW.get("at")
+    if last is not None and now - last < _REVIEW_EVERY:
+        return
+    _LAST_REVIEW["at"] = now
+    try:
+        from uuid import UUID
+
+        from app.services.trade_review import review_closed_demo_trades
+
+        client = loop._get_provider()._client  # type: ignore[attr-defined]
+
+        def fetch(symbol: str, bar: str, limit: int) -> object:
+            return client.request(
+                "GET",
+                "/api/v1/market/candles",
+                params={"instId": symbol, "bar": bar, "limit": str(min(max(limit, 1), 1440))},
+            )
+
+        with session_factory() as session:
+            reviewed = review_closed_demo_trades(
+                session,
+                organization_id=UUID(settings.governed_blofin_demo_organization_id),
+                fetch_rows=fetch,
+                now=now,
+            )
+            session.commit()
+        if reviewed:
+            logger.info("demo_trade_reviews_written", count=reviewed)
+    except Exception:
+        logger.warning("demo_trade_review_failed", exc_info=True)
+
+
 def reconcile_governed_demo_once(
     settings: Settings,
     session_factory: sessionmaker[Session],
@@ -2301,10 +2342,12 @@ def reconcile_governed_demo_once(
         )
     if not isinstance(runtime, ProductionCanonicalRuntime):
         return ()
+    loop = GovernedBloFinDemoLoop(runtime, settings, clock)
     with session_factory() as session:
-        recovered = GovernedBloFinDemoLoop(runtime, settings, clock).reconcile_pending(session)
+        recovered = loop.reconcile_pending(session)
     for reason in recovered:
         logger.info("governed_demo_reconciliation", reason_code=reason, paper_only=True)
+    _review_closed_demo_trades(settings, session_factory, loop, started)
     from app.services.demo_daily_summary import VENUE_MISS_MARKERS, send_demo_daily_summary_if_due
 
     if not any(marker in reason for reason in recovered for marker in VENUE_MISS_MARKERS):

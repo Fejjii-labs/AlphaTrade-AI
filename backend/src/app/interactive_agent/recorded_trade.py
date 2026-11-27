@@ -666,6 +666,14 @@ def _read_lineage(session: Session, trade: JournalTrade) -> RecordedTradeRead:
         )
     if target_comparison:
         summary += " " + target_comparison
+    if trade.excursion_source == "trade_review" and trade.excursion_freshness_note:
+        # The automatic post-trade review (app.services.trade_review), from BloFin candles.
+        summary += f" Trade review: {trade.excursion_freshness_note}"
+        evidence.lines.append(
+            f"[Trade review] {trade.excursion_freshness_note} "
+            f"(best price while open {trade.mfe_price}, worst {trade.mae_price}; "
+            "BloFin candles; analysis, not a recommendation)."
+        )
     return _finish(summary, evidence)
 
 

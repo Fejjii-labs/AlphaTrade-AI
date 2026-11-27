@@ -188,6 +188,46 @@ def format_strategy_week_lines(
     return lines
 
 
+_LOSS_REASON_WORDS = {
+    "stop_hunted": "stop hunted",
+    "level_broke": "level broke",
+    "gave_back": "gave back profit",
+    "no_follow_through": "no follow-through",
+}
+
+
+def collect_week_loss_reasons(
+    session: Session, *, organization_id: UUID, account_id: UUID, start: datetime, end: datetime
+) -> dict[str, int]:
+    """Loss reasons from the trade reviews (``review:<code>`` tags) of the week's closes."""
+
+    tags = session.scalars(
+        select(JournalTrade.tags).where(
+            JournalTrade.organization_id == organization_id,
+            JournalTrade.account_id == account_id,
+            JournalTrade.source == JournalTradeSource.PAPER_EXECUTION,
+            JournalTrade.status == JournalTradeStatus.CLOSED,
+            JournalTrade.exit_time >= start,
+            JournalTrade.exit_time < end,
+        )
+    ).all()
+    counts: Counter[str] = Counter()
+    for row in tags:
+        for tag in row or []:
+            code = str(tag).removeprefix("review:")
+            if str(tag).startswith("review:") and code in _LOSS_REASON_WORDS:
+                counts[code] += 1
+    return dict(counts)
+
+
+def format_loss_reasons_line(reasons: dict[str, int]) -> str:
+    parts = [
+        f"{count} {_LOSS_REASON_WORDS[code]}"
+        for code, count in sorted(reasons.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    return "\U0001f50d Why trades lost: " + ", ".join(parts)
+
+
 def reset_demo_daily_summary_memo() -> None:
     with _LOCK:
         _DONE.clear()
@@ -432,6 +472,15 @@ def _send_if_due(settings: Settings, factory: sessionmaker[Session], *, now: dat
                 message += "\n\n" + "\n".join(
                     format_strategy_week_lines(week, first_day=first, last_day=day)
                 )
+                reasons = collect_week_loss_reasons(
+                    session,
+                    organization_id=organization_id,
+                    account_id=account_id,
+                    start=end - WEEK,
+                    end=end,
+                )
+                if reasons:
+                    message += "\n" + format_loss_reasons_line(reasons)
             key = f"{DEMO_DAILY_SUMMARY}:{organization_id}:{day.isoformat()}"
             alert = ExitMonitorAlert(
                 code=DEMO_DAILY_SUMMARY,
