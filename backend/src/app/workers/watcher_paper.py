@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.candidate_alerts.nested import NestedAlertSummary
 from app.candidate_alerts.sfp import SfpAlertSummary
 from app.core.config import Environment, ExecutionMode, Settings
+from app.guardrails.redaction import redact_text
 from app.market_contracts.enums import VenueId
 from app.market_contracts.evidence_diagnostics import DiagnosticReason
 from app.market_contracts.provider_contracts import (
@@ -1841,12 +1842,15 @@ class WatcherPaperRuntime:
             return
         try:
             hook(report)
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "watcher_paper_notification_hook_failed",
                 organization_id=str(report.organization_id),
                 scan_scope=report.scan_scope,
                 reason_code=report.reason_code,
+                # The type and a redacted message, so a failing hook can be diagnosed.
+                error_type=type(exc).__name__,
+                error=redact_text(str(exc))[:200],
             )
 
     def _refresh_contract_book(self, config: WatchlistConfiguration) -> None:
