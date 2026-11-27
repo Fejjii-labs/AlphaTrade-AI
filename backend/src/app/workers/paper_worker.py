@@ -957,6 +957,16 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
             poll_seconds=60.0,
             request_stop=retention.request_stop,
         )
+    if settings.database_disk_limit_mb and not settings_are_disarmed_paper_worker(settings):
+        from app.workers.db_storage_check import DbStorageCheck
+
+        storage = DbStorageCheck(settings.model_copy(deep=True))
+        supervisor.attach_auxiliary(
+            "db_storage_check",
+            storage,
+            poll_seconds=600.0,
+            request_stop=storage.request_stop,
+        )
     if settings.paper_worker_memory_watchdog_enabled:
         supervisor.attach_memory_watchdog(
             MemoryWatchdog(

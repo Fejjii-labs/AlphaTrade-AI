@@ -374,6 +374,9 @@ class Settings(BaseSettings):
     # operator decision (RETENTION_ENABLED=true and RETENTION_DRY_RUN=false).
     # Hour windows have a 24-hour floor (one year ceiling).
     retention_enabled: bool = False
+    # The Render database's disk in MB. When set, the paper worker checks the
+    # database size every 10 minutes and pages Telegram at 80% and 90%.
+    database_disk_limit_mb: int | None = Field(default=None, ge=100, le=10_000_000)
     retention_dry_run: bool = True
     # The paper worker runs one pass per UTC day, at or after this hour.
     retention_schedule_hour_utc: int = Field(default=2, ge=0, le=23)
