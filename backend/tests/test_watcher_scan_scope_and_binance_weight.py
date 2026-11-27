@@ -619,6 +619,9 @@ def test_cap_smaller_than_exact_scopes_shares_scans_across_every_symbol(
             approved(session, org, user, NestedContinuationSpec(symbol=symbol, direction=direction))
     from structlog.testing import capture_logs
 
+    from app.workers import watcher_paper_targets
+
+    watcher_paper_targets._CAP_WARNED.clear()
     with capture_logs() as logs:
         capped = list_watchlist_scan_targets(
             session, symbols=WATCHLIST, organization_id=org, limit=len(WATCHLIST)
@@ -636,3 +639,43 @@ def test_cap_smaller_than_exact_scopes_shares_scans_across_every_symbol(
         )
     )
     assert set(counts) == set(WATCHLIST) and max(counts.values()) - min(counts.values()) <= 1
+
+
+def test_cap_rotates_so_every_scope_is_scanned_in_turn() -> None:
+    """Audit H-9: the cut used to drop the same (newest) scopes on every load."""
+
+    from types import SimpleNamespace
+
+    from app.workers.watcher_paper_targets import _fair_share
+
+    native = [SimpleNamespace(symbol=s, n=i) for s in ("BTC", "ETH", "SOL") for i in range(5)]
+    seen: set[tuple[str, int]] = set()
+    for rotation in range(5):
+        chosen = _fair_share(native, 7, rotation=rotation)  # type: ignore[arg-type]
+        assert len(chosen) == 7
+        counts = Counter(t.symbol for t in chosen)
+        assert max(counts.values()) - min(counts.values()) <= 1
+        assert list(chosen) == [t for t in native if t in chosen]  # original order kept
+        seen |= {(t.symbol, t.n) for t in chosen}
+    assert seen == {(t.symbol, t.n) for t in native}
+    assert _fair_share(native, 7) == _fair_share(native, 7, rotation=0)
+
+
+def test_cap_warning_is_logged_once_then_at_debug(tenant_store) -> None:
+    from structlog.testing import capture_logs
+
+    from app.workers import watcher_paper_targets
+
+    session, org, user = tenant_store
+    for symbol in WATCHLIST:
+        for direction in ("long", "short"):
+            approved(session, org, user, NestedContinuationSpec(symbol=symbol, direction=direction))
+    watcher_paper_targets._CAP_WARNED.clear()
+    with capture_logs() as logs:
+        for _ in range(3):
+            list_watchlist_scan_targets(
+                session, symbols=WATCHLIST, organization_id=org, limit=len(WATCHLIST)
+            )
+    levels = [e["log_level"] for e in logs if e["event"] == "watcher_scan_cap_exceeded"]
+    # Later loads log at debug, which the configured level drops: one warning only.
+    assert levels.count("warning") == 1

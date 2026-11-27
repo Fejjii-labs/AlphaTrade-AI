@@ -6,6 +6,7 @@ Unknown catalog symbols fail closed later at assembly time.
 
 from __future__ import annotations
 
+import itertools
 import re
 from collections import Counter
 from collections.abc import Sequence
@@ -31,6 +32,12 @@ from app.watcher.hashing import derive_scan_scope
 from app.workers.watcher_watchlist import ordered_watch_symbols
 
 logger = structlog.get_logger(__name__)
+
+# Audit H-9: when more exact scopes are enabled than the cap, the cut rotates each
+# time targets load, so every scope is scanned in turn instead of the newest never.
+_CAP_ROTATION = itertools.count()
+# The over-cap warning is logged once per (scopes, cap); later loads log at debug.
+_CAP_WARNED: set[tuple[int, int]] = set()
 
 FIRST_SLICE_SYMBOL = "BTCUSDT"
 FIRST_SLICE_TIMEFRAME = Timeframe.M15.value
@@ -295,9 +302,11 @@ def list_watchlist_scan_targets(
                 native.append(_target_from_executable(strategy, executable, symbol=symbol))
                 exact_coverage.add((symbol, _tf(authored.trigger_timeframe), type(authored)))
     if len(native) > limit:
-        chosen = _fair_share(native, limit)
+        chosen = _fair_share(native, limit, rotation=next(_CAP_ROTATION))
         kept = Counter(t.symbol for t in chosen)
-        logger.warning(
+        first = (len(native), limit) not in _CAP_WARNED
+        _CAP_WARNED.add((len(native), limit))
+        (logger.warning if first else logger.debug)(
             "watcher_scan_cap_exceeded",
             exact_scopes=len(native),
             limit=limit,
@@ -341,19 +350,29 @@ def list_watchlist_scan_targets(
     return tuple(targets)
 
 
-def _fair_share(native: list[PaperScanTarget], limit: int) -> tuple[PaperScanTarget, ...]:
-    """Keep ``limit`` exact scopes, taking one per symbol in turn, in the original order.
+def _fair_share(
+    native: list[PaperScanTarget], limit: int, *, rotation: int = 0
+) -> tuple[PaperScanTarget, ...]:
+    """Keep ``limit`` exact scopes, taking one per symbol in turn.
 
     A plain ``native[:limit]`` fills the cap symbol by symbol, so the last symbols on
     the watchlist got no scans at all when more strategies were enabled than the cap.
+    ``rotation`` (a counter, one step per load) moves the starting scope inside each
+    symbol and the starting symbol, so over consecutive loads every scope is scanned.
+    The result keeps the original order.
     """
 
     queues: dict[str, list[int]] = {}
     for index, target in enumerate(native):
         queues.setdefault(target.symbol, []).append(index)
+    ordered = list(queues.values())
+    if ordered:
+        start = rotation % len(ordered)
+        ordered = ordered[start:] + ordered[:start]
+    ordered = [q[rotation % len(q) :] + q[: rotation % len(q)] for q in ordered]
     picked: set[int] = set()
     while len(picked) < limit:
-        for queue in queues.values():
+        for queue in ordered:
             if queue and len(picked) < limit:
                 picked.add(queue.pop(0))
     return tuple(target for index, target in enumerate(native) if index in picked)
