@@ -1,0 +1,21 @@
+{
+  "_recorded": "2026-11-27, BloFin demo, GET /api/v1/trade/fills-history (limit 20) and GET /api/v1/account/positions-history (limit 5). Read-only. Order, trade and position ids removed.",
+  "_finding": "fills-history 'fee' is positive when paid; positions-history 'fee' is negative when paid. fills-history 'fillPnl' is the gross price result of the closing fill.",
+  "fills_history": {
+    "code": "0",
+    "msg": "success",
+    "data": [
+      {"instId": "BTC-USDT", "side": "buy", "positionSide": "net", "fillPrice": "61742.5", "fillSize": "1087.000000000000000000", "fee": "40.2684585", "fillPnl": "-1209.7223", "brokerId": "", "ts": "1795746401021"},
+      {"instId": "ZEC-USDT", "side": "buy", "positionSide": "net", "fillPrice": "669.12", "fillSize": "539.000000000000000000", "fee": "21.6393408", "fillPnl": "5768.378", "brokerId": "", "ts": "1795705476351"},
+      {"instId": "SOL-USDT", "side": "buy", "positionSide": "net", "fillPrice": "71.21", "fillSize": "12.040000000000000000", "fee": "0.51442104", "fillPnl": "0", "brokerId": "", "ts": "1795701546595"},
+      {"instId": "BTC-USDT", "side": "sell", "positionSide": "net", "fillPrice": "60629.6", "fillSize": "1087.000000000000000000", "fee": "39.54262512", "fillPnl": "0", "brokerId": "", "ts": "1795662246663"}
+    ]
+  },
+  "positions_history": {
+    "code": "0",
+    "msg": "success",
+    "data": [
+      {"instId": "BTC-USDT", "positionSide": "net", "openAveragePrice": "60629.6", "closeAveragePrice": "61742.5", "closePositions": "1.087", "realizedPnl": "-1283.807296783240410207", "fee": "-79.81108362", "fundingFee": null, "updateTime": "1795746418017"}
+    ]
+  }
+}
