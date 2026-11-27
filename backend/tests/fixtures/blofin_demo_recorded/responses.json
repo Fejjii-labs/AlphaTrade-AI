@@ -1,0 +1,325 @@
+{
+ "_recorded": "2026-11-27, BloFin demo account via staging, read-only GETs. Ids, keys, names and referral codes replaced with <field>; market numbers and field types kept. The envelope is BloFin's {code, msg, data}.",
+ "_endpoints": {
+  "query_apikey": {
+   "path": "/api/v1/user/query-apikey",
+   "response": {
+    "code": "0",
+    "msg": "success",
+    "data": {
+     "uid": "<uid>",
+     "apiName": "<apiName>",
+     "apiKey": "<apiKey>",
+     "readOnly": 0,
+     "ips": "<ips>",
+     "type": 3,
+     "expireTime": "1798983495143",
+     "createTime": "<createTime>",
+     "referralCode": "<referralCode>",
+     "parentUid": "<parentUid>"
+    }
+   }
+  },
+  "positions": {
+   "path": "/api/v1/account/positions",
+   "response": {
+    "code": "0",
+    "msg": "success",
+    "data": []
+   }
+  },
+  "tpsl_history": {
+   "path": "/api/v1/trade/orders-tpsl-history",
+   "response": {
+    "code": "0",
+    "msg": "success",
+    "data": [
+     {
+      "tpslId": "<tpslId>",
+      "clientOrderId": "<clientOrderId>",
+      "instId": "HYPE-USDT",
+      "marginMode": "isolated",
+      "positionSide": "net",
+      "positionId": "",
+      "side": "buy",
+      "orderType": null,
+      "size": "5781",
+      "reduceOnly": "true",
+      "leverage": "10",
+      "state": "effective",
+      "actualSize": "5781",
+      "triggerType": "sl",
+      "orderCategory": "normal",
+      "tpTriggerPrice": null,
+      "tpOrderPrice": null,
+      "slTriggerPrice": "63.044000000000000000",
+      "slOrderPrice": "-1",
+      "createTime": "1795705249890",
+      "brokerId": "",
+      "tpTriggerPriceType": null,
+      "slTriggerPriceType": "last"
+     },
+     {
+      "tpslId": "<tpslId>",
+      "clientOrderId": "<clientOrderId>",
+      "instId": "ZEC-USDT",
+      "marginMode": "isolated",
+      "positionSide": "net",
+      "positionId": "",
+      "side": "buy",
+      "orderType": null,
+      "size": "117",
+      "reduceOnly": "true",
+      "leverage": "10",
+      "state": "effective",
+      "actualSize": "117",
+      "triggerType": "sl",
+      "orderCategory": "normal",
+      "tpTriggerPrice": null,
+      "tpOrderPrice": null,
+      "slTriggerPrice": "711.800000000000000000",
+      "slOrderPrice": "-1",
+      "createTime": "1795705243396",
+      "brokerId": "",
+      "tpTriggerPriceType": null,
+      "slTriggerPriceType": "last"
+     },
+     {
+      "tpslId": "<tpslId>",
+      "clientOrderId": "<clientOrderId>",
+      "instId": "BTC-USDT",
+      "marginMode": "isolated",
+      "positionSide": "net",
+      "positionId": "",
+      "side": "buy",
+      "orderType": null,
+      "size": "1087",
+      "reduceOnly": "true",
+      "leverage": "10",
+      "state": "effective",
+      "actualSize": "1087",
+      "triggerType": "sl",
+      "orderCategory": "normal",
+      "tpTriggerPrice": null,
+      "tpOrderPrice": null,
+      "slTriggerPrice": "61603.400000000000000000",
+      "slOrderPrice": "-1",
+      "createTime": "1795705237384",
+      "brokerId": "",
+      "tpTriggerPriceType": null,
+      "slTriggerPriceType": "last"
+     }
+    ]
+   }
+  },
+  "tpsl_pending": {
+   "path": "/api/v1/trade/orders-tpsl-pending",
+   "response": {
+    "code": "0",
+    "msg": "success",
+    "data": []
+   }
+  },
+  "orders_history": {
+   "path": "/api/v1/trade/orders-history",
+   "response": {
+    "code": "0",
+    "msg": "success",
+    "data": [
+     {
+      "orderId": "<orderId>",
+      "clientOrderId": "",
+      "instId": "BTC-USDT",
+      "marginMode": "isolated",
+      "positionSide": "net",
+      "positionId": "<positionId>",
+      "side": "buy",
+      "orderType": "market",
+      "price": "0",
+      "size": "1087.000000000000000000",
+      "reduceOnly": "true",
+      "leverage": "10",
+      "state": "filled",
+      "filledSize": "1087.000000000000000000",
+      "pnl": "-1209.7223",
+      "averagePrice": "61742.5",
+      "fee": "40.2684585",
+      "createTime": "1795746388309",
+      "updateTime": "1795746401021",
+      "orderCategory": "sl",
+      "tpTriggerPrice": null,
+      "tpOrderPrice": null,
+      "slTriggerPrice": null,
+      "slOrderPrice": null,
+      "tpTriggerPriceType": null,
+      "slTriggerPriceType": null,
+      "cancelSource": "not_canceled",
+      "cancelSourceReason": "",
+      "brokerId": "",
+      "algoClientOrderId": "<algoClientOrderId>",
+      "algoId": "<algoId>"
+     },
+     {
+      "orderId": "<orderId>",
+      "clientOrderId": "",
+      "instId": "HYPE-USDT",
+      "marginMode": "isolated",
+      "positionSide": "net",
+      "positionId": "<positionId>",
+      "side": "buy",
+      "orderType": "market",
+      "price": "0",
+      "size": "5781.000000000000000000",
+      "reduceOnly": "true",
+      "leverage": "10",
+      "state": "filled",
+      "filledSize": "5781.000000000000000000",
+      "pnl": "-1108.7958",
+      "averagePrice": "63.049",
+      "fee": "21.86917614",
+      "createTime": "1795725044606",
+      "updateTime": "1795725044618",
+      "orderCategory": "sl",
+      "tpTriggerPrice": null,
+      "tpOrderPrice": null,
+      "slTriggerPrice": null,
+      "slOrderPrice": null,
+      "tpTriggerPriceType": null,
+      "slTriggerPriceType": null,
+      "cancelSource": "not_canceled",
+      "cancelSourceReason": "",
+      "brokerId": "",
+      "algoClientOrderId": "<algoClientOrderId>",
+      "algoId": "<algoId>"
+     },
+     {
+      "orderId": "<orderId>",
+      "clientOrderId": "",
+      "instId": "ZEC-USDT",
+      "marginMode": "isolated",
+      "positionSide": "net",
+      "positionId": "<positionId>",
+      "side": "buy",
+      "orderType": "market",
+      "price": "0",
+      "size": "117.000000000000000000",
+      "reduceOnly": "true",
+      "leverage": "10",
+      "state": "filled",
+      "filledSize": "117.000000000000000000",
+      "pnl": "752.427",
+      "averagePrice": "711.83",
+      "fee": "4.9970466",
+      "createTime": "1795718705751",
+      "updateTime": "1795718705756",
+      "orderCategory": "sl",
+      "tpTriggerPrice": null,
+      "tpOrderPrice": null,
+      "slTriggerPrice": null,
+      "slOrderPrice": null,
+      "tpTriggerPriceType": null,
+      "slTriggerPriceType": null,
+      "cancelSource": "not_canceled",
+      "cancelSourceReason": "",
+      "brokerId": "",
+      "algoClientOrderId": "<algoClientOrderId>",
+      "algoId": "<algoId>"
+     }
+    ]
+   }
+  },
+  "fills_history": {
+   "path": "/api/v1/trade/fills-history",
+   "response": {
+    "code": "0",
+    "msg": "success",
+    "data": [
+     {
+      "instId": "BTC-USDT",
+      "tradeId": "<tradeId>",
+      "orderId": "<orderId>",
+      "fillPrice": "61742.5",
+      "fillSize": "1087.000000000000000000",
+      "fillPnl": "-1209.7223",
+      "side": "buy",
+      "positionSide": "net",
+      "positionId": "<positionId>",
+      "fee": "40.2684585",
+      "ts": "1795746401021",
+      "brokerId": ""
+     },
+     {
+      "instId": "HYPE-USDT",
+      "tradeId": "<tradeId>",
+      "orderId": "<orderId>",
+      "fillPrice": "63.049",
+      "fillSize": "5781.000000000000000000",
+      "fillPnl": "-1108.7958",
+      "side": "buy",
+      "positionSide": "net",
+      "positionId": "<positionId>",
+      "fee": "21.86917614",
+      "ts": "1795725044618",
+      "brokerId": ""
+     },
+     {
+      "instId": "ZEC-USDT",
+      "tradeId": "<tradeId>",
+      "orderId": "<orderId>",
+      "fillPrice": "711.83",
+      "fillSize": "117.000000000000000000",
+      "fillPnl": "752.427",
+      "side": "buy",
+      "positionSide": "net",
+      "positionId": "<positionId>",
+      "fee": "4.9970466",
+      "ts": "1795718705756",
+      "brokerId": ""
+     }
+    ]
+   }
+  },
+  "candles": {
+   "path": "/api/v1/market/candles",
+   "response": {
+    "code": "0",
+    "msg": "success",
+    "data": [
+     [
+      "1795788000000",
+      "61426.6",
+      "61437.5",
+      "61395.5",
+      "61424.5",
+      "39350",
+      "39.3508",
+      "2417095.75664",
+      "0"
+     ],
+     [
+      "1795784400000",
+      "61614.9",
+      "61614.9",
+      "61274",
+      "61454.2",
+      "416992",
+      "416.9921",
+      "25625739.71845",
+      "1"
+     ],
+     [
+      "1795780800000",
+      "61641.2",
+      "61680",
+      "61420",
+      "61614.9",
+      "177844",
+      "177.8448",
+      "10948588.08473",
+      "1"
+     ]
+    ]
+   }
+  }
+ }
+}

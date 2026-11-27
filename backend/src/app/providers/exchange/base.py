@@ -99,6 +99,11 @@ class AccountPermissions:
     # Field *names* (never values) seen in the venue response, for redacted
     # startup diagnostics. Safe to log: contains no account data or secrets.
     response_keys: tuple[str, ...] = field(default_factory=tuple)
+    # False when the venue response says nothing about transfer or withdraw rights.
+    # BloFin's real ``query-apikey`` reply only has ``readOnly`` (recorded 27 Nov 2026,
+    # audit M-13), so the refusal above cannot see a transfer-capable key there; the
+    # demo host check is what keeps the platform off real money. Callers log it.
+    money_scope_known: bool = True
 
 
 @dataclass(frozen=True)
