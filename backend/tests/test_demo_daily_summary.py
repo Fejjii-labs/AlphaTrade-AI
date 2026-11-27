@@ -50,27 +50,46 @@ def _settings(org: UUID, account: UUID | str, *, on: bool = True) -> Settings:
 def test_text_counting_and_r() -> None:
     day = summary.DemoDaySummary(
         day=date(2026, 11, 23),
-        opened=(("BTCUSDT", "D-line v1"),),
+        opened=(("BTC long", "D-line 1h"),),
         tp_fills=(("TP1", 2), ("TP2", 1)),
-        closed=(("BTCUSDT", "D-line v1", D("1.85")), ("SOLUSDT", "s", None)),
-        still_open=tuple(f"C{i}" for i in range(17)),
+        closed=(
+            ("BTC long", "D-line 1h", D("1.85"), D("1850")),
+            ("ETH short", "Nested Continuation 1h", D("-1.06"), D("-1060")),
+            ("SOL long", "Other 15m", None, None),
+        ),
+        still_open=tuple((f"C{i} long", "D-line 1h") for i in range(17)),
     )
     lines = summary.format_demo_daily_summary_text(day).splitlines()
-    assert lines[1:8] == [
-        "Opened: 1",
-        "- BTCUSDT (D-line v1)",
-        "TP fills: 3 (TP1 2, TP2 1)",
-        "Closed: 2",
-        "- BTCUSDT (D-line v1): +1.85R",
-        "- SOLUSDT (s): R unknown",
-        "Net R (gross, before fees): +1.85R (1 without R)",
+    assert lines[:15] == [
+        "\U0001f4ca AlphaTrade demo \u00b7 Mon 23 Nov 2026",
+        "",
+        "\U0001f7e2 Opened (1)",
+        "\u2022 BTC long \u00b7 D-line 1h",
+        "",
+        "\U0001f3af Take-profits hit: 3 (TP1 \u00d72, TP2 \u00d71)",
+        "",
+        "\U0001f3c1 Closed (3)",
+        "\u2705 BTC long \u00b7 D-line 1h \u00b7 +1.85R (\u2248 +$1,850)",
+        "\u274c ETH short \u00b7 Nested Continuation 1h \u00b7 \u22121.06R (\u2248 \u2212$1,060)",
+        "\u2754 SOL long \u00b7 Other 15m \u00b7 R unknown",
+        "\U0001f4c8 Day result: +0.79R after fees (\u2248 +$790) \u00b7 1 win, 1 loss "
+        "(1 without R)",
+        "",
+        "\u23f3 Still open (17)",
+        "\u2022 C0 long \u00b7 D-line 1h",
     ]
-    assert lines[8].startswith("Still open: 17 (C0, C1,") and lines[8].endswith(", and 2 more)")
+    assert lines[-1] == "and 2 more"
+    # No ids, hashes or versions anywhere.
+    assert "v1" not in "\n".join(lines)
     quiet = summary.format_demo_daily_summary_text(summary.DemoDaySummary(day=day.day))
     assert quiet.splitlines()[1:] == [
-        "No demo trades opened or closed.",
-        "TP fills: 0",
-        "Still open: 0",
+        "",
+        "No demo trades opened or closed today.",
+        "",
+        "\U0001f3af Take-profits hit: 0",
+        "",
+        "\u23f3 Still open (0)",
+        "None",
     ]
     a, b = uuid4(), uuid4()
     assert summary.count_tp_fills([(a, 1), (a, 1), (b, 1), (a, 3)]) == (("TP1", 2), ("TP3", 1))
@@ -212,18 +231,26 @@ def test_seeded_day_with_an_open_a_tp_fill_and_closes(world: SimpleNamespace) ->
         session.commit()
     settings = _settings(world.org, world.account)
     assert summary.send_demo_daily_summary_if_due(settings, world.factory, now=DUE)
+    family = summary.strategy_family_name(common.StrategyId.HTF_TREND_PULLBACK)
     assert _delivered(world).splitlines() == [
-        "AlphaTrade DEMO daily summary, 2026-11-23 (UTC).",
-        "Opened: 3",
-        "- BTCUSDT (D-line v1)",
-        "- ETHUSDT (SFP)",
-        "- DOGEUSDT (unlabeled)",
-        "TP fills: 2 (TP1 1, TP2 1)",
-        "Closed: 2",
-        "- XRPUSDT (unlabeled): -0.50R",
-        "- BTCUSDT (D-line v1): +1.85R",
-        "Net R (gross, before fees): +1.35R",
-        "Still open: 3 (SOLUSDT, ETHUSDT, DOGEUSDT)",
+        "\U0001f4ca AlphaTrade demo \u00b7 Mon 23 Nov 2026",
+        "",
+        "\U0001f7e2 Opened (3)",
+        f"\u2022 BTC long \u00b7 {family} 15m",
+        "\u2022 ETH short \u00b7 Other 15m",
+        "\u2022 DOGE long \u00b7 Other 15m",
+        "",
+        "\U0001f3af Take-profits hit: 2 (TP1 \u00d71, TP2 \u00d71)",
+        "",
+        "\U0001f3c1 Closed (2)",
+        "\u274c XRP long \u00b7 Other 15m \u00b7 \u22120.51R",
+        f"\u2705 BTC long \u00b7 {family} 15m \u00b7 +1.82R",
+        "\U0001f4c8 Day result: +1.31R after fees \u00b7 1 win, 1 loss",
+        "",
+        "\u23f3 Still open (3)",
+        "\u2022 SOL long \u00b7 Other 15m",
+        "\u2022 ETH short \u00b7 Other 15m",
+        "\u2022 DOGE long \u00b7 Other 15m",
     ]
     assert world.sent[0][1].startswith("telegram-alert")
 
@@ -231,7 +258,7 @@ def test_seeded_day_with_an_open_a_tp_fill_and_closes(world: SimpleNamespace) ->
 def test_sent_once_per_day_across_a_restart_and_again_the_next_day(world: SimpleNamespace) -> None:
     settings, send = _settings(world.org, world.account), summary.send_demo_daily_summary_if_due
     assert send(settings, world.factory, now=DUE)
-    assert _delivered(world).splitlines()[1] == "No demo trades opened or closed."
+    assert _delivered(world).splitlines()[2] == "No demo trades opened or closed today."
     TOUCHED.clear()
     assert not send(settings, _no_db, now=DUE) and TOUCHED == []  # type: ignore[arg-type]
     summary.reset_demo_daily_summary_memo()  # a restart forgets in-process state
@@ -240,7 +267,7 @@ def test_sent_once_per_day_across_a_restart_and_again_the_next_day(world: Simple
     time.sleep(0.2)
     assert len(world.sent) == 1 and _audit_rows(world) == 1
     assert send(settings, world.factory, now=DUE + timedelta(days=1))
-    assert "2026-11-24 (UTC)" in _delivered(world) and _audit_rows(world) == 2
+    assert "Tue 24 Nov 2026" in _delivered(world) and _audit_rows(world) == 2
 
 
 def _reconcile(world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, reasons: Any) -> Any:
@@ -274,7 +301,9 @@ def test_worker_hook_runs_after_reconcile_and_does_not_wait_on_telegram(
     assert world.entered.wait(timeout=5) and world.sent == []  # still inside the HTTP send
     world.release.set()
     text = _delivered(world)
-    assert "- BTCUSDT (unlabeled): +2.00R" in text and "Still open: 0" in text
+    assert (
+        "\u2705 BTC long \u00b7 Other 15m \u00b7 +1.97R" in text and "\u23f3 Still open (0)" in text
+    )
 
 
 def test_worker_hook_waits_while_the_venue_was_not_read(
@@ -326,11 +355,11 @@ def test_week_lines_net_r_after_fees_and_dollars() -> None:
         rows, first_day=date(2026, 11, 16), last_day=date(2026, 11, 22)
     )
     assert lines == [
-        "Last 7 days by strategy (2026-11-16 to 2026-11-22):",
-        "- D-line 30m: 3 trades, 2 wins (67%), +2.50R, +0.83R per trade, about +$2,500",
-        "- Nested Continuation 1h: 2 trades, 0 wins (0%), -2.12R, -2.12R per trade, "
-        "about -$2,120 (1 without R)",
-        "Week total: 5 trades, +0.38R, about +$380 (after estimated fees)",
+        "\U0001f4c5 Last 7 days by strategy (16 Nov \u2013 22 Nov)",
+        "\u2022 D-line 30m: 3 trades, 2 won (67%), +2.50R, +0.83R per trade (\u2248 +$2,500)",
+        "\u2022 Nested Continuation 1h: 2 trades, 0 won (0%), \u22122.12R, \u22122.12R per trade "
+        "(\u2248 \u2212$2,120), 1 without R",
+        "Week total: 5 trades, +0.38R after fees (\u2248 +$380)",
     ]
     empty = summary.format_strategy_week_lines(
         [], first_day=date(2026, 11, 16), last_day=date(2026, 11, 22)
@@ -381,11 +410,11 @@ def test_monday_page_adds_the_week_by_strategy(world: SimpleNamespace) -> None:
     monday = datetime(2026, 11, 23, 0, 16, tzinfo=UTC)
     assert summary.send_demo_daily_summary_if_due(settings, world.factory, now=monday)
     text = _delivered(world)
-    assert text.splitlines()[0] == "AlphaTrade DEMO daily summary, 2026-11-22 (UTC)."
-    week = text.split("\n\n", 1)[1].splitlines()
+    assert text.splitlines()[0] == "\U0001f4ca AlphaTrade demo \u00b7 Sun 22 Nov 2026"
+    week = ("\U0001f4c5" + text.split("\n\n\U0001f4c5", 1)[1]).splitlines()
     family = summary.strategy_family_name(common.StrategyId.HTF_TREND_PULLBACK)
     assert week == [
-        "Last 7 days by strategy (2026-11-16 to 2026-11-22):",
-        f"- {family} 15m: 2 trades, 1 wins (50%), +0.91R, +0.46R per trade, about +$910",
-        "Week total: 2 trades, +0.91R, about +$910 (after estimated fees)",
+        "\U0001f4c5 Last 7 days by strategy (16 Nov \u2013 22 Nov)",
+        f"\u2022 {family} 15m: 2 trades, 1 won (50%), +0.91R, +0.46R per trade (\u2248 +$910)",
+        "Week total: 2 trades, +0.91R after fees (\u2248 +$910)",
     ]

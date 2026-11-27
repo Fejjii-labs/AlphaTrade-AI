@@ -7,9 +7,11 @@ From 00:15 UTC, right after a governed demo reconcile that reached the venue
 for every pending command, the paper worker summarizes the previous UTC day for
 the configured demo organization and account, from the database only (no venue
 call): opens, take-profit legs filled (``position_exit_events``), final closes
-with R and the day's net R, and positions open at the end of the day. R is
-gross, against the Journal's planned stop (projected from the approved plan),
-before fees; no currency amount is shown. A quiet day still sends.
+with R and the day's result, and positions open at the end of the day. Each
+trade reads as coin, direction, strategy family and chart (no names, hashes or
+versions). R is after the estimated 0.06% taker fee on entry and exit, against
+the Journal's planned stop; dollars are about that R times the planned risk.
+A quiet day still sends.
 
 Once per organization per day: an audit row (``AUDIT_RESOURCE``, id = the day)
 is written in the transaction that queues the send, under a PostgreSQL advisory
@@ -76,10 +78,11 @@ _MISSING_LOGGED: set[UUID] = set()
 @dataclass(frozen=True, slots=True)
 class DemoDaySummary:
     day: date
-    opened: tuple[tuple[str, str], ...] = ()  # (symbol, strategy)
+    opened: tuple[tuple[str, str], ...] = ()  # ("BTC short", "D-line 30m")
     tp_fills: tuple[tuple[str, int], ...] = ()  # (level, filled legs)
-    closed: tuple[tuple[str, str, Decimal | None], ...] = ()  # (symbol, strategy, R)
-    still_open: tuple[str, ...] = ()
+    # ("ZEC short", "D-line 30m", net R after fees, about-dollars)
+    closed: tuple[tuple[str, str, Decimal | None, Decimal | None], ...] = ()
+    still_open: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,31 +164,28 @@ def format_strategy_week_lines(
     rows: Iterable[StrategyWeekRow], *, first_day: date, last_day: date
 ) -> list[str]:
     rows = list(rows)
-    lines = [f"Last 7 days by strategy ({first_day.isoformat()} to {last_day.isoformat()}):"]
+    span = f"{first_day.day} {first_day:%b} \u2013 {last_day.day} {last_day:%b}"
+    lines = [f"\U0001f4c5 Last 7 days by strategy ({span})"]
     if not rows:
         return [*lines, "No demo trades closed."]
     for row in rows:
         rate = round(100 * row.wins / row.trades) if row.trades else 0
         known = row.trades - row.without_r
-        avg = f", {row.net_r / known:+.2f}R per trade" if known else ""
+        avg = f", {_r_text(row.net_r / known)} per trade" if known else ""
         lines.append(
-            f"- {row.family} {row.timeframe}: {row.trades} trades, {row.wins} wins ({rate}%), "
-            f"{row.net_r:+.2f}R{avg}, about {_dollars(row.dollars)}"
-            + (f" ({row.without_r} without R)" if row.without_r else "")
+            f"\u2022 {row.family} {row.timeframe}: {row.trades} "
+            f"{'trade' if row.trades == 1 else 'trades'}, {row.wins} won ({rate}%), "
+            f"{_r_text(row.net_r)}{avg} (\u2248 {_usd_text(row.dollars)})"
+            + (f", {row.without_r} without R" if row.without_r else "")
         )
     total_r = sum((row.net_r for row in rows), Decimal("0"))
     total_usd = sum((row.dollars for row in rows), Decimal("0"))
     trades = sum(row.trades for row in rows)
     lines.append(
-        f"Week total: {trades} trades, {total_r:+.2f}R, about {_dollars(total_usd)} "
-        "(after estimated fees)"
+        f"Week total: {trades} {'trade' if trades == 1 else 'trades'}, {_r_text(total_r)} "
+        f"after fees (\u2248 {_usd_text(total_usd)})"
     )
     return lines
-
-
-def _dollars(value: Decimal) -> str:
-    sign = "+" if value > 0 else "-" if value < 0 else ""
-    return f"{sign}${abs(value):,.0f}"
 
 
 def reset_demo_daily_summary_memo() -> None:
@@ -217,33 +217,68 @@ def _capped(items: list[str]) -> list[str]:
     return items[:_MAX_ITEMS] + ([f"and {extra} more"] if extra > 0 else [])
 
 
+def _r_text(r: Decimal) -> str:
+    return f"{r:+.2f}R".replace("-", "\u2212")
+
+
+def _usd_text(value: Decimal) -> str:
+    sign = "+" if value > 0 else "\u2212" if value < 0 else ""
+    return f"{sign}${abs(value):,.0f}"
+
+
 def format_demo_daily_summary_text(summary: DemoDaySummary) -> str:
-    lines = [f"AlphaTrade DEMO daily summary, {summary.day.isoformat()} (UTC)."]
+    day = summary.day
+    lines = [f"\U0001f4ca AlphaTrade demo \u00b7 {day:%a} {day.day} {day:%b %Y}"]
     if not summary.opened and not summary.closed:
-        lines.append("No demo trades opened or closed.")
+        lines += ["", "No demo trades opened or closed today."]
     if summary.opened:
-        lines.append(f"Opened: {len(summary.opened)}")
-        lines += _capped([f"- {symbol} ({strategy})" for symbol, strategy in summary.opened])
-    total = sum(count for _level, count in summary.tp_fills)
-    levels = ", ".join(f"{level} {count}" for level, count in summary.tp_fills)
-    lines.append(f"TP fills: {total} ({levels})" if total else "TP fills: 0")
-    if summary.closed:
-        lines.append(f"Closed: {len(summary.closed)}")
+        lines += ["", f"\U0001f7e2 Opened ({len(summary.opened)})"]
         lines += _capped(
-            [
-                f"- {s} ({name}): {'R unknown' if r is None else f'{r:+}R'}"
-                for s, name, r in summary.closed
-            ]
+            [f"\u2022 {trade} \u00b7 {strategy}" for trade, strategy in summary.opened]
         )
-        known = [r for _s, _name, r in summary.closed if r is not None]
+    total = sum(count for _level, count in summary.tp_fills)
+    levels = ", ".join(f"{level} \u00d7{count}" for level, count in summary.tp_fills)
+    lines += ["", f"\U0001f3af Take-profits hit: {total}" + (f" ({levels})" if total else "")]
+    if summary.closed:
+        lines += ["", f"\U0001f3c1 Closed ({len(summary.closed)})"]
+        rows = []
+        for trade, strategy, r, usd in summary.closed:
+            mark = "\u2754" if r is None else "\u2705" if r > 0 else "\u274c" if r < 0 else "\u2796"
+            result = "R unknown" if r is None else _r_text(r)
+            if usd is not None:
+                result += f" (\u2248 {_usd_text(usd)})"
+            rows.append(f"{mark} {trade} \u00b7 {strategy} \u00b7 {result}")
+        lines += _capped(rows)
+        known = [(r, usd) for _t, _s, r, usd in summary.closed if r is not None]
+        net = sum((r for r, _ in known), Decimal("0"))
+        dollars = [usd for _, usd in known if usd is not None]
+        wins = sum(1 for r, _ in known if r > 0)
+        losses = sum(1 for r, _ in known if r < 0)
+        head = "\U0001f4c8" if net >= 0 else "\U0001f4c9"
+        result = f"{head} Day result: {_r_text(net)} after fees"
+        if dollars and len(dollars) == len(known):
+            result += f" (\u2248 {_usd_text(sum(dollars, Decimal('0')))})"
+        result += f" \u00b7 {wins} {'win' if wins == 1 else 'wins'}, "
+        result += f"{losses} {'loss' if losses == 1 else 'losses'}"
         missing = len(summary.closed) - len(known)
-        net = f"Net R (gross, before fees): {sum(known, Decimal('0')):+}R"
-        lines.append(net + (f" ({missing} without R)" if missing else ""))
-    still_open = ", ".join(_capped(list(summary.still_open)))
-    lines.append(
-        f"Still open: {len(summary.still_open)}" + (f" ({still_open})" if still_open else "")
-    )
+        lines.append(result + (f" ({missing} without R)" if missing else ""))
+    lines += ["", f"\u23f3 Still open ({len(summary.still_open)})"]
+    lines += _capped(
+        [f"\u2022 {trade} \u00b7 {strategy}" for trade, strategy in summary.still_open]
+    ) or ["None"]
     return "\n".join(lines)
+
+
+def _trade_label(trade: JournalTrade) -> str:
+    from app.services.demo_trade_telegram import _coin
+
+    side = "long" if trade.direction is TradeDirection.LONG else "short"
+    return f"{_coin(trade.symbol)} {side}"
+
+
+def _strategy_label(setup_type: object, timeframe: object) -> str:
+    family = strategy_family_name(setup_type) if setup_type is not None else "Other"
+    return f"{family} {timeframe}".strip()
 
 
 def collect_demo_day_summary(
@@ -254,7 +289,7 @@ def collect_demo_day_summary(
     start = datetime.combine(day, time.min, tzinfo=UTC)
     end = start + timedelta(days=1)
     rows = session.execute(
-        select(JournalTrade, UserStrategy.name, UserStrategyVersion.version)
+        select(JournalTrade, UserStrategy.setup_type)
         .outerjoin(UserStrategyVersion, UserStrategyVersion.id == JournalTrade.strategy_version_id)
         .outerjoin(
             UserStrategy,
@@ -275,24 +310,26 @@ def collect_demo_day_summary(
         .order_by(JournalTrade.entry_time, JournalTrade.id)
     ).all()
     opened: list[tuple[str, str]] = []
-    closed: list[tuple[str, str, Decimal | None]] = []
-    still_open: list[str] = []
-    for trade, name, version in rows:
-        label = f"{name} v{version}" if name and version is not None else trade.strategy_label
-        strategy = redact_text((label or "").strip())[:80] or "unlabeled"
+    closed: list[tuple[str, str, Decimal | None, Decimal | None]] = []
+    still_open: list[tuple[str, str]] = []
+    for trade, setup_type in rows:
+        label = _trade_label(trade)
+        strategy = redact_text(_strategy_label(setup_type, trade.timeframe))[:60]
         exit_time = None if trade.exit_time is None else _aware(trade.exit_time)
         if start <= _aware(trade.entry_time) < end:
-            opened.append((trade.symbol, strategy))
+            opened.append((label, strategy))
         if (exit_time is not None and exit_time >= end) or (
             exit_time is None and trade.status is JournalTradeStatus.OPEN
         ):
-            still_open.append(trade.symbol)
+            still_open.append((label, strategy))
         elif exit_time is not None and trade.status is JournalTradeStatus.CLOSED:
             entry, stop, exit_price = trade.entry_price, trade.planned_stop_price, trade.exit_price
-            r = None
+            r = usd = None
             if entry is not None and stop is not None and exit_price is not None:
-                r = final_r(trade.direction, entry, stop, exit_price)
-            closed.append((trade.symbol, strategy, r))
+                r = net_r_after_fees(trade.direction, entry, stop, exit_price)
+                if r is not None and trade.planned_risk_amount is not None:
+                    usd = r * trade.planned_risk_amount
+            closed.append((label, strategy, r, usd))
     legs = session.execute(
         select(PositionExitEventRow.execution_lifecycle_id, PositionExitEventRow.leg_order).where(
             PositionExitEventRow.organization_id == organization_id,
