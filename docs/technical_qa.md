@@ -20,7 +20,7 @@ The earlier `/chat/message` workspace uses an explicit graph of guardrails, retr
 
 ## Which model is active?
 
-UNKNOWN without current runtime evidence. Settings default the base provider to `gpt-4o-mini`, routed Tier A to `gpt-4o` and Tier B to `gpt-4o-mini`; current general Agent synthesis is Tier A. Requested/selected/resolved model are separate facts. Environment overrides and provider results can differ from defaults. [Model routing](agent_workflow.md).
+UNKNOWN without current runtime evidence. Settings default the base provider to `gpt-6-luna`, routed Tier A to `gpt-6.1-sol` and Tier B to `gpt-6-luna` (canonical in `backend/src/app/core/config.py`); current general Agent synthesis is Tier A. Requested/selected/resolved model are separate facts. Environment overrides and provider results can differ from defaults. [Model routing](agent_workflow.md).
 
 ## Is the Agent always using vector RAG?
 

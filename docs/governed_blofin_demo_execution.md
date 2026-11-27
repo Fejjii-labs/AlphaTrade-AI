@@ -75,24 +75,73 @@ response shapes cross-checked against the
 These are implementation references, not live venue acceptance. In particular,
 attached TPSL client-ID lineage must be verified in staging before acceptance.
 
-## Restricted scope
+## Current scope (updated 27 Nov 2026)
 
-- SFP still returns `sfp_execution_plan_not_authorized`. Approved strategy
-  lifecycle and confirmed SFP setups do not grant an executable SFP plan path.
-- One execution account permits one governed ALLOW claim in its preserved
-  history. Account safety-epoch locking prevents competing workers from claiming
-  a second Candidate. Restart/replay of that same command is supported.
-- NET, cross margin, existing leverage 1, linear USDT contracts, market entry,
-  one full-size target and no runner are supported. No account setting is changed.
-- Cancellation with a verified partial fill records that fill and releases only
-  the unfilled reservation remainder. Ambiguous absence keeps reservations held.
-- Automatic exit-fill/position-flat Journal close, funding/PnL attribution and
-  automatic account reuse are not implemented. Synthetic fill and close APIs
-  refuse governed demo plans. An open Journal is not a completed trade or proof
-  of realized performance. Do not delete execution history to reset the gate.
-- Reconciliation intentionally refuses a potentially incomplete 100-row fill
-  page. An operator must resolve incomplete history, conflicts and uncertain
-  submissions; a new order is never the recovery mechanism.
+The text above describes the first implementation. Since then the demo bot trades
+autonomously on BloFin demo through Render staging. This section replaces the old
+"restricted scope" list (audit M-16).
+
+- **Strategies:** D-line and Nested trade on the demo. SFP has an executable plan
+  path behind `GOVERNED_DEMO_SFP_ENABLED`; it is **off** on staging (paused after
+  SFP research rounds 1 and 2, `docs/strategies/sfp_research_round2.md`).
+- **Many trades, account reused:** the one-ALLOW-per-account limit is gone; the
+  autonomous loop (`AUTONOMOUS_BLOFIN_DEMO_ENABLED`) takes new trades on the same
+  account. Exits are reconciled per coin, so positions on different coins can be
+  open together.
+- **Margin and leverage:** isolated margin, the owner-configured leverage up to
+  `GOVERNED_DEMO_MAX_LEVERAGE` (10). With `GOVERNED_DEMO_AUTO_LEVERAGE_WRITE_ENABLED`
+  the app sets the leverage on BloFin and reads it back before the order.
+- **Exits:** every entry carries its approved stop and first target as attached
+  TP/SL. For families in `GOVERNED_DEMO_LADDER_FAMILIES` (needs
+  `GOVERNED_DEMO_PARTIAL_EXITS_ENABLED`) the bot runs stepped exits (TP1 at
+  `GOVERNED_DEMO_LADDER_TP1_R`, then structure targets and a runner) and keeps one
+  whole-position **backup stop** resting on BloFin, moved with the bot's stop.
+  Settings with ladder families and the backup stop off are refused at startup
+  unless `GOVERNED_DEMO_LADDER_ALLOW_NO_BACKUP_STOP=true`.
+- **Automatic close:** verified exit fills (stop, target, backup stop or partial
+  exits) close the Journal trade automatically, with BloFin's realised net P&L and
+  fees, release the risk reservation and charge the daily loss budget (gross losses
+  per UTC day). Twelve candles later the trade review adds the best/worst price and
+  a reason code.
+- **Still true:** real trading is disabled (`ENABLE_REAL_TRADING=false`, demo host
+  check in the client). Ambiguous submissions are never resent; an absent order
+  stays held. Missing protection arms the kill switch. Reconciliation refuses an
+  incomplete fill page. Do not delete execution history to reset anything.
+
+## Staging flags (recorded 27 Nov 2026)
+
+Values on Render staging, read from the services' environment on 27 Nov 2026. The
+repo's defaults are in `backend/src/app/core/config.py`; these keys are listed in
+`render.yaml` with `sync: false` (values live on Render only). Re-check on Render
+before relying on them; update this table when you change one.
+
+| Key | Worker | API | Meaning |
+| --- | --- | --- | --- |
+| `ENVIRONMENT` | staging | staging | Deployment environment |
+| `ENABLE_REAL_TRADING` | false | false | Real money stays off |
+| `EXCHANGE_MODE` | paper_exchange_demo | paper_exchange_demo | BloFin demo host only |
+| `BLOFIN_DEMO_ENABLED` | true | true | BloFin demo connection |
+| `GOVERNED_BLOFIN_DEMO_ENABLED` | true | – | Governed demo orders |
+| `AUTONOMOUS_BLOFIN_DEMO_ENABLED` | true | – | Autonomous demo loop |
+| `AUTONOMOUS_INTERNAL_PAPER_ENABLED` | false | – | Internal paper loop |
+| `GOVERNED_DEMO_DATA_MODE_ENABLED` | true | – | Demo data mode |
+| `GOVERNED_DEMO_AUTO_LEVERAGE_WRITE_ENABLED` | true | – | App sets leverage before an order |
+| `GOVERNED_DEMO_SFP_ENABLED` | false | – | SFP paused |
+| `GOVERNED_DEMO_DLINE_TIMEFRAMES` | 1h | – | D-line timeframes |
+| `GOVERNED_DEMO_DLINE_MIN_STOP_DISTANCE_PERCENT` | 1.5 | – | D-line minimum stop |
+| `GOVERNED_DEMO_NESTED_TIMEFRAMES` | 1h | – | Nested timeframes |
+| `GOVERNED_DEMO_PARTIAL_EXITS_ENABLED` | true | – | Stepped exits allowed |
+| `GOVERNED_DEMO_LADDER_FAMILIES` | nested | – | Families with stepped exits |
+| `GOVERNED_DEMO_LADDER_TP1_R` | 0.75 | – | First take-profit in R |
+| `GOVERNED_DEMO_NESTED_LADDER_TARGETS` | first_level | – | Nested TP2 rule |
+| `GOVERNED_DEMO_LADDER_BREAKEVEN` | false | – | Break-even after TP1 off |
+| `GOVERNED_DEMO_LADDER_BACKUP_STOP` | true | – | Backup stop on BloFin |
+| `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED` | true | – | Hand-placed demo trades in the Journal |
+| `RETENTION_ENABLED` / `RETENTION_DRY_RUN` | true / false | – | Old scan data pruned |
+| `DATABASE_DISK_LIMIT_MB` | 840 | – | Storage alert at 80% / 90% |
+| `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID`, `_USER_ID`, `_ACCOUNT_ID` | set | set | Scoped demo identity |
+
+"–" means not set on that service (the code default applies).
 
 ## Staging activation procedure
 
