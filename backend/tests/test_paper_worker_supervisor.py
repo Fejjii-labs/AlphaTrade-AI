@@ -1438,3 +1438,32 @@ def test_the_page_text_and_code(monkeypatch) -> None:
         "The bot's scanning and trade management has failed 5 cycles in a row."
     )
     assert "worker_component_failing" in safety_alerts.TELEGRAM_SAFETY_DEFAULT_CODES
+
+
+def test_a_watcher_that_keeps_refusing_to_scan_pages_after_about_20_minutes() -> None:
+    """Staging 27 Nov 2026: 2.5 hours of refused scans ('freshness_fail_closed') sent
+    no alert, because a refused cycle is not a failure."""
+
+    from app.workers.paper_worker import PaperWorkerSupervisor
+
+    paged: list[tuple[str, int, str]] = []
+    supervisor = PaperWorkerSupervisor(
+        watcher_cycle=lambda: CycleOutcome(status="ok"),
+        telegram_cycle=lambda: CycleOutcome(status="ok"),
+        on_failing=lambda name, streak, error: paged.append((name, streak, error)),
+    )
+    refused = CycleOutcome(status="refused", error="freshness_fail_closed")
+    for _ in range(39):
+        supervisor._succeed(supervisor._watcher, refused)
+    assert paged == []
+    supervisor._succeed(supervisor._watcher, refused)
+    assert paged == [("watcher", 40, "scans refused (freshness_fail_closed)")]
+    # A real scan resets the count; refusals must build up again before a new page.
+    supervisor._succeed(supervisor._watcher, CycleOutcome(status="running", record_scan=True))
+    for _ in range(39):
+        supervisor._succeed(supervisor._watcher, refused)
+    assert len(paged) == 1
+    # The Telegram component never pages for this.
+    for _ in range(50):
+        supervisor._succeed(supervisor._telegram, refused)
+    assert len(paged) == 1

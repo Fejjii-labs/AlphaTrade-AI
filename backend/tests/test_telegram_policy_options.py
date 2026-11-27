@@ -90,12 +90,20 @@ def c2_client(c2_db: sessionmaker[Session]) -> Iterator[TestClient]:
         yield client
 
 
-def _strategy(session: Session, *, name: str, user_id=USER_ID, org_id=ORG_ID, versions=1):
+def _strategy(
+    session: Session,
+    *,
+    name: str,
+    user_id=USER_ID,
+    org_id=ORG_ID,
+    versions=1,
+    setup_type=StrategyId.HTF_TREND_PULLBACK,
+):
     strategy = UserStrategy(
         organization_id=org_id,
         user_id=user_id,
         name=name,
-        setup_type=StrategyId.HTF_TREND_PULLBACK,
+        setup_type=setup_type,
     )
     session.add(strategy)
     session.flush()
@@ -176,6 +184,63 @@ def test_version_list_is_bounded_per_strategy(c2_db: sessionmaker[Session], monk
         str(versions[3].id),
         str(versions[2].id),
     )
+
+
+def test_family_choices_group_every_strategy_by_name_without_identifiers(
+    c2_client: TestClient, c2_db: sessionmaker[Session]
+) -> None:
+    with c2_db() as session:
+        sfp, sfp_versions = _strategy(session, name="a sfp", setup_type=StrategyId.SFP)
+        d1, d1_versions = _strategy(
+            session, name="D-line BTCUSDT long 15m 207db2d63d4e", setup_type=StrategyId.D_LINE
+        )
+        d2, d2_versions = _strategy(
+            session,
+            name="D-line ETHUSDT short 1h 49ae657c4173",
+            setup_type=StrategyId.D_LINE,
+            versions=2,
+        )
+        nested, nested_versions = _strategy(
+            session, name="Nested BTCUSDT", setup_type=StrategyId.NESTED_CONTINUATION
+        )
+        session.commit()
+
+    body = c2_client.get("/notifications/filter-options").json()
+
+    families = {o["label"]: o["values"] for o in body["strategy_families"]}
+    assert [o["label"] for o in body["strategy_families"]] == ["D-line", "Nested", "SFP"]
+    assert families["D-line"] == [
+        str(d1.id),
+        str(d1_versions[0].id),
+        str(d2.id),
+        str(d2_versions[1].id),
+        str(d2_versions[0].id),
+    ]
+    assert families["Nested"] == [str(nested.id), str(nested_versions[0].id)]
+    assert families["SFP"] == [str(sfp.id), str(sfp_versions[0].id)]
+    saved = c2_client.patch(
+        "/notifications/preferences",
+        json={
+            "telegram_policy": TelegramNotificationPolicyV2(
+                strategy_subscriptions=tuple(families["D-line"])
+            ).model_dump(mode="json")
+        },
+    )
+    assert saved.status_code == 200, saved.text
+
+
+def test_family_choices_cover_strategies_past_the_named_list(
+    c2_db: sessionmaker[Session], monkeypatch
+) -> None:
+    monkeypatch.setattr(options_module, "MAX_STRATEGIES", 1)
+    with c2_db() as session:
+        first, _ = _strategy(session, name="A", setup_type=StrategyId.D_LINE)
+        second, _ = _strategy(session, name="B", setup_type=StrategyId.D_LINE)
+        session.commit()
+        options = telegram_policy_options(session, organization_id=ORG_ID, user_id=USER_ID)
+    assert [o.label for o in options.strategies] == ["A"]
+    assert str(second.id) in options.strategy_families[0].values
+    assert str(first.id) in options.strategy_families[0].values
 
 
 def test_options_require_authentication(c2_client: TestClient) -> None:
