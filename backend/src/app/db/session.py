@@ -20,11 +20,21 @@ _engine: Engine | None = None
 _session_factory: sessionmaker[Session] | None = None
 
 
-def _connect_args(database_url: str) -> dict[str, bool]:
+def _connect_args(database_url: str, settings: Settings | None = None) -> dict[str, object]:
     # SQLite (tests) needs this flag when shared across threads.
     if database_url.startswith("sqlite"):
         return {"check_same_thread": False}
-    return {}
+    if settings is None or not database_url.startswith("postgresql"):
+        return {}
+    # libpq options (audit M-7): connect timeout and server-side statement, lock and
+    # idle-in-transaction limits, in milliseconds. 0 keeps a limit off.
+    limits = {
+        "statement_timeout": settings.db_statement_timeout_seconds,
+        "lock_timeout": settings.db_lock_timeout_seconds,
+        "idle_in_transaction_session_timeout": settings.db_idle_in_transaction_timeout_seconds,
+    }
+    options = " ".join(f"-c {name}={seconds * 1000}" for name, seconds in limits.items())
+    return {"connect_timeout": settings.db_connect_timeout_seconds, "options": options}
 
 
 def _pool_args(settings: Settings) -> dict[str, int]:
@@ -49,7 +59,7 @@ def get_engine() -> Engine:
             settings.database_url,
             pool_pre_ping=True,
             future=True,
-            connect_args=_connect_args(settings.database_url),
+            connect_args=_connect_args(settings.database_url, settings),
             **_pool_args(settings),
         )
     return _engine
