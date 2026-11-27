@@ -72,7 +72,8 @@ def test_text_counting_and_r() -> None:
         "\u2705 BTC long \u00b7 D-line 1h \u00b7 +1.85R (\u2248 +$1,850)",
         "\u274c ETH short \u00b7 Nested Continuation 1h \u00b7 \u22121.06R (\u2248 \u2212$1,060)",
         "\u2754 SOL long \u00b7 Other 15m \u00b7 R unknown",
-        "\U0001f4c8 Day result: +0.79R after fees (\u2248 +$790) \u00b7 1 win, 1 loss (1 without R)",
+        "\U0001f4c8 Day result: +0.79R after fees (\u2248 +$790) \u00b7 1 win, 1 loss "
+        "(1 without R)",
         "",
         "\u23f3 Still open (17)",
         "\u2022 C0 long \u00b7 D-line 1h",
