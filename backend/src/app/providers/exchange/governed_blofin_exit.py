@@ -19,6 +19,7 @@ from typing import Any
 from app.providers.exchange.blofin_client import BloFinClient
 from app.providers.exchange.demo_reconciliation import (
     ATTACHED_TPSL_WINDOW,
+    history_rows,
     order_attests_plan_exits,
 )
 from app.providers.exchange.governed_blofin import (
@@ -112,6 +113,50 @@ class VerifiedDemoExit:
         }
 
 
+HISTORY_MAX_PAGES = 5
+
+
+def _until_closed(
+    rows: list[dict[str, Any]],
+    *,
+    instrument: str,
+    opposite: str,
+    entry_quantity: Decimal,
+) -> list[dict[str, Any]]:
+    """Drop orders created after this trade's closing fills reach its entry size.
+
+    Once the closes add up to the entry, the position is flat: nothing created later
+    can belong to this trade. Every earlier row is kept and checked as before, so an
+    unexplained order during the trade still holds the exit. Rows whose time or size
+    cannot be read are all kept (the later checks refuse them).
+    """
+
+    timed: list[tuple[datetime, int, dict[str, Any]]] = []
+    for index, row in enumerate(rows):
+        try:
+            timed.append((_time(row.get("createTime")), index, row))
+        except Exception:
+            return rows
+    closed = Decimal("0")
+    keep: set[int] = set()
+    for _created, index, row in sorted(timed, key=lambda item: (item[0], item[1])):
+        keep.add(index)
+        if (
+            row.get("instId") == instrument
+            and row.get("side") == opposite
+            and (row.get("reduceOnly") is True or row.get("reduceOnly") == "true")
+        ):
+            try:
+                filled = Decimal(str(row.get("filledSize")))
+            except ArithmeticError:
+                return rows
+            if filled.is_finite() and filled > 0:
+                closed += filled
+        if entry_quantity > 0 and closed >= entry_quantity:
+            break
+    return [row for index, row in enumerate(rows) if index in keep]
+
+
 def reconcile_demo_exit(
     client: BloFinClient,
     *,
@@ -188,15 +233,22 @@ def reconcile_demo_exit(
             return None
     last_entry = max(fill.occurred_at for fill in entry.fills)
     begin = str(int(plan.valid_from.timestamp() * 1000))
-    orders = ours(
-        _account_rows(
-            client.request(
-                "GET",
-                "/api/v1/trade/orders-history",
-                params={**scope, "begin": begin, "limit": "100"},
-                signed=True,
+    # Audit M-3: page the history (a busy coin can pass 100 rows) and ignore every
+    # order created after this trade was fully closed (a later trade or a hand-placed
+    # order on the same coin), which made the proof refuse forever.
+    orders = _until_closed(
+        ours(
+            history_rows(
+                client,
+                endpoint="GET /api/v1/trade/orders-history",
+                cursor_field="orderId",
+                params={**scope, "begin": begin},
+                max_pages=HISTORY_MAX_PAGES,
             )
-        )
+        ),
+        instrument=plan.execution_instrument,
+        opposite="sell" if plan.side is EntrySide.BUY else "buy",
+        entry_quantity=sum((fill.quantity for fill in entry.fills), Decimal("0")),
     )
     if len(orders) > 20:
         raise ValueError("Demo exit history exceeds bounded reconciliation budget.")
