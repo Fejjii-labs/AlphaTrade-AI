@@ -21,6 +21,8 @@ def test_sqlite_keeps_its_flag_and_postgres_gets_limits() -> None:
         "-c statement_timeout=300000 -c lock_timeout=60000 "
         "-c idle_in_transaction_session_timeout=600000"
     )
+    scoped = _connect_args("postgresql+psycopg://h/db?options=-csearch_path%3Dt1", settings)
+    assert str(scoped["options"]).startswith("-csearch_path=t1 -c statement_timeout=")
     off = Settings(_env_file=None, db_statement_timeout_seconds=0)
     assert "-c statement_timeout=0 " in str(_connect_args("postgresql://h/db", off)["options"])
 

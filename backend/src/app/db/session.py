@@ -34,6 +34,15 @@ def _connect_args(database_url: str, settings: Settings | None = None) -> dict[s
         "idle_in_transaction_session_timeout": settings.db_idle_in_transaction_timeout_seconds,
     }
     options = " ".join(f"-c {name}={seconds * 1000}" for name, seconds in limits.items())
+    # connect_args replaces the URL's own ``options`` (e.g. a test schema search_path),
+    # so keep those first.
+    from sqlalchemy.engine import make_url
+
+    existing = make_url(database_url).query.get("options")
+    if isinstance(existing, tuple):
+        existing = " ".join(existing)
+    if existing:
+        options = f"{existing} {options}"
     return {"connect_timeout": settings.db_connect_timeout_seconds, "options": options}
 
 
