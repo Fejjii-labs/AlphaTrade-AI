@@ -183,12 +183,13 @@ def simulate(M: Minutes, bars: dict, tf: str, sign: int, entry_ms: int, entry: f
 
     def close(fraction, price, j, is_stop):
         nonlocal remaining, pnl, fees
+        raw = price
         if is_stop:
             price *= 1 - sign * slip
         pnl += fraction * (price - entry_fill) * sign
         fees += fraction * price * TAKER
         remaining -= fraction
-        fills.append((M.t0 + (j + 1) * MIN, fraction))
+        fills.append((M.t0 + (j + 1) * MIN, fraction, raw, is_stop))
 
     def touch(a, b, with_target):
         """First minute in [a, b) touching the stop or (optionally) the next target."""
@@ -262,7 +263,7 @@ def simulate(M: Minutes, bars: dict, tf: str, sign: int, entry_ms: int, entry: f
                 fi += 1
             fund -= sign * rates[q] * entry * max(open_fraction, 0.0)
     return {"net_r": (pnl - fees) / risk, "gross_r": pnl / risk, "fund_r": fund / risk,
-            "exit_ms": int(exit_ms), "hits": hits}
+            "exit_ms": int(exit_ms), "hits": hits, "fills": fills}
 
 
 def first_fill_minute(M: Minutes, sign: int, start_ms: int, end_ms: int, limit: float):
