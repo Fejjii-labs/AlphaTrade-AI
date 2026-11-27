@@ -28,6 +28,34 @@ SFP_PATHS = (
     "backend/src/app/persistence/public_market_observations.py",
     "backend/tests/test_sfp",
 )
+# Trading-safety code whose tests do not share its file name (audit H-8): a change
+# to any of these runs the whole demo exit, stop and reconciliation set.
+DEMO_SAFETY_TESTS = (
+    "tests/test_partial_exit_demo.py",
+    "tests/test_partial_exit_demo_wiring.py",
+    "tests/test_partial_exit_position.py",
+    "tests/test_partial_exit_ladder.py",
+    "tests/test_ladder_backup_stop.py",
+    "tests/test_demo_attached_tpsl_exit.py",
+    "tests/test_demo_exit_per_coin.py",
+    "tests/test_governed_demo_exit_evidence.py",
+    "tests/test_audit_h4_h5.py",
+    "tests/test_nested_first_level_ladder.py",
+    "tests/test_structure_ladder.py",
+    "tests/test_governed_blofin_demo.py",
+    "tests/test_db_storage_check.py",
+)
+DEMO_SAFETY_PATHS = (
+    "backend/src/app/providers/exchange/governed_blofin",
+    "backend/src/app/providers/exchange/blofin_client.py",
+    "backend/src/app/providers/exchange/demo_reconciliation.py",
+    "backend/src/app/services/partial_exits/",
+    "backend/src/app/services/governed_blofin_demo.py",
+    "backend/src/app/services/demo_lifecycle_resolution.py",
+    "backend/src/app/services/risk/daily_risk_accounting.py",
+    "backend/src/app/services/safety_alerts.py",
+    "backend/src/app/workers/db_storage_check.py",
+)
 MIGRATION_TEST_GLOBS = ("test_*migration*.py", "test_*alembic*.py")
 
 
@@ -66,6 +94,8 @@ def select_tests(changed: list[str], backend: Path) -> list[str]:
             schema_changed = True
         if path.startswith(SFP_PATHS):
             selected.update(SFP_TESTS)
+        if path.startswith(DEMO_SAFETY_PATHS):
+            selected.update(DEMO_SAFETY_TESTS)
         candidate = Path(path.removeprefix("backend/"))
         if path.startswith("backend/tests/") and candidate.name.startswith("test_"):
             selected.add(candidate.as_posix())

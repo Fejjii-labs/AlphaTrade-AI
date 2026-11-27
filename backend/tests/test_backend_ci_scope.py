@@ -301,3 +301,22 @@ def test_ci_scope_self_test_ignores_polluted_environment(tmp_path: Path) -> None
     assert "ci-scope self-test passed" in result.stdout
     assert output.read_text() == ""
     assert summary.read_text() == ""
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "backend/src/app/providers/exchange/governed_blofin_exit.py",
+        "backend/src/app/providers/exchange/governed_blofin_partial_exits.py",
+        "backend/src/app/providers/exchange/blofin_client.py",
+        "backend/src/app/services/partial_exits/demo_wiring.py",
+        "backend/src/app/services/risk/daily_risk_accounting.py",
+    ],
+)
+def test_trading_safety_code_selects_its_tests_whatever_its_file_name(changed):
+    """Audit H-8: these files have no test named after them."""
+
+    selected = scope.select_tests([changed], ROOT / "backend")
+    present = {t for t in scope.DEMO_SAFETY_TESTS if (ROOT / "backend" / t).is_file()}
+    assert present and present.issubset(selected)
+    assert "tests/test_partial_exit_demo.py" in selected
