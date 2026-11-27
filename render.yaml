@@ -244,3 +244,46 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      # BloFin demo bot flags (audit M-16): listed so the repo shows what staging
+      # runs; values live on Render only. Current values: the flags table in
+      # docs/governed_blofin_demo_execution.md.
+      - key: GOVERNED_BLOFIN_DEMO_ENABLED
+        sync: false
+      - key: AUTONOMOUS_BLOFIN_DEMO_ENABLED
+        sync: false
+      - key: AUTONOMOUS_INTERNAL_PAPER_ENABLED
+        sync: false
+      - key: GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID
+        sync: false
+      - key: GOVERNED_BLOFIN_DEMO_USER_ID
+        sync: false
+      - key: GOVERNED_BLOFIN_DEMO_ACCOUNT_ID
+        sync: false
+      - key: GOVERNED_DEMO_DATA_MODE_ENABLED
+        sync: false
+      - key: GOVERNED_DEMO_AUTO_LEVERAGE_WRITE_ENABLED
+        sync: false
+      - key: GOVERNED_DEMO_SFP_ENABLED
+        sync: false
+      - key: GOVERNED_DEMO_DLINE_TIMEFRAMES
+        sync: false
+      - key: GOVERNED_DEMO_DLINE_MIN_STOP_DISTANCE_PERCENT
+        sync: false
+      - key: GOVERNED_DEMO_NESTED_TIMEFRAMES
+        sync: false
+      - key: GOVERNED_DEMO_PARTIAL_EXITS_ENABLED
+        sync: false
+      - key: GOVERNED_DEMO_LADDER_FAMILIES
+        sync: false
+      - key: GOVERNED_DEMO_LADDER_TP1_R
+        sync: false
+      - key: GOVERNED_DEMO_NESTED_LADDER_TARGETS
+        sync: false
+      - key: GOVERNED_DEMO_LADDER_BREAKEVEN
+        sync: false
+      - key: GOVERNED_DEMO_LADDER_BACKUP_STOP
+        sync: false
+      - key: BLOFIN_DEMO_MANUAL_MIRROR_ENABLED
+        sync: false
+      - key: DATABASE_DISK_LIMIT_MB
+        sync: false

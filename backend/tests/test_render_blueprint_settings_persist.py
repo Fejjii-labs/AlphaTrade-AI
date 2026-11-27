@@ -123,6 +123,29 @@ OPERATOR: dict[str, str] = {
     "PAPER_EXIT_MONITOR_DRY_RUN": "paper_exit_monitor_dry_run",
     "RETENTION_ENABLED": "retention_enabled",
     "RETENTION_DRY_RUN": "retention_dry_run",
+    # BloFin demo bot (audit M-16): worker only, values in the demo runbook's flags table.
+    "GOVERNED_BLOFIN_DEMO_ENABLED": "governed_blofin_demo_enabled",
+    "AUTONOMOUS_BLOFIN_DEMO_ENABLED": "autonomous_blofin_demo_enabled",
+    "AUTONOMOUS_INTERNAL_PAPER_ENABLED": "autonomous_internal_paper_enabled",
+    "GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID": "governed_blofin_demo_organization_id",
+    "GOVERNED_BLOFIN_DEMO_USER_ID": "governed_blofin_demo_user_id",
+    "GOVERNED_BLOFIN_DEMO_ACCOUNT_ID": "governed_blofin_demo_account_id",
+    "GOVERNED_DEMO_DATA_MODE_ENABLED": "governed_demo_data_mode_enabled",
+    "GOVERNED_DEMO_AUTO_LEVERAGE_WRITE_ENABLED": "governed_demo_auto_leverage_write_enabled",
+    "GOVERNED_DEMO_SFP_ENABLED": "governed_demo_sfp_enabled",
+    "GOVERNED_DEMO_DLINE_TIMEFRAMES": "governed_demo_dline_timeframes",
+    "GOVERNED_DEMO_DLINE_MIN_STOP_DISTANCE_PERCENT": (
+        "governed_demo_dline_min_stop_distance_percent"
+    ),
+    "GOVERNED_DEMO_NESTED_TIMEFRAMES": "governed_demo_nested_timeframes",
+    "GOVERNED_DEMO_PARTIAL_EXITS_ENABLED": "governed_demo_partial_exits_enabled",
+    "GOVERNED_DEMO_LADDER_FAMILIES": "governed_demo_ladder_families",
+    "GOVERNED_DEMO_LADDER_TP1_R": "governed_demo_ladder_tp1_r",
+    "GOVERNED_DEMO_NESTED_LADDER_TARGETS": "governed_demo_nested_ladder_targets",
+    "GOVERNED_DEMO_LADDER_BREAKEVEN": "governed_demo_ladder_breakeven",
+    "GOVERNED_DEMO_LADDER_BACKUP_STOP": "governed_demo_ladder_backup_stop",
+    "BLOFIN_DEMO_MANUAL_MIRROR_ENABLED": "blofin_demo_manual_mirror_enabled",
+    "DATABASE_DISK_LIMIT_MB": "database_disk_limit_mb",
 }
 
 # Settings that turn something on must default to off when the dashboard has no value.
@@ -146,6 +169,14 @@ _OFF_WHEN_UNSET = {
     "telegram_network_permitted",
     "paper_exit_monitor_enabled",
     "retention_enabled",
+    "governed_blofin_demo_enabled",
+    "autonomous_blofin_demo_enabled",
+    "autonomous_internal_paper_enabled",
+    "governed_demo_data_mode_enabled",
+    "governed_demo_auto_leverage_write_enabled",
+    "governed_demo_sfp_enabled",
+    "governed_demo_partial_exits_enabled",
+    "blofin_demo_manual_mirror_enabled",
 }
 
 

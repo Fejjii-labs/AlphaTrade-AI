@@ -1,6 +1,30 @@
 # Current status and evidence
 
-**Refreshed:** October 24, 2026, 22:50 Europe/Berlin. **Repository:** [Fejjii-labs/AlphaTrade-AI](https://github.com/Fejjii-labs/AlphaTrade-AI) (moved from `Fejjii/AlphaTrade-AI`; older links below point at the original repository and are kept as historical evidence).
+**Refreshed:** November 27, 2026 (top section). Older sections below are kept as dated evidence; the October 24 section was refreshed October 24, 2026, 22:50 Europe/Berlin. **Repository:** [Fejjii-labs/AlphaTrade-AI](https://github.com/Fejjii-labs/AlphaTrade-AI) (moved from `Fejjii/AlphaTrade-AI`; older links below point at the original repository and are kept as historical evidence).
+
+## Status as of November 27, 2026
+
+Checked on Render staging and BloFin demo (read-only) on November 27, 2026.
+
+- **What runs:** the autonomous bot trades the BloFin **demo** account through the
+  staging worker. Real trading is off on both services. The safety flags staging
+  runs are in the [flags table](governed_blofin_demo_execution.md#staging-flags-recorded-27-nov-2026);
+  the scope of the demo bot is in
+  [current scope](governed_blofin_demo_execution.md#current-scope-updated-27-nov-2026).
+- **Strategies on demo:** D-line (1h, minimum stop 1.5%) and Nested (1h, stepped
+  exits: TP1 at 0.75R, TP2 at the first level, backup stop on BloFin, break-even
+  off). SFP is paused after research rounds 1 and 2.
+- **Recent demo closes (BloFin realised P&L):** ZEC +$7,075.67; BTC −$1,283.81 (the
+  backup stop fired on BloFin); HYPE −$1,154.70; TAO −$461.43; SOL −$1.58 (a manual
+  test of the backup stop).
+- **Telegram:** trade opened, trade closed and a daily summary (with a weekly block
+  and a month in review on the 1st). Setup alerts are muted. Safety pages: trade
+  protection failed, position mismatch, worker part failing, database storage high.
+- **Data:** retention is on (scan data about 24 h, audit logs 90 days unless
+  referenced, trades kept). Postgres: 1 GB disk, about 47% used on November 27.
+- **Fixes merged November 26–27:** audit C-1, H-1 to H-9, M-1, M-7 to M-9, M-11 to
+  M-13 (PRs #526 to #547), trade review (#536), monthly lessons (#540). Open items
+  from the audit are in [the audit](audits/audit_2026-11-26.md).
 
 ## Merged to main, November 4 to 8, 2026
 

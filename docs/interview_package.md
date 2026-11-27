@@ -19,7 +19,7 @@ Use [the system/hosting and lifecycle diagrams](architecture.md) to explain the 
 
 ## Explain the AI layer precisely
 
-The current `/agent` workspace uses typed read/proposal tools and a conversational responder routed by purpose. `GENERAL_AGENT_SYNTHESIS` is Tier A (default `gpt-4o`); the base provider default `LLM_MODEL=gpt-4o-mini` is not proof of a routed turn's selected/resolved model. Tier B defaults to `gpt-4o-mini`. Actual deployed model resolution is UNKNOWN here.
+The current `/agent` workspace uses typed read/proposal tools and a conversational responder routed by purpose. `GENERAL_AGENT_SYNTHESIS` is Tier A (default `gpt-6.1-sol`); the base provider default `LLM_MODEL=gpt-6-luna` is not proof of a routed turn's selected/resolved model. Tier B defaults to `gpt-6-luna`. Canonical defaults live in `backend/src/app/core/config.py`. Actual deployed model resolution is UNKNOWN here.
 
 Default Agent knowledge retrieval is lexical SQL with a bounded scan; optional vector hits require injection and scoped SQL reload. The knowledge service separately embeds/searches vectors. Conversation history, selected strategy context, Journal and learning records are stored application memory. They are not continuous training or unlimited model recall.
 
