@@ -594,3 +594,32 @@ def test_the_protection_alert_is_mandatory_and_repeats_every_15_minutes() -> Non
 
     assert "demo_trade_protection_failed" in safety_alerts.TELEGRAM_SAFETY_MANDATORY_CODES
     assert safety_alerts._cooldown("demo_trade_protection_failed").total_seconds() == 900
+
+
+def test_a_position_mismatch_pages_only_after_five_minutes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audit H-6: a stuck trade (BloFin flat or different, bot not) is not silent."""
+
+    from app.services import governed_blofin_demo
+
+    sent = _captured_alerts(monkeypatch)
+    governed_blofin_demo._MISMATCH_SINCE.clear()
+    venue = LoopVenue(mark=Decimal("105"), position=Decimal("0.4"))
+    loop, _store = _loop(_demo_settings(True), venue)
+    clock = {"now": T0 + timedelta(hours=1)}
+    loop._clock = SimpleNamespace(now=lambda: clock["now"])
+    plan, command, evidence = _named_inputs()
+    held = "demo_ladder_held_venue_position_mismatch"
+    assert loop._manage_demo_ladder(None, command, plan, evidence) == held
+    clock["now"] += timedelta(minutes=4)
+    assert loop._manage_demo_ladder(None, command, plan, evidence) == held
+    assert sent == []
+    clock["now"] += timedelta(minutes=1)
+    loop._manage_demo_ladder(None, command, plan, evidence)
+    assert [a.fields["dedup_key"].rsplit(":", 1)[1] for a in sent] == ["position_mismatch"]
+    assert "has not matched" in sent[0].message
+    # Back in line: the timer resets.
+    venue.position = Decimal("1.000")
+    loop._manage_demo_ladder(None, command, plan, evidence)
+    assert command.id not in governed_blofin_demo._MISMATCH_SINCE

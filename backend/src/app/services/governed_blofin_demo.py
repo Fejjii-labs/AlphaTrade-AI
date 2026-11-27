@@ -2326,6 +2326,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     session.commit()
                     return "demo_position_lineage_operator_hold"
                 except Exception:
+                    # Logged, not swallowed: a close that cannot be proven keeps the
+                    # coin blocked, and the reason is needed to fix it (audit H-6).
+                    logger.warning(
+                        "demo_exit_proof_unavailable command_id=%s", command.id, exc_info=True
+                    )
                     exit_evidence = None
                     exit_unavailable = True
                 if exit_evidence is not None:
@@ -2505,6 +2510,12 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             return "demo_ladder_unavailable"
         for problem in report.alerts:
             _alert_ladder_problem(self._settings, session, command, plan, problem)
+        if report.status == "held" and report.reason == "venue_position_mismatch":
+            since = _MISMATCH_SINCE.setdefault(command.id, now)
+            if now - since >= MISMATCH_ALERT_AFTER:
+                _alert_ladder_problem(self._settings, session, command, plan, "position_mismatch")
+        else:
+            _MISMATCH_SINCE.pop(command.id, None)
         logger.info(
             "demo_ladder_step command_id=%s status=%s reason=%s placed=%s alerts=%s",
             command.id,
@@ -2843,7 +2854,16 @@ def stop_loss_band(settings: Settings, equity: Decimal) -> tuple[Decimal | None,
     return equity * low / Decimal("100"), equity * high / Decimal("100")
 
 
+# A venue position that differs from the record is normal for one cycle (a fill in
+# flight, a BloFin stop that just fired); longer means the trade is stuck (audit H-6).
+MISMATCH_ALERT_AFTER = timedelta(minutes=5)
+_MISMATCH_SINCE: dict[UUID, datetime] = {}
+
 _LADDER_PROBLEMS = {
+    "position_mismatch": (
+        "BloFin's position has not matched the bot's record for 5 minutes, for example a "
+        "stop BloFin closed that the bot could not confirm; the coin stays blocked"
+    ),
     "backup_stop_failed": "the backup stop on BloFin could not be placed or moved",
     "close_place_failed": "BloFin refused a closing order (a target or the stop)",
     "step_failed": "the bot could not run its exit check (stop and targets) this cycle",
