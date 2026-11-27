@@ -16,6 +16,11 @@ from app.market_contracts.errors import RateLimitedError
 from app.market_contracts.request_progress import notify_market_request_progress
 
 AGGTRADE_REQUEST_WEIGHT = 20
+# Audit M-5: trade-tape (aggTrades) reads are bulk and poll every coin every few
+# seconds. They may fill only this share of the window, so candle reads (what the
+# scans need) always find room instead of waiting up to a minute behind them.
+BULK_SHARE_OF_BUDGET = 0.8
+BULK_PATHS = frozenset({"/fapi/v1/aggTrades"})
 _PROGRESS_CHUNK_SECONDS = 5.0
 
 
@@ -67,6 +72,33 @@ class MarketRequestSnapshot:
 _METRICS = RequestMetrics()
 _METRICS_LOCK = threading.Lock()
 
+# Audit M-5: when the budget keeps refusing reads, scans fail closed (no trading on
+# stale candles) but nobody was told. Track how long refusals have run without a
+# successful reservation in between; the market-gate publisher pages on it.
+_STARVED_SINCE: float | None = None
+
+
+def note_budget_exhausted(now: float | None = None) -> None:
+    global _STARVED_SINCE
+    with _METRICS_LOCK:
+        if _STARVED_SINCE is None:
+            _STARVED_SINCE = time.time() if now is None else now
+
+
+def note_budget_ok() -> None:
+    global _STARVED_SINCE
+    if _STARVED_SINCE is None:
+        return
+    with _METRICS_LOCK:
+        _STARVED_SINCE = None
+
+
+def budget_starved_since() -> float | None:
+    """Epoch seconds since reads have only been refused by the budget, else None."""
+
+    with _METRICS_LOCK:
+        return _STARVED_SINCE
+
 
 def market_request_metrics() -> MarketRequestSnapshot:
     with _METRICS_LOCK:
@@ -114,11 +146,17 @@ class SlidingWeightBudget:
         weight: int,
         *,
         sleeper: Callable[[float], None],
+        bulk: bool = False,
     ) -> None:
-        """Reserve ``weight`` or raise once the bounded wait is exhausted."""
+        """Reserve ``weight`` or raise once the bounded wait is exhausted.
+
+        ``bulk`` reads may only fill ``BULK_SHARE_OF_BUDGET`` of the window, leaving
+        the rest for priority reads (candles).
+        """
 
         if weight < 1:
             raise ValueError("request weight must be >= 1")
+        ceiling = max(weight, int(self.limit * BULK_SHARE_OF_BUDGET)) if bulk else self.limit
         if weight > self.limit:
             raise RateLimitedError(
                 "A single read exceeds the Binance request-weight budget.",
@@ -129,11 +167,13 @@ class SlidingWeightBudget:
             with self._lock:
                 now = self._clock()
                 self._evict(now)
-                if self._used_unlocked(now) + weight <= self.limit:
+                if self._used_unlocked(now) + weight <= ceiling:
                     self._events.append((now, weight))
+                    note_budget_ok()
                     return
                 delay = self._wait_step(now)
             if waited + delay > self.max_wait_seconds:
+                note_budget_exhausted()
                 raise RateLimitedError(
                     "Binance request-weight budget is exhausted.",
                     retry_after_seconds=max(delay, 0.0),
