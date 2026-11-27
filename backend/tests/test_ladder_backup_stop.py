@@ -298,3 +298,37 @@ def test_exit_proof_holds_anything_else(reason: str) -> None:
         responses["orders-history"][0]["algoId"] = "10004687496"
     with pytest.raises(ValueError):
         provider.reconcile_exit(plan=plan, entry=entry)
+
+
+def test_settings_refuse_ladder_families_without_the_backup_stop() -> None:
+    import pydantic
+    import pytest
+
+    from app.core.config import Settings
+
+    with pytest.raises(pydantic.ValidationError, match="BACKUP_STOP"):
+        Settings(_env_file=None, governed_demo_ladder_families="nested")
+    ok = Settings(
+        _env_file=None,
+        governed_demo_ladder_families="nested",
+        governed_demo_ladder_backup_stop="true",
+    )
+    assert ok.governed_demo_ladder_backup_stop is True
+    allowed = Settings(
+        _env_file=None,
+        governed_demo_ladder_families="nested",
+        governed_demo_ladder_allow_no_backup_stop=True,
+    )
+    assert allowed.governed_demo_ladder_backup_stop is False
+    assert Settings(_env_file=None).governed_demo_ladder_families == []
+
+
+def test_backup_stop_flags_accept_only_true_or_false() -> None:
+    import pydantic
+    import pytest
+
+    from app.core.config import Settings
+
+    for name in ("governed_demo_ladder_backup_stop", "governed_demo_ladder_allow_no_backup_stop"):
+        with pytest.raises(pydantic.ValidationError):
+            Settings(_env_file=None, **{name: "yes"})

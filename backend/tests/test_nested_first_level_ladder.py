@@ -150,6 +150,7 @@ def test_the_demo_loop_passes_the_target_rule(monkeypatch) -> None:
     monkeypatch.setattr("app.services.governed_blofin_demo._plan_terms", capture)
     loop = _loop(
         governed_demo_ladder_families=["nested"],
+        governed_demo_ladder_allow_no_backup_stop=True,
         governed_demo_partial_exits_enabled=True,
         governed_demo_nested_ladder_targets="first_level",
         governed_demo_ladder_tp1_r=D("0.75"),

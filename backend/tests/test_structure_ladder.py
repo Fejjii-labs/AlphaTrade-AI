@@ -89,7 +89,11 @@ def test_settings_default_off_and_parse():
     settings = Settings(_env_file=None)
     assert settings.governed_demo_ladder_families == []
     assert settings.governed_demo_ladder_tp1_r == D(1)
-    parsed = Settings(_env_file=None, governed_demo_ladder_families="Nested, SFP")
+    parsed = Settings(
+        _env_file=None,
+        governed_demo_ladder_families="Nested, SFP",
+        governed_demo_ladder_backup_stop=True,
+    )
     assert parsed.governed_demo_ladder_families == ["nested", "sfp"]
 
 
