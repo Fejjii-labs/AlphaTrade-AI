@@ -52510,6 +52510,14 @@
             "title": "Strategies",
             "type": "array"
           },
+          "strategy_families": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/TelegramFilterOption"
+            },
+            "title": "Strategy Families",
+            "type": "array"
+          },
           "symbols": {
             "items": {
               "$ref": "#/components/schemas/TelegramFilterOption"
