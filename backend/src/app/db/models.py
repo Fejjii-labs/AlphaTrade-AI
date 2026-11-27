@@ -3529,7 +3529,11 @@ class WebhookEvent(UUIDPrimaryKeyMixin, Base):
 
 class AuditLog(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "audit_logs"
-    __table_args__ = (Index("ix_audit_logs_event_at", "event_at"),)
+    __table_args__ = (
+        Index("ix_audit_logs_event_at", "event_at"),
+        # Per-cycle lookups by resource (governed demo origin/summary claims; audit M-8).
+        Index("ix_audit_logs_resource", "resource_type", "resource_id"),
+    )
 
     organization_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("organizations.id"), nullable=True
