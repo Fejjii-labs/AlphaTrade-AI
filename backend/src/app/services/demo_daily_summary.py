@@ -44,12 +44,20 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
-from app.db.models import AuditLog, JournalTrade, Organization, UserStrategy, UserStrategyVersion
+from app.db.models import (
+    AuditLog,
+    JournalLifecycleEvent,
+    JournalTrade,
+    Organization,
+    UserStrategy,
+    UserStrategyVersion,
+)
 from app.db.position_exit_events import PositionExitEventRow
 from app.guardrails.redaction import redact_text
 from app.schemas.audit import AuditRecordCreate
 from app.schemas.common import (
     AuditEventType,
+    JournalLifecycleEventType,
     JournalTradeSource,
     JournalTradeStatus,
     TradeDirection,
@@ -71,6 +79,7 @@ _MAX_ITEMS = 15
 WEEK = timedelta(days=7)
 _TAKER_FEE = Decimal("0.0006")  # BloFin taker, entry and exit; the Journal has no bot fee total
 _LOCK = threading.Lock()
+LATE_CLOSE_LOOKBACK = timedelta(days=7)
 _DONE: dict[UUID, date] = {}  # per-process shortcut; the audit row is the real guard
 _MISSING_LOGGED: set[UUID] = set()
 
@@ -83,6 +92,9 @@ class DemoDaySummary:
     # ("ZEC short", "D-line 30m", net R after fees, about-dollars)
     closed: tuple[tuple[str, str, Decimal | None, Decimal | None], ...] = ()
     still_open: tuple[tuple[str, str], ...] = ()
+    # Audit M-10: closed on an earlier day but recorded after that day's summary
+    # was sent (a stop proven after midnight). (trade, strategy, R, $, exit day)
+    closed_late: tuple[tuple[str, str, Decimal | None, Decimal | None, date], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,6 +353,17 @@ def format_demo_daily_summary_text(summary: DemoDaySummary) -> str:
         result += f"{losses} {'loss' if losses == 1 else 'losses'}"
         missing = len(summary.closed) - len(known)
         lines.append(result + (f" ({missing} without R)" if missing else ""))
+    if summary.closed_late:
+        lines += ["", f"\u21a9\ufe0f Closed earlier, recorded late ({len(summary.closed_late)})"]
+        late = []
+        for trade, strategy, r, usd, exit_day in summary.closed_late:
+            mark = "\u2754" if r is None else "\u2705" if r > 0 else "\u274c" if r < 0 else "\u2796"
+            result = "R unknown" if r is None else _r_text(r)
+            if usd is not None:
+                result += f" (\u2248 {_usd_text(usd)})"
+            when = f"closed {exit_day.day} {exit_day:%b}"
+            late.append(f"{mark} {trade} \u00b7 {strategy} \u00b7 {result} \u00b7 {when}")
+        lines += _capped(late)
     lines += ["", f"\u23f3 Still open ({len(summary.still_open)})"]
     lines += _capped(
         [f"\u2022 {trade} \u00b7 {strategy}" for trade, strategy in summary.still_open]
@@ -361,9 +384,18 @@ def _strategy_label(setup_type: object, timeframe: object) -> str:
 
 
 def collect_demo_day_summary(
-    session: Session, *, organization_id: UUID, account_id: UUID, day: date
+    session: Session,
+    *,
+    organization_id: UUID,
+    account_id: UUID,
+    day: date,
+    recorded_since: datetime | None = None,
 ) -> DemoDaySummary:
-    """Read the day from the Journal and the partial-exit records. No venue call."""
+    """Read the day from the Journal and the partial-exit records. No venue call.
+
+    ``recorded_since`` (when the previous summary was composed) adds trades that
+    closed before ``day`` but whose close was recorded after that summary.
+    """
 
     start = datetime.combine(day, time.min, tzinfo=UTC)
     end = start + timedelta(days=1)
@@ -432,7 +464,77 @@ def collect_demo_day_summary(
         count_tp_fills((lifecycle, leg) for lifecycle, leg in legs),
         tuple(closed),
         tuple(still_open),
+        _closed_late(
+            session,
+            organization_id=organization_id,
+            account_id=account_id,
+            start=start,
+            recorded_since=recorded_since,
+        ),
     )
+
+
+def _closed_late(
+    session: Session,
+    *,
+    organization_id: UUID,
+    account_id: UUID,
+    start: datetime,
+    recorded_since: datetime | None,
+) -> tuple[tuple[str, str, Decimal | None, Decimal | None, date], ...]:
+    """Trades that closed before ``start`` but whose close was recorded after the
+    previous summary (``recorded_since``), so no summary has listed them yet."""
+
+    if recorded_since is None:
+        return ()
+    recorded_close = (
+        select(JournalLifecycleEvent.execution_lifecycle_id)
+        .where(
+            JournalLifecycleEvent.organization_id == organization_id,
+            JournalLifecycleEvent.event_type == JournalLifecycleEventType.CLOSE,
+            JournalLifecycleEvent.created_at >= recorded_since,
+        )
+        .scalar_subquery()
+    )
+    rows = session.execute(
+        select(JournalTrade, UserStrategy.setup_type)
+        .outerjoin(UserStrategyVersion, UserStrategyVersion.id == JournalTrade.strategy_version_id)
+        .outerjoin(
+            UserStrategy,
+            and_(
+                UserStrategy.id == UserStrategyVersion.strategy_id,
+                UserStrategy.organization_id == organization_id,
+            ),
+        )
+        .where(
+            JournalTrade.organization_id == organization_id,
+            JournalTrade.account_id == account_id,
+            JournalTrade.source == JournalTradeSource.PAPER_EXECUTION,
+            JournalTrade.status == JournalTradeStatus.CLOSED,
+            JournalTrade.exit_time < start,
+            JournalTrade.exit_time >= start - LATE_CLOSE_LOOKBACK,
+            JournalTrade.execution_lifecycle_id.in_(recorded_close),
+        )
+        .order_by(JournalTrade.exit_time, JournalTrade.id)
+    ).all()
+    late = []
+    for trade, setup_type in rows:
+        entry, stop, exit_price = trade.entry_price, trade.planned_stop_price, trade.exit_price
+        r = usd = None
+        if entry is not None and stop is not None and exit_price is not None:
+            r = net_r_after_fees(trade.direction, entry, stop, exit_price)
+            if r is not None and trade.planned_risk_amount is not None:
+                usd = r * trade.planned_risk_amount
+        late.append(
+            (
+                _trade_label(trade),
+                redact_text(_strategy_label(setup_type, trade.timeframe))[:60],
+                r,
+                usd,
+                _aware(trade.exit_time).date(),
+            )
+        )
+    return tuple(late)
 
 
 def send_demo_daily_summary_if_due(
@@ -482,8 +584,19 @@ def _send_if_due(settings: Settings, factory: sessionmaker[Session], *, now: dat
             )
         )
         if claimed is None:
+            previous = session.scalar(
+                select(AuditLog.event_at).where(
+                    AuditLog.organization_id == organization_id,
+                    AuditLog.resource_type == AUDIT_RESOURCE,
+                    AuditLog.resource_id == (day - timedelta(days=1)).isoformat(),
+                )
+            )
             summary = collect_demo_day_summary(
-                session, organization_id=organization_id, account_id=account_id, day=day
+                session,
+                organization_id=organization_id,
+                account_id=account_id,
+                day=day,
+                recorded_since=None if previous is None else _aware(previous),
             )
             AuditService(session, strict_mode=True).record(
                 AuditRecordCreate(
