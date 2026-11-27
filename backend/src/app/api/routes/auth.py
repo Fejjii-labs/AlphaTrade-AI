@@ -31,6 +31,11 @@ from app.schemas.auth import (
     RegisterRequest,
     TokenPair,
 )
+from app.schemas.two_factor import (
+    TwoFactorChallengeResponse,
+    TwoFactorLoginRequest,
+    TwoFactorLoginResponse,
+)
 from app.security.cookies import clear_refresh_cookie, set_refresh_cookie
 from app.security.rate_limit import (
     auth_register_rate_limit,
@@ -44,6 +49,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 _AUTH_REGISTER_LIMIT = Depends(auth_register_rate_limit)
 _AUTH_LOGIN_LIMIT = Depends(
     public_rate_limit_dependency("auth:login", limit=20, window_seconds=3600, ip_limit=20)
+)
+_AUTH_TWO_FACTOR_LIMIT = Depends(
+    public_rate_limit_dependency("auth:login:two-factor", limit=30, window_seconds=900, ip_limit=30)
 )
 _AUTH_REFRESH_LIMIT = Depends(
     public_rate_limit_dependency("auth:refresh", limit=60, window_seconds=3600, ip_limit=60)
@@ -107,7 +115,7 @@ def register(
 
 @router.post(
     "/login",
-    response_model=AuthResponse,
+    response_model=AuthResponse | TwoFactorChallengeResponse,
     dependencies=[_AUTH_LOGIN_LIMIT],
 )
 def login(
@@ -118,7 +126,8 @@ def login(
     session: SessionDep,
     audit_service: AuditServiceDep,
     settings: Settings = Depends(get_settings),
-) -> AuthResponse:
+) -> AuthResponse | TwoFactorChallengeResponse:
+    """Password login. With two-factor on, returns a challenge for ``/auth/login/two-factor``."""
     email = str(body.email)
     enforce_login_email_limit(request, session, audit_service, email)
     try:
@@ -126,6 +135,27 @@ def login(
     except AuthError:
         record_login_email_failure(request, email)
         raise
+    session.commit()
+    if isinstance(result, TwoFactorChallengeResponse):
+        return result
+    result.tokens = _apply_auth_cookies(response, result.tokens, settings, auth_service)
+    return result
+
+
+@router.post(
+    "/login/two-factor",
+    response_model=TwoFactorLoginResponse,
+    dependencies=[_AUTH_TWO_FACTOR_LIMIT],
+)
+def login_two_factor(
+    body: TwoFactorLoginRequest,
+    response: Response,
+    auth_service: AuthServiceDep,
+    session: SessionDep,
+    settings: Settings = Depends(get_settings),
+) -> TwoFactorLoginResponse:
+    """Second login step: authenticator code or one recovery code (per-user lock applies)."""
+    result = auth_service.complete_two_factor_login(body)
     session.commit()
     result.tokens = _apply_auth_cookies(response, result.tokens, settings, auth_service)
     return result

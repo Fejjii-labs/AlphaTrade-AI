@@ -14,10 +14,18 @@ import { PrivateQueryProvider } from "@/components/query/PrivateQueryProvider";
 import { sessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 import { bindRecoverySession, recoverySession } from "@/lib/auth/recovery-session";
 import { api, ApiError } from "@/lib/api";
-import type { AuthResponse, MembershipRole, MeResponse } from "@/lib/api/types";
+import type { AuthResponse, MembershipRole, MeResponse, TwoFactorChallengeResponse } from "@/lib/api/types";
+import { forgetRememberedDevice, rememberDevice, rememberedDeviceToken } from "@/lib/auth/remembered-device";
 import { sanitizeNextPath } from "@/lib/auth/boundary";
 import { clearTokens, getRefreshToken, isAuthenticated, setTokens } from "@/lib/auth/session";
 import { useAppContext } from "@/contexts/AppContext";
+
+/** Result of the password step: signed in, or a second factor is needed. */
+export type LoginOutcome =
+  | { status: "signed_in" }
+  | { status: "two_factor_required"; challenge: TwoFactorChallengeResponse };
+
+export type SecondFactor = { code: string } | { recoveryCode: string };
 
 interface AuthContextValue {
   user: MeResponse["user"] | null;
@@ -26,7 +34,14 @@ interface AuthContextValue {
   membershipRole: MembershipRole | null;
   loading: boolean;
   isAuthenticated: boolean;
-  login: (email: string, password: string, nextPath?: string) => Promise<void>;
+  login: (email: string, password: string, nextPath?: string) => Promise<LoginOutcome>;
+  completeTwoFactorLogin: (
+    email: string,
+    pendingToken: string,
+    factor: SecondFactor,
+    rememberThisDevice: boolean,
+    nextPath?: string,
+  ) => Promise<void>;
   register: (email: string, password: string, organizationName: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -92,9 +107,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setMembershipRole(response.membership_role ?? null);
   }, []);
 
-  const login = useCallback(
-    async (email: string, password: string, nextPath?: string) => {
-      const response = await api.auth.login({ email, password });
+  const finishSignIn = useCallback(
+    async (response: AuthResponse, nextPath?: string) => {
       await applyAuthResponse(response);
       if (mustVerifyEmail && !response.user.email_verified) {
         router.replace("/verify-email");
@@ -103,6 +117,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     },
     [applyAuthResponse, mustVerifyEmail, router],
+  );
+
+  const login = useCallback(
+    async (email: string, password: string, nextPath?: string): Promise<LoginOutcome> => {
+      const deviceToken = rememberedDeviceToken(email);
+      const response = await api.auth.login({
+        email,
+        password,
+        ...(deviceToken ? { device_token: deviceToken } : {}),
+      });
+      if ("two_factor_required" in response && response.two_factor_required) {
+        // A stored grant that no longer skips the code was revoked or expired.
+        if (deviceToken) forgetRememberedDevice(email);
+        return { status: "two_factor_required", challenge: response };
+      }
+      await finishSignIn(response as AuthResponse, nextPath);
+      return { status: "signed_in" };
+    },
+    [finishSignIn],
+  );
+
+  const completeTwoFactorLogin = useCallback(
+    async (
+      email: string,
+      pendingToken: string,
+      factor: SecondFactor,
+      rememberThisDevice: boolean,
+      nextPath?: string,
+    ) => {
+      const response = await api.auth.loginTwoFactor({
+        pending_token: pendingToken,
+        ...("code" in factor ? { code: factor.code } : { recovery_code: factor.recoveryCode }),
+        remember_device: rememberThisDevice,
+      });
+      if (response.device_token && response.device_token_expires_at) {
+        rememberDevice(email, response.device_token, response.device_token_expires_at);
+      }
+      await finishSignIn(response, nextPath);
+    },
+    [finishSignIn],
   );
 
   const register = useCallback(
@@ -148,11 +202,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       loading,
       isAuthenticated: Boolean(user) && isAuthenticated(),
       login,
+      completeTwoFactorLogin,
       register,
       logout,
       refreshProfile,
     }),
-    [user, organization, membershipRole, loading, login, register, logout, refreshProfile],
+    [user, organization, membershipRole, loading, login, completeTwoFactorLogin, register, logout, refreshProfile],
   );
 
   return <AuthContext.Provider value={value}>

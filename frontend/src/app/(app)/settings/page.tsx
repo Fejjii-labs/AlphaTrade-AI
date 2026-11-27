@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { SessionScoped } from "@/components/settings/SessionScoped";
+import { TwoFactorSection } from "@/components/settings/TwoFactorSection";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
@@ -44,6 +45,7 @@ function AccountSettings() {
           <Row label="Workspace" value={organization?.name || "Unavailable"} />
         </CardContent>
       </Card>
+      <TwoFactorSection />
       <div>
         <Button variant="outline" className="h-11" onClick={() => void logout()}>
           Log out

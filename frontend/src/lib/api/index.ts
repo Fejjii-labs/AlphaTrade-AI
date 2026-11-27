@@ -7,6 +7,13 @@ import type {
   ApprovalRequest,
   AuditRecord,
   AuthResponse,
+  LoginResponse,
+  TwoFactorLoginResponse,
+  TwoFactorConfirm,
+  TwoFactorDisableFactor,
+  TwoFactorRecoveryCodes,
+  TwoFactorSetup,
+  TwoFactorStatus,
   HealthResponse,
   IngestDocumentResponse,
   FileImportPreview,
@@ -241,12 +248,52 @@ export const api = {
         body: JSON.stringify(body),
         auth: false,
       }),
-    login: (body: { email: string; password: string }) =>
-      apiFetch<AuthResponse>("/auth/login", {
+    login: (body: { email: string; password: string; device_token?: string }) =>
+      apiFetch<LoginResponse>("/auth/login", {
         method: "POST",
         body: JSON.stringify(body),
         auth: false,
       }),
+    loginTwoFactor: (body: {
+      pending_token: string;
+      code?: string;
+      recovery_code?: string;
+      remember_device?: boolean;
+    }) =>
+      apiFetch<TwoFactorLoginResponse>("/auth/login/two-factor", {
+        method: "POST",
+        body: JSON.stringify(body),
+        auth: false,
+      }),
+    twoFactor: {
+      status: () => apiFetch<TwoFactorStatus>("/auth/two-factor", { auth: true }),
+      setup: (password: string) =>
+        apiFetch<TwoFactorSetup>("/auth/two-factor/setup", {
+          method: "POST",
+          body: JSON.stringify({ password }),
+          auth: true,
+        }),
+      confirm: (code: string) =>
+        apiFetch<TwoFactorConfirm>("/auth/two-factor/confirm", {
+          method: "POST",
+          body: JSON.stringify({ code }),
+          auth: true,
+        }),
+      disable: (password: string, factor: TwoFactorDisableFactor) =>
+        apiFetch<MessageResponse>("/auth/two-factor/disable", {
+          method: "POST",
+          body: JSON.stringify({ password, ...factor }),
+          auth: true,
+        }),
+      regenerateRecoveryCodes: (code: string) =>
+        apiFetch<TwoFactorRecoveryCodes>("/auth/two-factor/recovery-codes", {
+          method: "POST",
+          body: JSON.stringify({ code }),
+          auth: true,
+        }),
+      revokeDevices: () =>
+        apiFetch<MessageResponse>("/auth/two-factor/devices/revoke", { method: "POST", auth: true }),
+    },
     refresh: (refresh_token: string) =>
       apiFetch<TokenPair>("/auth/refresh", {
         method: "POST",
