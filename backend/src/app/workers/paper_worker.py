@@ -225,7 +225,11 @@ class PaperWorkerSupervisor:
         health_log_interval_seconds: float = 60.0,
         monotonic: Callable[[], float] | None = None,
         watcher_idle_wait: Callable[[float, threading.Event], bool] | None = None,
+        on_failing: Callable[[str, int, str], object] | None = None,
     ) -> None:
+        # Called (component, consecutive failures, safe error) at each escalation
+        # streak, so a worker that is alive but failing pages someone (audit M-9).
+        self._on_failing = on_failing
         self._poll_seconds = poll_seconds
         self._health_log_interval_seconds = health_log_interval_seconds
         self._monotonic = monotonic if monotonic is not None else time.monotonic
@@ -733,6 +737,11 @@ class PaperWorkerSupervisor:
                 next_interval_multiplier=failure_backoff_multiplier(streak),
                 paper_only=True,
             )
+            if self._on_failing is not None:
+                try:
+                    self._on_failing(component.name, streak, message)
+                except Exception:
+                    logger.warning("paper_worker_failing_alert_failed", component=component.name)
 
     def _succeed(self, component: _Component, outcome: CycleOutcome) -> None:
         now = self._clock()
@@ -1233,6 +1242,41 @@ def _build_armed_supervisor(
         on_stop=on_stop,
         memory_diagnostics_enabled=watcher_settings.paper_worker_memory_diagnostics_enabled,
         health_log_interval_seconds=float(watcher_settings.paper_worker_health_log_seconds),
+        on_failing=lambda name, streak, error: page_component_failing(
+            watcher_settings, name, streak, error
+        ),
+    )
+
+
+WORKER_COMPONENT_FAILING = "worker_component_failing"
+
+
+def page_component_failing(settings: Settings, component: str, streak: int, error: str) -> bool:
+    """Telegram page for a worker part that keeps failing while the worker is alive (M-9)."""
+
+    from app.services.paper_exit_monitor import ExitMonitorAlert
+    from app.services.safety_alerts import deliver_safety_alert
+
+    what = {"watcher": "scanning and trade management", "telegram": "Telegram handling"}.get(
+        component, component
+    )
+    message = "\n".join(
+        [
+            f"\u26a0\ufe0f The bot's {what} has failed {streak} cycles in a row.",
+            f"Last error: {error[:120]}",
+            "The worker is still running and retries with a longer wait. "
+            "Open positions keep their BloFin stops.",
+        ]
+    )
+    return deliver_safety_alert(
+        settings,
+        ExitMonitorAlert(
+            code=WORKER_COMPONENT_FAILING,
+            severity="critical",
+            message=message,
+            fields={"dedup_key": f"{WORKER_COMPONENT_FAILING}:{component}"},
+            telegram_verbatim=True,
+        ),
     )
 
 
