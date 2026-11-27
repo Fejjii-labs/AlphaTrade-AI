@@ -28,6 +28,7 @@ from app.market_contracts.adapters.binance_rest_gate import (
 )
 from app.market_contracts.adapters.public_read_cache import ShortTtlSingleflight
 from app.market_contracts.adapters.request_budget import (
+    BULK_PATHS,
     SlidingWeightBudget,
     bounded_backoff_seconds,
     record_request,
@@ -298,7 +299,11 @@ class ReadOnlyHttpGetClient:
             self._raise_if_past_deadline()
             self._reject_if_gate_closed()
             self._wait_for_spacing(normalized_path)
-            self._budget.acquire(weight, sleeper=self._weight_sleeper())
+            self._budget.acquire(
+                weight,
+                sleeper=self._weight_sleeper(),
+                bulk=normalized_path in BULK_PATHS,
+            )
             # Another component can close the gate while spacing or budget
             # acquisition sleeps. Never send a queued read through that pause.
             self._reject_if_gate_closed()

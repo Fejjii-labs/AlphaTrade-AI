@@ -20,6 +20,7 @@ logger = structlog.get_logger(__name__)
 
 MARKET_GATE_COMPONENT = "market_data_gate"
 MARKET_GATE_ALERT_COMPONENT = "market_data_gate_alert"
+STARVED_ALERT_SECONDS = 300
 
 
 class MarketBanPublisher:
@@ -30,6 +31,7 @@ class MarketBanPublisher:
         self._factory = session_factory
         self._published: tuple[object, ...] | None = None
         self._alerted_ban: float | None = None
+        self._alerted_starved: float | None = None
 
     def observe(self, *, now: datetime | None = None) -> None:
         try:
@@ -54,12 +56,47 @@ class MarketBanPublisher:
         if key != self._published:
             self._publish(state.closed_kind, until, state.last_status_code, now)
             self._published = key
+        self._check_starved(now)
         if state.banned and state.ban_started_epoch != self._alerted_ban:
             self._alerted_ban = state.ban_started_epoch
             logger.error(
                 "binance_rest_ban_started", until=None if until is None else until.isoformat()
             )
             self._alert(until, now)
+
+    def _check_starved(self, now: datetime) -> None:
+        """Audit M-5: page once per streak when the request budget has refused every
+        Binance read for ``STARVED_ALERT_SECONDS``. Scans fail closed meanwhile."""
+
+        from app.market_contracts.adapters.request_budget import budget_starved_since
+
+        since = budget_starved_since()
+        if since is None or since == self._alerted_starved:
+            return
+        if now.timestamp() - since < STARVED_ALERT_SECONDS:
+            return
+        self._alerted_starved = since
+        minutes = int((now.timestamp() - since) // 60)
+        logger.error("binance_request_budget_starved", minutes=minutes)
+        from app.services.paper_exit_monitor import ExitMonitorAlert
+        from app.services.worker_heartbeat import RuntimeStatusHeartbeatLedger, raise_prepared_alert
+
+        alert = ExitMonitorAlert(
+            code="market_data_starved",
+            severity="critical",
+            message=(
+                f"For {minutes} minutes every Binance market read has been refused by the "
+                "bot's own request limit. Scans are skipped (no trades on old prices). "
+                "Open positions keep their BloFin stops."
+            ),
+            fields={
+                "status": "starved",
+                "source": "binance_usdm",
+                "dedup_key": "market_data_starved",
+            },
+        )
+        ledger = RuntimeStatusHeartbeatLedger(self._factory, component=MARKET_GATE_ALERT_COMPONENT)
+        raise_prepared_alert(self._settings, alert, now=now, ledger=ledger)
 
     def _publish(
         self, kind: str | None, until: datetime | None, status: int | None, now: datetime
