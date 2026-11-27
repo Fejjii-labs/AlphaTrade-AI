@@ -355,6 +355,10 @@ class Settings(BaseSettings):
     # at the bot's current stop, moved with it (break-even, trail): a safety net if the
     # bot is down. BloFin cancels it when the position closes. Off by default.
     governed_demo_ladder_backup_stop: bool = False
+    # Settings with ladder families and the backup stop off are refused at startup
+    # (audit M-1), so a lost variable cannot leave stepped exits with no BloFin stop.
+    # Only this clearly named override allows it (for example a test environment).
+    governed_demo_ladder_allow_no_backup_stop: bool = False
     # Move the stop to break-even plus costs after TP1 (demo ladders). The three-year
     # backtest (26 Nov 2026) found it cut results for every strategy; false turns it off.
     governed_demo_ladder_breakeven: bool = True
@@ -904,7 +908,11 @@ class Settings(BaseSettings):
         return value
 
     @field_validator(
-        "paper_partial_exits_enabled", "governed_demo_partial_exits_enabled", mode="before"
+        "paper_partial_exits_enabled",
+        "governed_demo_partial_exits_enabled",
+        "governed_demo_ladder_backup_stop",
+        "governed_demo_ladder_allow_no_backup_stop",
+        mode="before",
     )
     @classmethod
     def _strict_partial_exit_flag(cls, value: object) -> object:
@@ -1209,6 +1217,21 @@ class Settings(BaseSettings):
         from app.core.exchange_safety import validate_exchange_mode_settings
 
         validate_exchange_mode_settings(self)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_ladder_backup_stop(self) -> Settings:
+        """Stepped exits need the BloFin backup stop unless explicitly overridden (M-1)."""
+        if (
+            self.governed_demo_ladder_families
+            and not self.governed_demo_ladder_backup_stop
+            and not self.governed_demo_ladder_allow_no_backup_stop
+        ):
+            raise ValueError(
+                "GOVERNED_DEMO_LADDER_FAMILIES is set but GOVERNED_DEMO_LADDER_BACKUP_STOP is "
+                "off: stepped-exit trades would have no stop on BloFin. Turn the backup stop "
+                "on, or set GOVERNED_DEMO_LADDER_ALLOW_NO_BACKUP_STOP=true to accept that."
+            )
         return self
 
     @model_validator(mode="after")
