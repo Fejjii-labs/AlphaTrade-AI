@@ -143,6 +143,8 @@ export interface WorkerRuntimeObservation {
   available?: boolean;
   watcher?: WorkerComponentObservation;
   telegram?: WorkerComponentObservation;
+  /** The paper worker's own heartbeat, written around every scan cycle. */
+  paper_worker?: WorkerComponentObservation;
 }
 
 export interface WorkerEffectiveObservation {
@@ -1188,6 +1190,21 @@ export interface AutonomousStrategyOption {
 
 export type AutonomousStrategyScope = "selected" | "all_eligible";
 
+export type WorkerStrategyFamily = "d_line" | "nested" | "sfp";
+
+/** One family the worker trades. `timeframes: null` means no timeframe limit. */
+export interface WorkerFamilyScope {
+  family: WorkerStrategyFamily;
+  trading: boolean;
+  timeframes?: string[] | null;
+}
+
+/** What the worker's own settings let it trade; null on the view when not reported recently. */
+export interface WorkerTradingScope {
+  reported_at: string;
+  families?: WorkerFamilyScope[];
+}
+
 export interface AutonomousTradingSettingsView {
   organization_id: string;
   user_id: string;
@@ -1213,6 +1230,7 @@ export interface AutonomousTradingSettingsView {
   worker_heartbeat_age_seconds?: number | null;
   worker_flags_stale?: boolean;
   autonomy_mode?: string;
+  worker_trading_scope?: WorkerTradingScope | null;
   /** BloFin demo only: the app sets this on the demo venue before an entry. */
   risk_model_v2_enabled?: boolean | null;
   demo_risk_v2_leverage?: number | null;

@@ -14,6 +14,7 @@ from app.db.autonomous_trading_settings import AutonomousTradingSettingsRow
 from app.db.models import UserRiskSettings, UserStrategy
 from app.persistence.worker_runtime_state import (
     load_worker_runtime_from_session,
+    load_worker_trading_scope,
     org_paper_effective,
     project_worker_effective,
 )
@@ -419,14 +420,23 @@ class AutonomousTradingSettingsService:
         """Owner switch plus the worker ceiling. A missing heartbeat is not effective."""
 
         from app.core.config import get_settings
+        from app.services.worker_heartbeat import paper_worker_stale_after_seconds
 
+        settings = get_settings()
+        now = datetime.now(UTC)
         enabled = read_internal_paper_switch(self._session, organization_id)
         org_enabled = enabled is True
         worker = load_worker_runtime_from_session(self._session)
         observation = project_worker_effective(
             worker,
-            now=datetime.now(UTC),
-            stale_after_seconds=get_settings().watcher_heartbeat_stale_after_seconds,
+            now=now,
+            stale_after_seconds=settings.watcher_heartbeat_stale_after_seconds,
+        )
+        # The scope rides the paper-worker heartbeat, so it uses that window.
+        scope = load_worker_trading_scope(
+            self._session,
+            now=now,
+            stale_after_seconds=paper_worker_stale_after_seconds(settings),
         )
         ceiling = (
             observation.autonomous_internal_paper_env_ceiling
@@ -442,6 +452,7 @@ class AutonomousTradingSettingsService:
             "worker_flags_stale": observation.source != "worker" or observation.stale,
             "risk_model_v2_enabled": None if worker is None else worker.risk_model_v2_enabled,
             "autonomy_mode": observation.autonomy_mode if observation.source == "worker" else "",
+            "worker_trading_scope": scope,
         }
 
     def _upsert(

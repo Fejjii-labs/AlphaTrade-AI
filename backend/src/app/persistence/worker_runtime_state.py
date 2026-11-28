@@ -14,11 +14,22 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.db.worker_runtime_state import WORKER_EFFECTIVE_COMPONENT, WorkerRuntimeStateRow
+from app.db.worker_runtime_state import (
+    WORKER_EFFECTIVE_COMPONENT,
+    WORKER_SCOPE_COMPONENT,
+    WorkerRuntimeStateRow,
+)
 from app.persistence.runtime_health import classify_heartbeat
-from app.schemas.health import WorkerEffectiveObservation
+from app.schemas.health import (
+    WorkerEffectiveObservation,
+    WorkerFamilyScope,
+    WorkerStrategyFamily,
+    WorkerTradingScope,
+)
 
 _SYMBOL = re.compile(r"^[A-Z0-9]{2,32}$")
+_SCOPE_TOKEN = re.compile(r"^(d_line|nested|sfp):(off|any|[0-9]{1,2}[mhdw])$")
+_FAMILIES: tuple[WorkerStrategyFamily, ...] = ("d_line", "nested", "sfp")
 _MODE = re.compile(r"^(off|internal_paper|blofin_demo|refused:[a-z0-9_]{1,40})$")
 
 
@@ -42,6 +53,9 @@ class WorkerRuntimeWrite:
     last_cycle_at: datetime | None = None
     watchlist: tuple[str, ...] = ()
     organization_id: uuid.UUID | None = None
+    # ``family:timeframe`` tokens (services/worker_trading_scope.py). None
+    # leaves the scope row untouched; an empty tuple reports no scope.
+    trading_scope: tuple[str, ...] | None = None
 
 
 def publish_worker_runtime_state(
@@ -61,8 +75,28 @@ def publish_worker_runtime_state(
         )
         if row is None:
             session.add(_row_from_snapshot(snapshot))
-            return
-        _apply_snapshot(row, snapshot)
+        else:
+            _apply_snapshot(row, snapshot)
+        if snapshot.trading_scope is not None:
+            _publish_scope(session, snapshot, lock=lock)
+
+
+def _publish_scope(session: Session, snapshot: WorkerRuntimeWrite, *, lock: bool) -> None:
+    tokens = _scope_tokens(snapshot.trading_scope)
+    row = session.get(WorkerRuntimeStateRow, WORKER_SCOPE_COMPONENT, with_for_update=lock)
+    if row is None:
+        session.add(
+            WorkerRuntimeStateRow(
+                component=WORKER_SCOPE_COMPONENT,
+                worker_id=snapshot.worker_id[:80],
+                heartbeat_at=snapshot.heartbeat_at,
+                watchlist=tokens,
+            )
+        )
+        return
+    row.worker_id = snapshot.worker_id[:80]
+    row.heartbeat_at = snapshot.heartbeat_at
+    row.watchlist = tokens
 
 
 def load_worker_runtime_row() -> WorkerRuntimeStateRow | None:
@@ -82,6 +116,74 @@ def load_worker_runtime_from_session(session: Session) -> WorkerRuntimeStateRow 
         return session.get(WorkerRuntimeStateRow, WORKER_EFFECTIVE_COMPONENT)
     except Exception:
         return None
+
+
+def load_worker_trading_scope(
+    session: Session,
+    *,
+    now: datetime,
+    stale_after_seconds: int,
+) -> WorkerTradingScope | None:
+    """The worker's fresh trading scope, or None when it is missing, old or unreadable."""
+
+    try:
+        row = session.get(WorkerRuntimeStateRow, WORKER_SCOPE_COMPONENT)
+    except Exception:
+        return None
+    return project_worker_trading_scope(row, now=now, stale_after_seconds=stale_after_seconds)
+
+
+def project_worker_trading_scope(
+    row: object | None,
+    *,
+    now: datetime,
+    stale_after_seconds: int,
+) -> WorkerTradingScope | None:
+    """Project the scope row. A stale heartbeat is no scope: the page says unknown."""
+
+    if row is None:
+        return None
+    reported_at = _aware(getattr(row, "heartbeat_at", None))
+    state, _age = classify_heartbeat(reported_at, now=now, stale_after_seconds=stale_after_seconds)
+    if state != "RUNNING" or reported_at is None:
+        return None
+    families = _scope_families(_scope_tokens(getattr(row, "watchlist", ())))
+    if not families:
+        return None
+    return WorkerTradingScope(reported_at=reported_at, families=families)
+
+
+def _scope_families(tokens: list[str]) -> list[WorkerFamilyScope]:
+    """One entry per reported family. ``off`` wins over a timeframe; ``any`` lifts the limit."""
+
+    values: dict[str, list[str]] = {}
+    for token in tokens:
+        family, value = token.split(":", 1)
+        values.setdefault(family, []).append(value)
+    scopes: list[WorkerFamilyScope] = []
+    for family in _FAMILIES:
+        reported = values.get(family)
+        if not reported:
+            continue
+        if "off" in reported:
+            scopes.append(WorkerFamilyScope(family=family, trading=False, timeframes=[]))
+        elif "any" in reported:
+            scopes.append(WorkerFamilyScope(family=family, trading=True, timeframes=None))
+        else:
+            scopes.append(WorkerFamilyScope(family=family, trading=True, timeframes=reported))
+    return scopes
+
+
+def _scope_tokens(tokens: object) -> list[str]:
+    if isinstance(tokens, str) or not isinstance(tokens, (list, tuple)):
+        return []
+    chosen: list[str] = []
+    for item in tokens:
+        if isinstance(item, str) and _SCOPE_TOKEN.fullmatch(item) and item not in chosen:
+            chosen.append(item)
+        if len(chosen) >= 64:
+            break
+    return chosen
 
 
 def project_worker_effective(

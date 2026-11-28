@@ -1,36 +1,11 @@
 "use client";
 
+import { ScannerStatusLine } from "@/components/autonomous/ScannerStatusLine";
 import { SessionScoped } from "@/components/settings/SessionScoped";
-import { WatcherAssignmentsSection } from "@/components/WatcherAssignmentsSection";
 import { WatcherWatchlistSection } from "@/components/WatcherWatchlistSection";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
-import { StatusTile, type StatusTone } from "@/components/ui/status-tile";
 import { useAppContext } from "@/contexts/AppContext";
-import { useWatcherMonitoring } from "@/hooks/useWatcherMonitoring";
-import type { WorkerEffectiveObservation } from "@/lib/api/types";
-import { formatDateTime } from "@/lib/format";
-import { workerFlagFreshness } from "@/lib/worker-runtime";
-
-type TileState = { tone: StatusTone; state: string };
-
-function watcherTile(monitoring: ReturnType<typeof useWatcherMonitoring>): TileState {
-  if (monitoring.loading) return { tone: "unknown", state: "Loading" };
-  const status = monitoring.error ? null : monitoring.data?.paper_monitoring_status;
-  if (status === "RUNNING") return { tone: "ok", state: "Running" };
-  if (status === "DEGRADED") return { tone: "warn", state: "Degraded" };
-  if (status === "STALE") return { tone: "warn", state: "Stale" };
-  if (status === "STOPPED") return { tone: "down", state: "Stopped" };
-  if (status === "BLOCKED") return { tone: "down", state: "Blocked" };
-  return { tone: "unknown", state: "Unknown" };
-}
-
-function workerTile(worker: WorkerEffectiveObservation | null | undefined): TileState {
-  const freshness = workerFlagFreshness(worker);
-  if (freshness === "Fresh") return { tone: "ok", state: "Running" };
-  if (freshness === "Stale") return { tone: "warn", state: "Stale" };
-  return { tone: "unknown", state: "Not reported" };
-}
 
 export default function MarketsSettingsPage() {
   return (
@@ -40,10 +15,13 @@ export default function MarketsSettingsPage() {
   );
 }
 
+/**
+ * The coins the bot watches, and its scanner status from the worker's own
+ * heartbeat. The older per-coin assignment status (`paper_monitoring_status`,
+ * "Coin strategies") is not shown: the bot no longer scans through it.
+ */
 function WatcherSettings() {
-  const { health } = useAppContext();
-  const monitoring = useWatcherMonitoring();
-  const worker = health?.worker_flags_source === "worker" ? health.worker_effective : null;
+  const { loading, refreshStatus } = useAppContext();
   return (
     <div className="page-sections" data-testid="settings-watcher">
       <PageHeader
@@ -53,24 +31,15 @@ function WatcherSettings() {
             variant="outline"
             className="h-11"
             aria-label="Refresh markets"
-            disabled={monitoring.loading}
-            onClick={() => void monitoring.reload()}
+            disabled={loading}
+            onClick={() => void refreshStatus()}
           >
             Refresh
           </Button>
         }
       />
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        <StatusTile name="Watcher" {...watcherTile(monitoring)} />
-        <StatusTile
-          name="Last scan"
-          tone={monitoring.data?.last_scan_at ? "ok" : "unknown"}
-          state={monitoring.data?.last_scan_at ? formatDateTime(monitoring.data.last_scan_at) : "None yet"}
-        />
-        <StatusTile name="Worker" {...workerTile(worker)} />
-      </div>
+      <ScannerStatusLine />
       <WatcherWatchlistSection />
-      <WatcherAssignmentsSection />
     </div>
   );
 }

@@ -11,16 +11,6 @@ export function workerFlagFreshness(
   return "Fresh";
 }
 
-export function describedWorkerHealth(
-  health: string | null | undefined,
-  stale: boolean | undefined,
-): WorkerFlagFreshness {
-  if (!health || health === "UNAVAILABLE") return "Not reported";
-  if (stale || health === "STALE") return "Stale";
-  if (health === "RUNNING") return "Fresh";
-  return "Not reported";
-}
-
 export function formatWorkerFlag(value: boolean | undefined, reported: boolean): string {
   if (!reported) return "Not reported";
   return value ? "On" : "Off";

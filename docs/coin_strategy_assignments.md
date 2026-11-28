@@ -26,6 +26,8 @@ Nested forming and expired evidence remains recorded; the existing confirmed-ale
 
 Settings → Market monitoring contains coin strategy cards, independent toggles, Add/Remove/Save and expandable details with Back navigation. Technical IDs and parameter evidence stay in details. The authoring link returns to Agent.
 
+**Update (2026-11-28, `claude/bot-page-strategy-grid`):** the "Coin strategies" section (`WatcherAssignmentsSection`) was removed from Settings → Markets. The bot no longer scans through these assignments, and the page showed "Pending / unscanned" and a "Stopped" Watcher for every coin while the worker scanned normally. The `/watcher/assignments` endpoints, the generated client operations and `frontend/src/lib/monitoring/assignments-api.ts` are kept; the scanner status now comes from the worker heartbeat on the Bot page.
+
 The pending request uses the durable authenticated recovery session scope under `alphatrade:watcher-assignments:`. Session generation only cancels stale responses. Body validation happens before new pending storage and before explicit recovery transport. Local validation/storage rejection sends no request. Timeout or malformed successful replies retain the exact original body and key; reload never automatically retries. Auth lifecycle cleanup must include this prefix even while the panel is unmounted; the integration owner supplies that shared cleanup.
 
 ## Focused evidence

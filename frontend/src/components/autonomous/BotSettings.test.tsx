@@ -8,7 +8,7 @@ import { expectNoIdentifiers } from "@/test/no-identifiers";
 import { BotSettings, botState } from "./BotSettings";
 
 const auth = { user: { id: "user" }, organization: { id: "org" }, membershipRole: "owner" as string | null };
-const appContext = { killSwitchStatus: null as { active: boolean } | null };
+const appContext = { killSwitchStatus: null as { active: boolean } | null, health: null };
 vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => auth }));
 vi.mock("@/contexts/AppContext", () => ({ useAppContext: () => appContext }));
 vi.mock("@/components/autonomous/BotActivityPanel", () => ({ BotActivityPanel: () => <p>activity</p> }));
@@ -45,22 +45,63 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("BotSettings", () => {
-  it("shows state, venue and worker in words, the strategies it trades (long and short), and hides the caps", async () => {
+  it("shows state, venue, the scanner and a strategy grid in words, and hides the caps", async () => {
     render(<BotSettings />);
     const root = await screen.findByTestId("bot-settings");
     expect(root).toHaveTextContent("BotOn");
     expect(root).toHaveTextContent("VenueBloFin demo");
-    expect(root).toHaveTextContent("WorkerFresh");
-    const list = await screen.findByTestId("bot-strategies");
-    expect([...list.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
-      "Nested · BTCUSDT · Long · 15mOn",
-      "SFP · BTCUSDT · Short · 15mOn",
-      "Nested · ETHUSDT · Short · 15mOff",
-    ]);
-    for (const gone of [/Max open/, /notional/i, /Trades today/, /Grade/, /00000000/]) {
+    expect(screen.getByTestId("scanner-status")).toHaveTextContent("Scanner status not reported yet");
+    await screen.findByTestId("bot-strategies");
+    // No worker scope reported: enabled strategies are not claimed as trading.
+    expect(screen.getByTestId("strategy-cell-nested-BTCUSDT-15m")).toHaveTextContent("LongStatus unknown");
+    expect(screen.getByTestId("strategy-cell-nested-ETHUSDT-15m")).toHaveTextContent("ShortOff");
+    expect(screen.getByTestId("strategy-cell-sfp-BTCUSDT-15m")).toHaveTextContent("ShortStatus unknown");
+    expect(screen.getByTestId("strategy-scope-unknown")).toBeInTheDocument();
+    for (const gone of [/Max open/, /notional/i, /Trades today/, /Grade/, /00000000/, /BTCUSDT/]) {
       expect(root).not.toHaveTextContent(gone);
     }
     expectNoIdentifiers();
+  });
+
+  it("marks a cell Trading only inside the worker's reported scope", async () => {
+    vi.mocked(api.autonomous.settings).mockResolvedValue({
+      ...settings,
+      worker_trading_scope: {
+        reported_at: new Date().toISOString(),
+        families: [
+          { family: "nested", trading: true, timeframes: ["1h"] },
+          { family: "sfp", trading: false, timeframes: [] },
+        ],
+      },
+    });
+    vi.mocked(api.strategyBrain.overview).mockResolvedValue({
+      strategies: [
+        { ...strategy("BTCUSDT", "long", true), spec: { ...strategy("BTCUSDT", "long", true).spec, trigger_timeframe: "1h" } },
+        strategy("BTCUSDT", "short", true),
+        strategy("BTCUSDT", "short", true, "swing_failure_pattern/v1"),
+      ],
+      setups: [], watched_symbols: ["BTCUSDT"], limitations: [], paper_only: true,
+    } as never);
+    render(<BotSettings />);
+    await screen.findByTestId("bot-strategies");
+    expect(screen.getByTestId("strategy-cell-nested-BTCUSDT-1h")).toHaveTextContent("LongTrading");
+    expect(screen.getByTestId("strategy-cell-nested-BTCUSDT-15m")).toHaveTextContent("ShortWatching only");
+    expect(screen.getByTestId("strategy-cell-sfp-BTCUSDT-15m")).toHaveTextContent("ShortWatching only");
+    expect(screen.queryByTestId("strategy-scope-unknown")).not.toBeInTheDocument();
+  });
+
+  it("opens the coin watchlist editor from the Bot page", async () => {
+    vi.spyOn(api.watcherWatchlist, "configuration").mockResolvedValue({
+      revision: 0, updated_at: null, paper_only: true,
+      slots: [{ position: 1, symbol: "BTCUSDT", enabled: true }],
+    } as never);
+    vi.spyOn(api.watcherWatchlist, "status").mockRejectedValue(new Error("down"));
+    render(<BotSettings />);
+    fireEvent.click(await screen.findByTestId("edit-coins"));
+    expect(await screen.findByLabelText("Symbol for slot 1")).toHaveValue("BTCUSDT");
+    expect(screen.getByTestId("watchlist-save")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("edit-coins"));
+    expect(screen.queryByLabelText("Symbol for slot 1")).not.toBeInTheDocument();
   });
 
   it("binds leverage to demo_leverage, lists 1x through 10x and saves on change with a Saved mark", async () => {

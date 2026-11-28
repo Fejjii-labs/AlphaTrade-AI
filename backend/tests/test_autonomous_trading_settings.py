@@ -255,6 +255,28 @@ def test_validation_edges() -> None:
         validate_risk_per_trade_percent(Decimal("0"))
 
 
+def test_settings_view_reports_the_fresh_worker_trading_scope(
+    client: TestClient, settings_db: tuple[sessionmaker[Session], Settings]
+) -> None:
+    from tests.test_worker_trading_scope import staging_scope_settings
+
+    factory, _settings = settings_db
+    owner = _token(client, "owner-284@test.example")
+    assert client.get("/autonomous/settings", headers=owner).json()["worker_trading_scope"] is None
+    _publish_effective_flags(factory, staging_scope_settings(), now=datetime.now(UTC))
+    scope = client.get("/autonomous/settings", headers=owner).json()["worker_trading_scope"]
+    assert [(f["family"], f["trading"], f["timeframes"]) for f in scope["families"]] == [
+        ("d_line", True, ["1h"]),
+        ("nested", True, ["1h"]),
+        ("sfp", False, []),
+    ]
+    _publish_effective_flags(
+        factory, staging_scope_settings(), now=datetime.now(UTC) - timedelta(hours=1)
+    )
+    stale = client.get("/autonomous/settings", headers=owner).json()
+    assert stale["worker_trading_scope"] is None
+
+
 def test_get_defaults_and_patch(client: TestClient) -> None:
     headers = _token(client, "owner-284@test.example")
     resp = client.get("/autonomous/settings", headers=headers)

@@ -4749,6 +4749,16 @@
             ],
             "title": "Worker Runtime Health",
             "type": "string"
+          },
+          "worker_trading_scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkerTradingScope"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -60282,6 +60292,45 @@
         "title": "WorkerEffectiveObservation",
         "type": "object"
       },
+      "WorkerFamilyScope": {
+        "additionalProperties": false,
+        "description": "Whether the worker trades one strategy family, and on which timeframes.\n\n``timeframes`` is ``None`` when the worker applies no timeframe limit to the\nfamily. An enabled strategy outside this scope is watched, not traded.",
+        "properties": {
+          "family": {
+            "enum": [
+              "d_line",
+              "nested",
+              "sfp"
+            ],
+            "title": "Family",
+            "type": "string"
+          },
+          "timeframes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeframes"
+          },
+          "trading": {
+            "title": "Trading",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "family",
+          "trading"
+        ],
+        "title": "WorkerFamilyScope",
+        "type": "object"
+      },
       "WorkerHealthResponse": {
         "description": "Liveness summary for the background worker (no secrets).",
         "properties": {
@@ -60387,6 +60436,29 @@
           }
         },
         "title": "WorkerRuntimeObservation",
+        "type": "object"
+      },
+      "WorkerTradingScope": {
+        "additionalProperties": false,
+        "description": "What the worker's own settings let it trade. Not the API process env.",
+        "properties": {
+          "families": {
+            "items": {
+              "$ref": "#/components/schemas/WorkerFamilyScope"
+            },
+            "title": "Families",
+            "type": "array"
+          },
+          "reported_at": {
+            "format": "date-time",
+            "title": "Reported At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reported_at"
+        ],
+        "title": "WorkerTradingScope",
         "type": "object"
       },
       "app__market_contracts__enums__MarketType": {
