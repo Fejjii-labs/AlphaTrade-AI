@@ -609,7 +609,7 @@ def test_exact_scopes_are_never_starved_by_projections(tenant_store) -> None:
 
 
 def test_cap_smaller_than_exact_scopes_shares_scans_across_every_symbol(
-    tenant_store,
+    tenant_store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Staging, 26 Nov: 80 enabled strategies under a cap of 50 left HYPE with no scans."""
 
@@ -617,15 +617,10 @@ def test_cap_smaller_than_exact_scopes_shares_scans_across_every_symbol(
     for symbol in WATCHLIST:
         for direction in ("long", "short"):
             approved(session, org, user, NestedContinuationSpec(symbol=symbol, direction=direction))
-    from structlog.testing import capture_logs
-
-    from app.workers import watcher_paper_targets
-
-    watcher_paper_targets._CAP_WARNED.clear()
-    with capture_logs() as logs:
-        capped = list_watchlist_scan_targets(
-            session, symbols=WATCHLIST, organization_id=org, limit=len(WATCHLIST)
-        )
+    logs = _record_target_logs(monkeypatch).events
+    capped = list_watchlist_scan_targets(
+        session, symbols=WATCHLIST, organization_id=org, limit=len(WATCHLIST)
+    )
     assert sorted(t.symbol for t in capped) == sorted(WATCHLIST)
     warning = next(e for e in logs if e["event"] == "watcher_scan_cap_exceeded")
     assert warning["exact_scopes"] == 2 * len(WATCHLIST)
@@ -639,6 +634,30 @@ def test_cap_smaller_than_exact_scopes_shares_scans_across_every_symbol(
         )
     )
     assert set(counts) == set(WATCHLIST) and max(counts.values()) - min(counts.values()) <= 1
+
+
+class _RecordingLogger:
+    """Stands in for the module logger. ``structlog.testing.capture_logs`` misses
+    loggers cached by an earlier test's logging setup, which made these tests fail
+    only in the full suite."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def __getattr__(self, level: str):  # warning, debug, info, ...
+        def record(event: str, **fields: object) -> None:
+            self.events.append({"event": event, "log_level": level, **fields})
+
+        return record
+
+
+def _record_target_logs(monkeypatch: pytest.MonkeyPatch) -> _RecordingLogger:
+    from app.workers import watcher_paper_targets
+
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(watcher_paper_targets, "logger", recorder)
+    watcher_paper_targets._CAP_WARNED.clear()
+    return recorder
 
 
 def test_cap_rotates_so_every_scope_is_scanned_in_turn() -> None:
@@ -661,21 +680,17 @@ def test_cap_rotates_so_every_scope_is_scanned_in_turn() -> None:
     assert _fair_share(native, 7) == _fair_share(native, 7, rotation=0)
 
 
-def test_cap_warning_is_logged_once_then_at_debug(tenant_store) -> None:
-    from structlog.testing import capture_logs
-
-    from app.workers import watcher_paper_targets
-
+def test_cap_warning_is_logged_once_then_at_debug(
+    tenant_store, monkeypatch: pytest.MonkeyPatch
+) -> None:
     session, org, user = tenant_store
     for symbol in WATCHLIST:
         for direction in ("long", "short"):
             approved(session, org, user, NestedContinuationSpec(symbol=symbol, direction=direction))
-    watcher_paper_targets._CAP_WARNED.clear()
-    with capture_logs() as logs:
-        for _ in range(3):
-            list_watchlist_scan_targets(
-                session, symbols=WATCHLIST, organization_id=org, limit=len(WATCHLIST)
-            )
+    logs = _record_target_logs(monkeypatch).events
+    for _ in range(3):
+        list_watchlist_scan_targets(
+            session, symbols=WATCHLIST, organization_id=org, limit=len(WATCHLIST)
+        )
     levels = [e["log_level"] for e in logs if e["event"] == "watcher_scan_cap_exceeded"]
-    # Later loads log at debug, which the configured level drops: one warning only.
-    assert levels.count("warning") == 1
+    assert levels == ["warning", "debug", "debug"]
