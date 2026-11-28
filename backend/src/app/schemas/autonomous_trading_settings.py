@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import Field, StrictBool
 
 from app.schemas.common import StrictModel
+from app.schemas.health import WorkerTradingScope
 
 AutonomousStrategyScope = Literal["selected", "all_eligible"]
 
@@ -53,6 +54,9 @@ class AutonomousTradingSettingsView(StrictModel):
     worker_heartbeat_age_seconds: float | None = None
     worker_flags_stale: bool = True
     autonomy_mode: str = ""
+    # The worker's own trading scope (families and timeframes it trades). None
+    # when the worker has not reported one recently: the page then says unknown.
+    worker_trading_scope: WorkerTradingScope | None = None
     risk_model_v2_enabled: bool | None = None
     demo_risk_v2_leverage: int | None = None
     # BloFin demo only: the app sets this on the demo venue before an entry.

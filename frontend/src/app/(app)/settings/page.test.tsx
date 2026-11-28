@@ -247,27 +247,35 @@ it("stays on Account for the old #account-system anchor", () => {
   render(<SettingsPage />);
   expect(router.replace).not.toHaveBeenCalled();
 });
-it("shows monitoring state on Markets without treating watchlist enablement as running", async () => {
+it("shows the scanner from the worker heartbeat on Markets, not the old per-coin assignment status", async () => {
   render(<WatcherSettingsPage />);
   expect(screen.getByRole("heading", { name: "Markets" })).toBeInTheDocument();
   expect(await screen.findByLabelText("Enable slot 1")).toBeChecked();
   expect(screen.getByLabelText("Enable slot 2")).not.toBeChecked();
-  const [watcher, lastScan, worker] = screen.getAllByTestId("status-tile");
-  expect(watcher).toHaveTextContent("WatcherStopped");
-  expect(watcher).toHaveAttribute("data-tone", "down");
-  expect(lastScan).toHaveAttribute("data-tone", "unknown");
-  expect(worker).toHaveTextContent("Not reported");
-  expect(screen.queryByText("Running")).not.toBeInTheDocument();
-  expect(screen.queryByText("Worker details")).not.toBeInTheDocument();
+  expect(screen.getByTestId("scanner-status")).toHaveTextContent("Scanner status not reported yet");
+  for (const gone of ["Stopped", "Stale", "Coin strategies", "Pending / unscanned"])
+    expect(screen.queryByText(gone, { exact: false })).not.toBeInTheDocument();
+  expect(api.marketWatcher.monitoring).not.toHaveBeenCalled();
 });
-it("refreshes Markets monitoring", async () => {
+it("says Scanning with the last scan time when the worker heartbeat is fresh", async () => {
+  const beat = new Date(Date.now() - 120_000).toISOString();
+  runtime.health = {
+    ...runtime.health,
+    worker_runtime: {
+      available: true,
+      watcher: { health_state: "RUNNING", activation_state: "running", last_scan_at: beat },
+      paper_worker: { health_state: "RUNNING", activation_state: "running", heartbeat_at: beat },
+    },
+  } as HealthResponse;
   render(<WatcherSettingsPage />);
-  await screen.findByText("Stopped");
-  const previous = vi.mocked(api.marketWatcher.monitoring).mock.calls.length;
+  expect(screen.getByTestId("scanner-status")).toHaveTextContent("Scanning · last scan 2 min ago");
+  expect(screen.getByTestId("scanner-status")).toHaveAttribute("data-tone", "ok");
+});
+it("refreshes the Markets scanner status", async () => {
+  render(<WatcherSettingsPage />);
+  await screen.findByLabelText("Enable slot 1");
   fireEvent.click(screen.getByRole("button", { name: "Refresh markets" }));
-  await waitFor(() =>
-    expect(api.marketWatcher.monitoring).toHaveBeenCalledTimes(previous + 1),
-  );
+  await waitFor(() => expect(runtime.refreshStatus).toHaveBeenCalledOnce());
 });
 it("shows the notification controls on Alerts without sending anything", async () => {
   render(<AlertsSettingsPage />);
@@ -283,16 +291,16 @@ it("keeps unknown account values unavailable", async () => {
   expect(screen.getAllByText("Unavailable").length).toBe(2);
 });
 
-it("clears monitoring and account state before an authenticated account change reloads", async () => {
+it("clears market and account state before an authenticated account change reloads", async () => {
   const { rerender } = render(<><SettingsPage /><WatcherSettingsPage /></>);
-  await screen.findByText("Stopped");
-  vi.mocked(api.marketWatcher.monitoring).mockImplementation(() => new Promise(() => {}));
+  await screen.findByLabelText("Enable slot 1");
+  vi.mocked(api.watcherWatchlist.configuration).mockImplementation(() => new Promise(() => {}));
   identity = {
     user: { id: "user-2", email: "reader@example.com", email_verified: true },
     organization: { id: "org-2", name: "Other Org" },
   };
   rerender(<><SettingsPage /><WatcherSettingsPage /></>);
-  expect(screen.queryByText("Stopped")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Enable slot 1")).not.toBeInTheDocument();
   expect(screen.getByText("reader@example.com")).toBeInTheDocument();
   expect(screen.queryByText("owner@example.com")).not.toBeInTheDocument();
   expect(api.risk.updateSettings).not.toHaveBeenCalled();

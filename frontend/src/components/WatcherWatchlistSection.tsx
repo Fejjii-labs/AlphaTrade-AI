@@ -10,6 +10,7 @@ import { Row, rowBadgeClass } from "@/components/ui/row";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import type { WatcherSymbolRuntimeStatus, WatcherWatchlistSlot } from "@/lib/api/types";
+import { timeAgo } from "@/lib/scanner-status";
 
 export const DEFAULT_WATCHLIST_SLOTS: WatcherWatchlistSlot[] = [
   { position: 1, symbol: "BTCUSDT", enabled: true },
@@ -19,12 +20,30 @@ export const DEFAULT_WATCHLIST_SLOTS: WatcherWatchlistSlot[] = [
   { position: 5, symbol: "HYPEUSDT", enabled: true },
 ];
 
-function statusLabel(errorState: string | null, marketSource: string): string {
-  if (errorState === "unsupported_contract") return "Unsupported";
-  if (errorState === "provider_unreachable") return "Provider unreachable";
-  if (errorState === "awaiting_contract_check") return "Awaiting contract check";
-  if (errorState) return "Unavailable";
-  return marketSource;
+function problemLabel(errorState: string): string {
+  if (errorState === "unsupported_contract") return "Unsupported coin";
+  if (errorState === "provider_unreachable") return "Price feed unreachable";
+  if (errorState === "awaiting_contract_check") return "Checking coin";
+  return "Unavailable";
+}
+
+/**
+ * One plain label per coin. A coin with no recent per-coin report shows no
+ * label: the scanner line above says whether the bot is scanning, and the
+ * per-coin rows can lag it (the worker reports one organization per cycle).
+ */
+function CoinStatus({ slot, status }: { slot: WatcherWatchlistSlot; status: WatcherSymbolRuntimeStatus | undefined }) {
+  if (!slot.enabled) return <span className="text-text-muted">Not watched</span>;
+  if (!status) return null;
+  if (status.error_state) {
+    return <StatusBadge label={problemLabel(status.error_state)} tone="warn" className={rowBadgeClass} />;
+  }
+  return (
+    <>
+      <StatusBadge label="Scanned" tone="healthy" className={rowBadgeClass} />
+      {status.observed_at ? <span>{timeAgo(status.observed_at)}</span> : null}
+    </>
+  );
 }
 
 function moveSlot(slots: WatcherWatchlistSlot[], index: number, direction: -1 | 1) {
@@ -90,7 +109,7 @@ export function WatcherWatchlistEditor({
   return (
     <Card data-testid="watcher-watchlist">
       <CardHeader>
-        <CardTitle className="text-base">Watcher markets</CardTitle>
+        <CardTitle className="text-base">Coins the bot watches</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         {loadState === "loading" ? (
@@ -157,22 +176,7 @@ export function WatcherWatchlistEditor({
                   className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-zinc-300"
                   data-testid={`watchlist-status-${slot.position}`}
                 >
-                  {status ? (
-                    <>
-                      <StatusBadge
-                        label={statusLabel(status.error_state, status.market_source)}
-                        tone={status.error_state ? "warn" : "healthy"}
-                        className={rowBadgeClass}
-                      />
-                      <span>
-                        {status.freshness.replace(/_/g, " ")} · {status.setup_state.replace(/_/g, " ")}
-                        {status.alert_state !== "none" ? ` · ${status.alert_state.replace(/_/g, " ")}` : ""}
-                        {status.error_state ? ` · ${status.error_state.replace(/_/g, " ")}` : ""}
-                      </span>
-                    </>
-                  ) : (
-                    "Pending / unscanned"
-                  )}
+                  <CoinStatus slot={slot} status={status} />
                 </span>
               }
               action={

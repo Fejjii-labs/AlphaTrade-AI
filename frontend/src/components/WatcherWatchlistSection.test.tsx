@@ -27,7 +27,7 @@ const statuses: WatcherSymbolRuntimeStatus[] = DEFAULT_WATCHLIST_SLOTS.map((slot
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe("WatcherWatchlistEditor", () => {
-  it("shows five slots with live status beside each symbol", () => {
+  it("shows five slots with a plain status beside each symbol, never a raw code", () => {
     render(
       <WatcherWatchlistEditor
         slots={DEFAULT_WATCHLIST_SLOTS}
@@ -38,8 +38,16 @@ describe("WatcherWatchlistEditor", () => {
     );
     expect(screen.getAllByTestId(/watchlist-slot-/)).toHaveLength(5);
     expect(screen.getByLabelText("Symbol for slot 1")).toHaveValue("BTCUSDT");
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("replay");
-    expect(screen.getByTestId("watchlist-status-2")).toHaveTextContent("contract unverified");
+    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Scanned");
+    expect(screen.getByTestId("watchlist-status-2")).toHaveTextContent("Unavailable");
+    expect(screen.getByTestId("watcher-watchlist")).not.toHaveTextContent(/contract_unverified|not_scanned|Pending|unscanned/);
+  });
+
+  it("says Not watched for a disabled coin and shows no pending label for a coin without a report", () => {
+    const slots = DEFAULT_WATCHLIST_SLOTS.map((slot) => (slot.position === 2 ? { ...slot, enabled: false } : slot));
+    render(<WatcherWatchlistEditor slots={slots} statuses={[]} onChange={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByTestId("watchlist-status-1")).toBeEmptyDOMElement();
+    expect(screen.getByTestId("watchlist-status-2")).toHaveTextContent("Not watched");
   });
 
   it("lays each slot on the Row baseline with the source badge on that baseline", () => {
@@ -92,23 +100,23 @@ describe("symbol and revision status boundaries", () => {
     const reordered = [DEFAULT_WATCHLIST_SLOTS[1]!, DEFAULT_WATCHLIST_SLOTS[0]!, ...DEFAULT_WATCHLIST_SLOTS.slice(2)]
       .map((slot, index) => ({...slot, position: index + 1}));
     view.rerender(<WatcherWatchlistEditor {...props} slots={reordered} />);
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("contract unverified");
-    expect(screen.getByTestId("watchlist-status-2")).toHaveTextContent("replay");
+    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Unavailable");
+    expect(screen.getByTestId("watchlist-status-2")).toHaveTextContent("Scanned");
     const replaced = reordered.map((slot, index) => index === 1 ? {...slot, symbol: "SOLUSDT"} : slot);
     view.rerender(<WatcherWatchlistEditor {...props} slots={replaced} />);
-    expect(screen.getByTestId("watchlist-status-2")).toHaveTextContent("Pending / unscanned");
-    expect(screen.getByTestId("watchlist-status-2")).not.toHaveTextContent("replay");
+    expect(screen.getByTestId("watchlist-status-2")).toBeEmptyDOMElement();
+    expect(screen.getByTestId("watchlist-status-2")).not.toHaveTextContent("Scanned");
   });
 
   it("rejects old revisions, missing timestamps and stale observations", () => {
     const rows = statuses.map((row) => ({...row, observed_at: new Date(Date.now() - 120000).toISOString()}));
     const props = { slots: DEFAULT_WATCHLIST_SLOTS, onChange: vi.fn(), onSave: vi.fn() };
     const view = render(<WatcherWatchlistEditor {...props} statuses={rows} />);
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Pending / unscanned");
+    expect(screen.getByTestId("watchlist-status-1")).toBeEmptyDOMElement();
     view.rerender(<WatcherWatchlistEditor {...props} statuses={statuses} configurationRevision={1} />);
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Pending / unscanned");
+    expect(screen.getByTestId("watchlist-status-1")).toBeEmptyDOMElement();
     view.rerender(<WatcherWatchlistEditor {...props} statuses={statuses.map(row => ({...row, observed_at:null}))} />);
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Pending / unscanned");
+    expect(screen.getByTestId("watchlist-status-1")).toBeEmptyDOMElement();
   });
 
   it("refreshes configuration and status after a revisioned save", async () => {
@@ -123,14 +131,14 @@ describe("symbol and revision status boundaries", () => {
     render(<WatcherWatchlistSection />);
     await waitFor(() => expect(screen.getByTestId("watchlist-save")).not.toBeDisabled());
     fireEvent.change(screen.getByLabelText("Symbol for slot 1"), {target:{value:"SOLUSDT"}});
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Pending / unscanned");
+    expect(screen.getByTestId("watchlist-status-1")).toBeEmptyDOMElement();
     configuration.mockResolvedValue({...config, revision:1, slots:config.slots.map((slot, i) => i ? slot : {...slot, symbol:"SOLUSDT"})});
     fireEvent.click(screen.getByTestId("watchlist-save"));
     await waitFor(() => expect(configuration).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByText("Saved.")).toBeInTheDocument());
     expect(status).toHaveBeenCalledTimes(2);
     expect(replace.mock.calls[0]?.[1]).toBe(0);
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Pending / unscanned");
+    expect(screen.getByTestId("watchlist-status-1")).toBeEmptyDOMElement();
   });
 });
 
@@ -174,14 +182,14 @@ describe("watchlist request coordination", () => {
       .mockImplementation(() => new Promise(() => {}));
     let view!: ReturnType<typeof render>;
     await act(async () => { view = render(<WatcherWatchlistSection />); });
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("fresh closed candle");
+    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Scanned");
     await act(async () => { await vi.advanceTimersByTimeAsync(89999); });
     expect(readStatus).toHaveBeenCalledTimes(2);
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("fresh closed candle");
+    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Scanned");
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Pending / unscanned");
+    expect(screen.getByTestId("watchlist-status-1")).toBeEmptyDOMElement();
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Pending / unscanned");
+    expect(screen.getByTestId("watchlist-status-1")).toBeEmptyDOMElement();
     expect(readStatus).toHaveBeenCalledTimes(2);
     view.unmount();
     expect(vi.getTimerCount()).toBe(0);
@@ -199,7 +207,7 @@ describe("watchlist request coordination", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
     expect(readStatus).toHaveBeenCalledTimes(2);
     await act(async () => { resolvePoll({ ...status, symbols: statuses.map(row => ({ ...row, observed_at: new Date().toISOString(), market_source: "completed-poll", error_state: null })) }); });
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("completed-poll");
+    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Scanned");
   });
 
   it("keeps an hour of normal polling within the unchanged shared read budget", async () => {
@@ -238,10 +246,10 @@ describe("watchlist request coordination", () => {
       fireEvent.change(screen.getByLabelText("Symbol for slot 1"), { target: { value: "SOLUSDT" } });
     });
     await act(async () => { fireEvent.click(screen.getByTestId("watchlist-save")); });
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("fresh-saved");
+    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Scanned");
     await act(async () => { resolveOldPoll(status); });
     expect(screen.getByLabelText("Symbol for slot 1")).toHaveValue("SOLUSDT");
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("fresh-saved");
+    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Scanned");
     expect(screen.getByTestId("watchlist-save")).not.toBeDisabled();
   });
 });
@@ -258,7 +266,7 @@ describe("market configuration availability", () => {
     expect(await screen.findByLabelText("Symbol for slot 1")).toHaveValue("BTCUSDT");
     expect(screen.getByTestId("watchlist-save")).not.toBeDisabled();
     expect(screen.queryByText(/unavailable/i)).not.toBeInTheDocument();
-    expect(screen.getByTestId("watchlist-status-1")).toHaveTextContent("Pending / unscanned");
+    expect(screen.getByTestId("watchlist-status-1")).toBeEmptyDOMElement();
   });
 
   it("shows a skeleton while loading, never a Saving button", async () => {

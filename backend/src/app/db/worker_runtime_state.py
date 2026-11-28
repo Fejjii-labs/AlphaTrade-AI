@@ -11,10 +11,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
 WORKER_EFFECTIVE_COMPONENT = "paper_worker_effective"
+# A second row on the same table carries the worker's trading scope. It reuses
+# the JSON ``watchlist`` column for its ``family:timeframe`` tokens, so no
+# migration was needed (services/worker_trading_scope.py).
+WORKER_SCOPE_COMPONENT = "paper_worker_scope"
 
 
 class WorkerRuntimeStateRow(Base):
-    """One row for the paper worker process.
+    """One row for the paper worker process, plus its trading-scope row.
 
     Flags are the worker's effective env, not the API process env. The paper
     switch is the organization value the worker consulted. Real trading is not

@@ -136,6 +136,32 @@ class WorkerEffectiveObservation(BaseModel):
     real_trading_enabled: Literal[False] = False
 
 
+WorkerStrategyFamily = Literal["d_line", "nested", "sfp"]
+
+
+class WorkerFamilyScope(BaseModel):
+    """Whether the worker trades one strategy family, and on which timeframes.
+
+    ``timeframes`` is ``None`` when the worker applies no timeframe limit to the
+    family. An enabled strategy outside this scope is watched, not traded.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    family: WorkerStrategyFamily
+    trading: bool
+    timeframes: list[str] | None = None
+
+
+class WorkerTradingScope(BaseModel):
+    """What the worker's own settings let it trade. Not the API process env."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reported_at: datetime
+    families: list[WorkerFamilyScope] = Field(default_factory=list)
+
+
 class WorkerConfigCheck(BaseModel):
     """One staging flag the armed paper posture needs. Never a secret value."""
 

@@ -126,12 +126,13 @@ def _publish_effective_flags(
     *,
     now: datetime,
 ) -> None:
-    """Refresh process flags without erasing the last cycle's watchlist or mode."""
+    """Refresh process flags and trading scope; keep the last cycle's watchlist and mode."""
 
     from app.persistence.worker_runtime_state import (
         WorkerRuntimeWrite,
         publish_worker_runtime_state,
     )
+    from app.services.worker_trading_scope import trading_scope_tokens
 
     publish_worker_runtime_state(
         factory,
@@ -147,6 +148,7 @@ def _publish_effective_flags(
             automatic_telegram_delivery_enabled=bool(settings.automatic_telegram_delivery_enabled),
             risk_model_v2_enabled=settings.risk_model_v2_enabled,
             preserve_cycle=True,
+            trading_scope=trading_scope_tokens(settings),
         ),
     )
 
