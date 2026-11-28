@@ -67,6 +67,8 @@ def check_symbol(args):
             cut = step0.cut_bars(b, "1h", full.M, T0)
             at0 = vwap.decision(cut, T0, float(cut["c"][r]), c["sign"])
             bad = [] if same(ref, at0) else ["vwap"]
+            if ref["keep"] != at0["keep"]:
+                bad.append("verdict")  # an F0-F3 decision itself changes
             traded = any(c["keep"][f] for f in ("F1", "F2", "F3"))
             if traded and not control:
                 T1 = int(c["entry_ms"]) + MIN

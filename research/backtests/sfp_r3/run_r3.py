@@ -78,6 +78,7 @@ def work(args):
             v01.append(row)
     first = {tf: int(d.bars[tf]["t"][0]) for tf in ("1h",)}
     first["1m"] = int(d.M.t0)
+    first["end"] = int(d.M.t0 + d.M.n * 60_000)  # end of the 1-minute data
     return symbol, out, v01, first
 
 
