@@ -1,0 +1,40 @@
+name: Agent reports
+
+# Lightweight, read-only report check. Separate from ci.yml: no backend/frontend
+# jobs, no dependency install, no secrets, no deploys, no workflow_dispatch.
+# Enforcement is opt-in via the repository variable AGENT_REPORT_GATE_ENFORCE.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-reports-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  agent-report:
+    name: agent-report
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the exact PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          sparse-checkout: scripts/agent_reporting
+
+      - name: Verify report or defer a draft
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          AGENT_REPORT_GATE_ENFORCE: ${{ vars.AGENT_REPORT_GATE_ENFORCE }}
+        run: python3 scripts/agent_reporting/agent_report_gate.py
