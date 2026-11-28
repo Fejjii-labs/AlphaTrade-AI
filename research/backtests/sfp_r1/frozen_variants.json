@@ -1,0 +1,248 @@
+{
+ "frozen_on": "2026-11-27",
+ "rule": "Chosen on design-year entries only (1 Nov 2023 - 31 Oct 2025). Every variant is run once on both periods and reported. V05 is the pre-registered primary; the others are reported in full and judged by the same gate.",
+ "gate": "positive in both periods; blind year >= 50 trades (BTC-only: >= 25 if all three years are positive); >= +0.15R per trade after costs; no coin above 50% of profit",
+ "variants": [
+  {
+   "id": "V01",
+   "label": "Step-1 default: 15m, previous daily+weekly, market entry, wide stop (reference)",
+   "settings": {
+    "exec": "15m",
+    "levels": [
+     "1d",
+     "1w"
+    ],
+    "equal": false,
+    "life": "prev",
+    "reclaim": "next",
+    "entry": "a",
+    "stop": "b",
+    "exit": "default",
+    "vol": false,
+    "conf": 1
+   },
+   "design_btc": "235 trades, -0.25R"
+  },
+  {
+   "id": "V02",
+   "label": "1h, daily+weekly, market entry, wide stop",
+   "settings": {
+    "exec": "1h",
+    "levels": [
+     "1d",
+     "1w"
+    ],
+    "equal": false,
+    "life": "prev",
+    "reclaim": "next",
+    "entry": "a",
+    "stop": "b",
+    "exit": "default",
+    "vol": false,
+    "conf": 1
+   },
+   "design_btc": "166 trades, -0.20R"
+  },
+  {
+   "id": "V03",
+   "label": "1h, daily+weekly, limit at the swept level, wide stop",
+   "settings": {
+    "exec": "1h",
+    "levels": [
+     "1d",
+     "1w"
+    ],
+    "equal": false,
+    "life": "prev",
+    "reclaim": "next",
+    "entry": "c",
+    "stop": "b",
+    "exit": "default",
+    "vol": false,
+    "conf": 1
+   },
+   "design_btc": "189 trades, +0.09R"
+  },
+  {
+   "id": "V04",
+   "label": "1h, daily+weekly+monthly, limit at the level, wide stop",
+   "settings": {
+    "exec": "1h",
+    "levels": [
+     "1d",
+     "1w",
+     "1M"
+    ],
+    "equal": false,
+    "life": "prev",
+    "reclaim": "next",
+    "entry": "c",
+    "stop": "b",
+    "exit": "default",
+    "vol": false,
+    "conf": 1
+   },
+   "design_btc": "174 trades, +0.11R"
+  },
+  {
+   "id": "V05",
+   "label": "1h, daily+weekly, limit at the level, wide stop, confluence >= 2 (primary)",
+   "settings": {
+    "exec": "1h",
+    "levels": [
+     "1d",
+     "1w"
+    ],
+    "equal": false,
+    "life": "prev",
+    "reclaim": "next",
+    "entry": "c",
+    "stop": "b",
+    "exit": "default",
+    "vol": false,
+    "conf": 2
+   },
+   "design_btc": "121 trades, +0.31R"
+  },
+  {
+   "id": "V06",
+   "label": "1h, daily+weekly+monthly, limit at the level, wide stop, confluence >= 2",
+   "settings": {
+    "exec": "1h",
+    "levels": [
+     "1d",
+     "1w",
+     "1M"
+    ],
+    "equal": false,
+    "life": "prev",
+    "reclaim": "next",
+    "entry": "c",
+    "stop": "b",
+    "exit": "default",
+    "vol": false,
+    "conf": 2
+   },
+   "design_btc": "121 trades, +0.27R"
+  },
+  {
+   "id": "V07",
+   "label": "1h, daily only, limit at the level, wide stop, confluence >= 2",
+   "settings": {
+    "exec": "1h",
+    "levels": [
+     "1d"
+    ],
+    "equal": false,
+    "life": "prev",
+    "reclaim": "next",
+    "entry": "c",
+    "stop": "b",
+    "exit": "default",
+    "vol": false,
+    "conf": 2
+   },
+   "design_btc": "119 trades, +0.34R"
+  },
+  {
+   "id": "V08",
+   "label": "15m twin of V05 (execution-chart check)",
+   "settings": {
+    "exec": "15m",
+    "levels": [
+     "1d",
+     "1w"
+    ],
+    "equal": false,
+    "life": "prev",
+    "reclaim": "next",
+    "entry": "c",
+    "stop": "b",
+    "exit": "default",
+    "vol": false,
+    "conf": 2
+   },
+   "design_btc": "not selected on results"
+  },
+  {
+   "id": "V09",
+   "label": "1h, daily+weekly, confirmation entry, wick stop",
+   "settings": {
+    "exec": "1h",
+    "levels": [
+     "1d",
+     "1w"
+    ],
+    "equal": false,
+    "life": "prev",
+    "reclaim": "next",
+    "entry": "b",
+    "stop": "a",
+    "exit": "default",
+    "vol": false,
+    "conf": 1
+   },
+   "design_btc": "100 trades, +0.09R"
+  },
+  {
+   "id": "V10",
+   "label": "1h, daily+weekly, confirmation entry, wick stop, confluence >= 2",
+   "settings": {
+    "exec": "1h",
+    "levels": [
+     "1d",
+     "1w"
+    ],
+    "equal": false,
+    "life": "prev",
+    "reclaim": "next",
+    "entry": "b",
+    "stop": "a",
+    "exit": "default",
+    "vol": false,
+    "conf": 2
+   },
+   "design_btc": "69 trades, +0.04R"
+  },
+  {
+   "id": "V11",
+   "label": "1h, daily+weekly+monthly, limit at the level, wide stop, TP2 at the swept candle's other side",
+   "settings": {
+    "exec": "1h",
+    "levels": [
+     "1d",
+     "1w",
+     "1M"
+    ],
+    "equal": false,
+    "life": "prev",
+    "reclaim": "next",
+    "entry": "c",
+    "stop": "b",
+    "exit": "range",
+    "vol": false,
+    "conf": 1
+   },
+   "design_btc": "167 trades, +0.14R"
+  },
+  {
+   "id": "V12",
+   "label": "1h, previous 4h levels, limit at the level, stop beyond the closed 4h sweep candle",
+   "settings": {
+    "exec": "1h",
+    "levels": [
+     "4h"
+    ],
+    "equal": false,
+    "life": "prev",
+    "reclaim": "next",
+    "entry": "c",
+    "stop": "c",
+    "exit": "default",
+    "vol": false,
+    "conf": 1
+   },
+   "design_btc": "83 trades, +0.10R"
+  }
+ ]
+}
