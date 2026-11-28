@@ -1,0 +1,10 @@
+{
+  "golden_version": "answer_relevancy_v1",
+  "metric": "deepeval.AnswerRelevancyMetric",
+  "judge_model": "gpt-4.1-mini-2025-04-14",
+  "runs": 3,
+  "aggregation": "mean of per-case medians",
+  "suite_score": null,
+  "case_medians": {},
+  "note": "Not yet measured. Until a run records suite_score (deepeval_answer_relevancy.py --write-baseline), the eval is report-only."
+}
